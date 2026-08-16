@@ -1,0 +1,8 @@
+{
+  "object" : 79,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["SEK-ZF", "SEK-Fahrzeug", "SEK-Fahrzeuge"],
+    "extend" : {}
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "additional": {
+    "base": {
+      "is_trailer": true
+    }
+  },
+  "object" : 66,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["Anh MzB", "Boote", "Boot"],
+    "extend" : {}
+  }
+}

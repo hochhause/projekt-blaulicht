@@ -1,0 +1,13 @@
+{
+  "object" : 64,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["GW-W"],
+    "extend" : {
+      "([1-6]) GW-Wasserrettung" : 1,
+      "([7-9]|1[0-2]) GW-Wasserrettung" : 2,
+      "(1[3-8]) GW-Wasserrettung" : 3,
+      "(19|2[0-4]) GW-Wasserrettung" : 4,
+    }
+  }
+}

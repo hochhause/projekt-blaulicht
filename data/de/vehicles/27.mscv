@@ -1,0 +1,10 @@
+{
+  "object" : 27,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["GW-Gefahrgut"],
+    "extend" : {
+      "([0-9]) (?:Person|Personen) mit GW-Gefahrgut-Ausbildung" : 1
+    }
+  }
+}

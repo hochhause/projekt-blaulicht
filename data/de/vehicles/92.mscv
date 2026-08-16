@@ -1,0 +1,14 @@
+{
+  "additional": {
+    "base": {
+      "is_trailer": true
+    }
+  },
+  "object" : 92,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["MTW-OV", "Anh Hund", "Rettungshundefahrzeug", "Rettungshundestaffel|\\(?:>|\\/n\\)", "Rettungshundestaffeln"],
+    "extend" : {
+    }
+  }
+}

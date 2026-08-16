@@ -1,0 +1,36 @@
+[
+  {
+    "id": "1",
+    "name": "Brennender Abfallcontainer",
+    "average_credits": 170,
+    "requirements": { "firetrucks": 1 },
+    "prerequisites": { "main_building": 0, "fire_stations": 1 },
+    "additional": { "expansion_missions_ids": [2, 3, 26], "filter_id": "firehouse_missions" },
+    "mission_categories": ["fire"],
+    "base_mission_id": 1
+  },
+  {
+    "id": "2",
+    "name": "Größerer Gebäudebrand",
+    "average_credits": 1200,
+    "requirements": { "firetrucks": 2, "platform_trucks": 1, "battalion_chief_vehicles": 1 },
+    "mission_categories": ["fire"],
+    "base_mission_id": 2
+  },
+  {
+    "id": "3",
+    "name": "Verkehrsunfall",
+    "average_credits": 320,
+    "requirements": { "firetrucks": 1, "police_cars": 1 },
+    "mission_categories": ["fire", "police"],
+    "base_mission_id": 3
+  },
+  {
+    "id": "99",
+    "name": "Testeinsatz mit unbekannter Klasse",
+    "average_credits": 50,
+    "requirements": { "totally_unknown_class": 1 },
+    "mission_categories": ["fire"],
+    "base_mission_id": 99
+  }
+]

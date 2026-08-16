@@ -1,0 +1,21 @@
+{
+  "additional": {
+    "base": {
+      "water": 500,
+      "pump": 1000,
+      "personnel": 6
+    }
+  },
+  "object" : 88,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["KLF", "(Löschfahrzeuge|Löschfahrzeug) \\(LF\\)", "Löschfahrzeug(?:|e) oder Rüstwagen", "Feuerlöschpumpe \\(z. B. LF\\)", "Löschfahrzeug, Rüstwagen oder Gerätewagen Öl"],
+    "extend" : {
+      "(?'firetrucksNeededPersonnel'\\d+) (?:Feuerwehrmann|Feuerwehrleute)": 1,
+      "(?'firetrucksNeededWater'\\d+) l\\. Wasser": 1,
+      "(?'firetrucksNeededPump'\\d+) l\\/min Pumpenleistung": 1,
+      "(\\d+) Feuerlöschpump(?:e|en)" : 1,
+	  "(\\d+) Sonderlöschmittel": 1,
+    }
+  }
+}

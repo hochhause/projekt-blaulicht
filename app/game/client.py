@@ -1,0 +1,185 @@
+"""Typed client over the game endpoints, built on a :class:`GameSession`.
+
+The game's **official APIs are read-only (GET); there is no write API**
+(see ``data/reference/api-endpoints.md``). So reads use the official endpoints,
+but the one write the bot needs — *dispatch* — is a form POST to the same
+``/missions/{id}/alarm`` route a browser submits, carrying a per-mission token
+fetched fresh from the mission page. That is the only shape confirmed against a
+live capture. One vehicle is dispatched per POST; multi-vehicle single-POST was
+never verified and is intentionally not attempted.
+
+    read (official)   fetch_vehicles      GET  /api/v2/vehicles
+                      fetch_vehicle_states GET /api/vehicle_states
+                      fetch_buildings     GET  /api/buildings
+                      fetch_alliance_buildings GET /api/alliance_buildings
+                      fetch_userinfo      GET  /api/userinfo   (credits)
+                      fetch_einsaetze     GET  /einsaetze.json (public)
+    read (undocumented but required)
+                      fetch_missions      GET  /map/missions_json
+    act (form POST / GET, not an API)
+                      dispatch, recall, transport_patient, transport_prisoner
+"""
+
+from __future__ import annotations
+
+import logging
+
+from .models import Building, Mission, Vehicle
+from .session import GameSession
+
+logger = logging.getLogger(__name__)
+
+# Static query params observed on the real dispatch/recall requests. Not tokens
+# — they select the "dispatch centre" (sd=d) / action context (sk=ac) views.
+_CTX = "sd=d&sk=ac"
+
+
+def _as_list(payload: object) -> list[dict]:
+    """Normalise an endpoint payload to a list of dicts.
+
+    The game returns either a bare JSON array or an object keyed by id; accept
+    both so a server-side shape change doesn't break reading.
+    """
+    if isinstance(payload, list):
+        return [d for d in payload if isinstance(d, dict)]
+    if isinstance(payload, dict):
+        return [v for v in payload.values() if isinstance(v, dict)]
+    return []
+
+
+class GameClient:
+    """High-level game operations for one authenticated account."""
+
+    def __init__(self, session: GameSession) -> None:
+        self._s = session
+
+    # -- reads -------------------------------------------------------------
+    async def fetch_missions(self) -> list[Mission]:
+        """Current open missions with coordinates.
+
+        Uses ``/map/missions_json`` — undocumented, but the official API list
+        has no open-missions endpoint, and this is capture-verified.
+        """
+        payload = await self._s.get_json("/map/missions_json")
+        return [Mission.from_json(d) for d in _as_list(payload)]
+
+    async def fetch_vehicles(self) -> list[Vehicle]:
+        """Your fleet, via the newer ``/api/v2/vehicles``."""
+        payload = await self._s.get_json("/api/v2/vehicles")
+        return [Vehicle.from_json(d) for d in _as_list(payload)]
+
+    async def fetch_vehicle_states(self) -> dict:
+        """FMS status summary (counts per status) — a cheap availability peek."""
+        payload = await self._s.get_json("/api/vehicle_states")
+        return payload if isinstance(payload, dict) else {}
+
+    async def fetch_buildings(self) -> list[Building]:
+        payload = await self._s.get_json("/api/buildings")
+        return [Building.from_json(d) for d in _as_list(payload)]
+
+    async def fetch_building(self, building_id: int) -> dict:
+        """Single building detail (level, extensions, personnel) for estate
+        reconciliation. Raw dict — parsed by ``estate.BuildingState.from_api``."""
+        payload = await self._s.get_json(f"/api/buildings/{building_id}")
+        return payload if isinstance(payload, dict) else {}
+
+    async def fetch_building_vehicles(self, building_id: int) -> list[Vehicle]:
+        """Vehicles stationed at a building (``/api/v2/buildings/{id}/vehicles``)."""
+        payload = await self._s.get_json(f"/api/v2/buildings/{building_id}/vehicles")
+        return [Vehicle.from_json(d) for d in _as_list(payload)]
+
+    async def fetch_equipments(self) -> list[dict]:
+        """Equipment / trailer modules (Rollcontainer, winches, …)."""
+        payload = await self._s.get_json("/api/equipments")
+        return _as_list(payload)
+
+    async def fetch_schoolings(self) -> list[dict]:
+        """Your training courses (running + available) — personnel training."""
+        payload = await self._s.get_json("/api/schoolings")
+        return _as_list(payload)
+
+    async def fetch_alliance_schoolings(self) -> list[dict]:
+        """Alliance-provided training courses."""
+        payload = await self._s.get_json("/api/alliance_schoolings")
+        return _as_list(payload)
+
+    async def fetch_alliance_buildings(self) -> list[Building]:
+        """Alliance-funded buildings — transport targets for alliance play."""
+        payload = await self._s.get_json("/api/alliance_buildings")
+        return [Building.from_json(d) for d in _as_list(payload)]
+
+    async def fetch_userinfo(self) -> dict:
+        """Credits / user info (``/api/userinfo``, alias ``/credits``)."""
+        payload = await self._s.get_json("/api/userinfo")
+        return payload if isinstance(payload, dict) else {}
+
+    async def fetch_einsaetze(self) -> list[dict]:
+        """The public mission-type catalogue as its raw array.
+
+        Feed straight into :meth:`app.domain.catalog.MissionCatalog.from_payload`.
+        Cache hard — it changes at most a few times a year.
+        """
+        payload = await self._s.get_json("/einsaetze.json")
+        return _as_list(payload)
+
+    # -- actions -----------------------------------------------------------
+    async def dispatch(self, mission_id: int, vehicle_id: int) -> bool:
+        """Dispatch a single vehicle to a mission.
+
+        Loads the mission page to obtain a fresh authenticity token, then POSTs
+        the alarm form with exactly one ``vehicle_ids[]`` — the only shape
+        confirmed to work.
+        """
+        page = await self._s.get_text(f"/missions/{mission_id}?{_CTX}")
+        token = self._s.extract_form_token(page) or self._s.csrf_token
+        if not token:
+            logger.warning("dispatch %s: no authenticity token found", mission_id)
+            return False
+
+        try:
+            await self._s.post_form(
+                f"/missions/{mission_id}/alarm?{_CTX}",
+                {
+                    "utf8": "✓",
+                    "authenticity_token": token,
+                    "commit": "Dispatch",
+                    "sonderrechte": "1",  # blue-lights / priority
+                    "next_mission": "0",
+                    "next_mission_id": "0",
+                    "alliance_mission_publish": "0",
+                    "sk": "ac",
+                    "sd": "d",
+                    "vehicle_ids[]": str(vehicle_id),
+                },
+            )
+        except Exception:  # noqa: BLE001 — caller decides how to react
+            logger.exception("dispatch %s <- vehicle %s failed", mission_id, vehicle_id)
+            return False
+        return True
+
+    async def recall(self, vehicle_id: int) -> bool:
+        """Recall an en-route vehicle (``backalarm``)."""
+        try:
+            await self._s.get_text(
+                f"/vehicles/{vehicle_id}/backalarm?return=mission_js&{_CTX}"
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("recall of vehicle %s failed", vehicle_id)
+            return False
+        return True
+
+    async def transport_patient(self, vehicle_id: int, building_id: int) -> bool:
+        """Route a transporting vehicle's patient to a hospital building."""
+        return await self._transport("patient", vehicle_id, building_id)
+
+    async def transport_prisoner(self, vehicle_id: int, building_id: int) -> bool:
+        """Route a transporting vehicle's prisoner to a cell building."""
+        return await self._transport("gefangener", vehicle_id, building_id)
+
+    async def _transport(self, kind: str, vehicle_id: int, building_id: int) -> bool:
+        try:
+            await self._s.get_text(f"/vehicles/{vehicle_id}/{kind}/{building_id}")
+        except Exception:  # noqa: BLE001
+            logger.exception("%s transport (vehicle %s -> %s) failed", kind, vehicle_id, building_id)
+            return False
+        return True

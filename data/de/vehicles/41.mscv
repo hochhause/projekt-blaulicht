@@ -1,0 +1,13 @@
+{
+  "additional": {
+    "base": {
+      "trailer": [44],
+    }
+  },
+  "object" : 41,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["THW-Mehrzweckkraftwagen", "MzGW \\(FGr N\\)"],
+    "extend" : {}
+  }
+}

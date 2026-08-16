@@ -1,0 +1,9 @@
+{
+  "object" : 14,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["Schlauchwagen \\(GW-L2 Wasser oder SW\\)", "SW 2000", "GW-L2 Wasser oder SW"],
+    "extend" : {
+    }
+  }
+}

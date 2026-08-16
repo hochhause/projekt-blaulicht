@@ -1,0 +1,71 @@
+{
+  "environment" : {
+    "country" : "us",                                 // server country, like us = missionchief.com, eg.
+    "username" : "CHANGEME",                          // defines username as name OR e-mail address
+    "password" : "CHANGEME",                          // defines password for specific username
+    "remote_access": {
+      "ip_address": "127.0.0.1",                      // defines webinterface address; default is localhost
+        "password_hash": ""                           // defines webinterface password as hashed value
+    },
+  },
+  "building" : {
+    "hire" : {
+      "is_enabled" : false,                           // enable hire for personnel, default is disabled
+      "default_amount" : 1                            // hiring-days, max. 3-days possible, -1 is automatic (premium required)
+    }
+  },
+  "interval" : 3,                                     // interval mission-tasks between in seconds, default is 3-seconds/mission
+  "filter" : {
+    "alliance" : {
+      "distance" : 400,                               // max. distance (post-)alert missions in range
+      "is_created_enabled": false,                    // enable self created alliance-mission, default is disabled
+      "is_created_events_enabled": false,             // enable alliance-event mission, default is disabled
+      "is_enabled" : false,                           // enable shared alliance-mission, default is disabled
+      "is_events_enabled" : false,                    // enable shared alliance-mission events, default is disabled
+      "is_stopover_enabled" : false,                  // enable to open mission again regardless of mission state, default is disabled
+      "is_vehicle_consider_enabled" : false,          // consider vehicles from members, default is disabled
+    },
+    "distance" : 400,                                 // max. distance (post-)alert missions in range
+    "is_enabled" : true,                              // enable (post-)alert missions, default is enabled
+    "is_events_enabled" : true,                       // enable mission-events, default is enabled
+    "is_vehicle_consider_enabled": false,             // consider vehicles from members, default is disabled
+    "is_vehicle_disable_enabled": false,              // disable vehicles if not enough personnel ready, default is disabled
+    "is_vehicle_scaling_enabled": true,               // enable dynamic scaling of vehilces for water/personnel/patients/eg., default is enabled
+    "is_stopover_enabled" : false,                    // enable to open mission again regardless of mission state, default is disabled
+    "limit" : {
+      "credits": {
+        "amount": 0,
+        "offset": 1
+      },
+      "default_amount" : 5,
+      "is_enabled" : false,
+      "is_user_enabled" : false
+    },
+    "share" : {
+      "is_enabled" : false,                           // share missions (OR IF bellow options creditental filled) 
+      "is_events_enabled" : false,                    // - share mission-event
+      "is_requests_enabled" : false,                  // - share mission if patient-/prisoner requested
+      "is_vehicle_missing_enabled" : false,           // - share mission if vehicles are missing
+      "message" : {
+        "is_alliance_chat_enabled" : false,           // send message into mission alliance-chat
+        "is_enabled" : false,                         // send message into alliance-chat
+        "scheme" : "{Address} - {Place}, ${Credits}"  // default mesage which are send
+      }
+    },
+    "speech" : {
+      "alliance" : {
+        "capacity_patient" : 0,                       // max. patients in hospital to take next possible building
+        "capacity_prisoner" : 0,                      // max. prisoner in hospital to take next possible building
+        "distance" : 400,                             // max. distance from mission-speech to alliance-hospital building
+        "is_enabled" : true,                          // en-/disable handle speeches into alliance-buildings
+        "tax": 0                                      // enable max. fees to handle speech into building, default is 0 (disabled)
+      },
+      "capacity_patient" : 0,                         // max. patients in hospital to take next possible building
+      "capacity_prisoner" : 0,                        // max. prisoner in hospital to take next possible building
+      "distance" : 400,                               // max. distance from mission-speech to hospital building
+      "interval" : 3,                                 // interval speech-tasks between in seconds, default is 3-seconds/speech
+      "is_enabled" : true                             // en-/disable handle speeches into buildings
+    }
+  },
+  "speed_step" : 3                                    // speed ingame, 0 = pause, 1 = turbo, ... 8 = extreme slow 
+}

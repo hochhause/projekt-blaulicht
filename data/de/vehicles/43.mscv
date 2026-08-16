@@ -1,0 +1,13 @@
+{
+  "additional": {
+    "base": {
+      "is_trailer": true
+    }
+  },
+  "object" : 43,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["BRmG", "BRmG R", "Radlader", "Radlader \\(BRmG R\\)"],
+    "extend" : {}
+  }
+}

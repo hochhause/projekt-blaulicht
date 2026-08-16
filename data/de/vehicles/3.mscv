@@ -1,0 +1,8 @@
+{
+  "object" : 3,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["ELW 1"],
+    "extend" : {}
+  }
+}

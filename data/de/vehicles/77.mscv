@@ -1,0 +1,15 @@
+{
+  "additional": {
+    "base": {
+      "is_trailer": true
+    }
+  },
+  "object" : 77,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["AB-Gefahrgut", "Abrollbehälter Gefahrgut", "GW-Gefahrgut"],
+    "extend" : {
+      "([0-9]) (?:Person|Personen) mit GW-Gefahrgut-Ausbildung" : 1
+    }
+  }
+}

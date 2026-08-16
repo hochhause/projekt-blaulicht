@@ -1,0 +1,19 @@
+{
+  "object" : 32,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["FuStW", "Funkstreifenwagen oder (Zivilstreifenwagen|Polizeimotor(?:rad|räder))", "Funkstreifenwagen oder Zivilstreifenwagen oder Polizeimotor(?:rad|räder)", "Gefangene sollen abtransportiert werden"],
+    "extend" : {
+      "([12]) Polizist(?:en|)" : 1,
+      "([34]) Polizisten" : 2,
+      "([56]) Polizisten" : 3,
+      "([78]) Polizisten" : 4,
+      "(9|10) Polizisten" : 5,
+      "(1[12]) Polizisten" : 6,
+      "(1[34]) Polizisten" : 7,
+      "(1[56]) Polizisten" : 8,
+      "(1[78]) Polizisten" : 9,
+      "(19|20) Polizisten" : 10
+    }
+  }
+}

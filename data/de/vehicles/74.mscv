@@ -1,0 +1,8 @@
+{
+  "object" : 74,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["NAW", "Notarztwagen", "NEF", "RTW", "Ein Fahrzeug hat einen Sprechwunsch"],
+    "extend" : {}
+  }
+}

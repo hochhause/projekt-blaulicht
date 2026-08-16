@@ -1,0 +1,13 @@
+{
+  "additional": {
+    "base": {
+      "trailer": [93],
+    }
+  },
+  "object" : 93,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["MTW-OV"],
+    "extend" : {}
+  }
+}

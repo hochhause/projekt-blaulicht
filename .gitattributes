@@ -1,0 +1,6 @@
+# Normalise all text to LF in the repository, regardless of contributor OS.
+* text=auto eol=lf
+
+# Salvaged asset/data files are UTF-8 text; keep them LF and never munged.
+*.mscv   text eol=lf
+*.json   text eol=lf

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets & runtime state — never commit these
+.env
+data/*.db
+data/*.db-journal
+data/*.db-wal
+
+# Keep the salvaged reference/asset data (it is the point of the repo)
+!data/de/
+!data/reference/
+
+# Editor
+.idea/
+.vscode/

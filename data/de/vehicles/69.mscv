@@ -1,0 +1,12 @@
+{
+  "object" : 69,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["Tauchkraftwagen", "GW-Taucher"],
+    "extend" : {
+      "min\\. (?:1|2) (Person|Personen) mit GW-Wasserrettung Ausbildung" : 1,
+      "min\\. (?:3|4) Personen mit GW-Wasserrettung Ausbildung" : 2,
+      "min\\. (?:5|6) Personen mit GW-Wasserrettung Ausbildung" : 3
+    }
+  }
+}

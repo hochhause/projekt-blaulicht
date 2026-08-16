@@ -1,0 +1,20 @@
+{
+  "additional": {
+    "base": {
+      "pump": 1600,
+      "personnel": 9
+    }
+  },
+  "object" : 9,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["LF 16-TS", "(Löschfahrzeuge|Löschfahrzeug) \\(LF\\)", "Löschfahrzeug(?:|e) oder Rüstwagen", "Feuerlöschpumpe \\(z. B. LF\\)", "Tragehilfe \\(z\\.B\\. durch ein LF\\)", "Löschfahrzeug, Rüstwagen oder Gerätewagen Öl"],
+    "extend" : {
+      "(?'firetrucksNeededPersonnel'\\d+) (?:Feuerwehrmann|Feuerwehrleute)": 1,
+      "(?'firetrucksNeededWater'\\d+) l\\. Wasser": 1,
+      "(?'firetrucksNeededPump'\\d+) l\\/min Pumpenleistung": 1,
+      "(\\d+) Feuerlöschpump(?:e|en)" : 1,
+	  "(\\d+) Sonderlöschmittel": 1,
+    }
+  }
+}

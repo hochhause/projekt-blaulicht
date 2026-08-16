@@ -1,0 +1,13 @@
+{
+  "additional": {
+    "base": {
+      "trailer": [66, 67, 68],
+    }
+  },
+  "object" : 65,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["LKW 7 Lkr 19 tm"],
+    "extend" : {}
+  }
+}

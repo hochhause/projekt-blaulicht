@@ -1,0 +1,13 @@
+{
+  "additional": {
+    "base": {
+      "is_trailer": true
+    }
+  },
+  "object" : 71,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["AB-MZB", "Abrollbehälter Mehrzweckboot", "Boot", "Boote"],
+    "extend" : {}
+  }
+}

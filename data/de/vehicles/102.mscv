@@ -1,0 +1,10 @@
+{
+  "object" : 102,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["Anh 7", "(Schmutzwasserpumpen|Schmutzwasserpumpe)"],
+    "extend" : {
+      "(?'pump'\\d+) l\/min Pumpenleistung" : 1,
+    }
+  }
+}
