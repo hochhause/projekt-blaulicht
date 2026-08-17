@@ -24,6 +24,7 @@ class FakeClient:
     def __init__(self, missions, vehicles, buildings):
         self._missions, self._vehicles, self._buildings = missions, vehicles, buildings
         self.dispatched: list[tuple[int, int]] = []
+        self.transports: list[tuple[str, int, int]] = []
 
     async def fetch_missions(self):
         return self._missions
@@ -36,6 +37,14 @@ class FakeClient:
 
     async def dispatch(self, mission_id, vehicle_id):
         self.dispatched.append((mission_id, vehicle_id))
+        return True
+
+    async def transport_patient(self, vehicle_id, building_id):
+        self.transports.append(("patient", vehicle_id, building_id))
+        return True
+
+    async def transport_prisoner(self, vehicle_id, building_id):
+        self.transports.append(("prisoner", vehicle_id, building_id))
         return True
 
 
@@ -91,6 +100,23 @@ class RunnerTests(unittest.TestCase):
         report = asyncio.run(self._runner(client).run_cycle())
         self.assertEqual(report.failed, 1)
         self.assertEqual(report.dispatched, 0)
+
+    def test_run_transports_calls_client(self):
+        from app.domain.transport import (
+            TransportKind, TransportPolicy, TransportRequest, TransportTarget,
+        )
+
+        client = FakeClient([], [], [b()])
+        runner = self._runner(client)
+        requests = [
+            TransportRequest(500, TransportKind.PATIENT, NEAR),
+            TransportRequest(501, TransportKind.PRISONER, NEAR),
+        ]
+        targets = [TransportTarget(9, NEAR, free_capacity=5)]
+        report = asyncio.run(runner.run_transports(requests, targets, TransportPolicy()))
+        self.assertEqual(report.routed, 2)
+        self.assertIn(("patient", 500, 9), client.transports)
+        self.assertIn(("prisoner", 501, 9), client.transports)
 
     def test_buildings_cache_avoids_refetch(self):
         calls = {"n": 0}

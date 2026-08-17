@@ -16,6 +16,15 @@ from .reconcile import Action, ActionKind, Automation, ReconcileResult, reconcil
 from .requirements import Requirement, RequirementEngine, Resolution
 from .resolver import MissionRequirementResolver
 from .training import TrainingCatalog, TrainingReport, analyze_fleet
+from .transport import (
+    TransportDecision,
+    TransportKind,
+    TransportPolicy,
+    TransportRequest,
+    TransportTarget,
+    route_transport,
+    route_transports,
+)
 
 __all__ = [
     # assets
@@ -40,6 +49,14 @@ __all__ = [
     "DispatchPlan",
     "DispatchPolicy",
     "MissionPlan",
+    # transport routing
+    "route_transport",
+    "route_transports",
+    "TransportRequest",
+    "TransportTarget",
+    "TransportPolicy",
+    "TransportDecision",
+    "TransportKind",
     # estate management
     "EstateLayout",
     "BuildingLayout",

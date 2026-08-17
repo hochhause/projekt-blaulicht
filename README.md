@@ -35,7 +35,8 @@ Built and **tested** (pure-stdlib, runs with no third-party packages — 63 test
 | **Reconciliation** (actual vs desired → actions) | `app/domain/reconcile.py` | ✅ tested |
 | Training requirements (wiki-sourced) | `app/domain/training.py` | ✅ tested |
 | **Dispatch planner** (poll→plan, delta, coverage) | `app/domain/dispatch.py` | ✅ tested |
-| **Dispatch runner** (one poll→plan→send cycle) | `app/core/runner.py` | ✅ tested |
+| **Transport routing** (patients/prisoners) | `app/domain/transport.py` | ✅ tested |
+| Dispatch + transport runner (one cycle) | `app/core/runner.py` | ✅ tested |
 | Great-circle distance / radius | `app/domain/geo.py` | ✅ tested |
 
 Framework in place, awaiting live captures:
@@ -55,11 +56,14 @@ account — see the smoke test):
 | Typed game entities | `app/game/models.py` | ⚠️ field names provisional |
 | Settings / server table | `app/config.py` | ✅ loads |
 
-Not started (see the plan's roadmap): transport routing (patient/prisoner), the
-multi-account orchestrator, the web panel, secret sealing, and Docker. The
-dispatch decision + single-account cycle are built and tested; they still need a
-live account to confirm the provisional model field names (run `scripts/smoke.py`,
-which prints a **dry-run plan** — nothing is sent).
+Not started (see the plan's roadmap): the multi-account orchestrator, the web
+panel, secret sealing, and Docker. The dispatch + transport decision logic and
+the single-account cycle are built and tested; they still need a live account to
+confirm the provisional model field names (run `scripts/smoke.py`, which prints a
+**dry-run plan** — nothing is sent). One read-layer gap remains before transport
+runs live: detecting requests (which vehicle carries a patient/prisoner, any
+required specialty) and building hospital/cell targets from `/api/buildings` —
+provisional field names, pending a live capture.
 
 ### The dispatch loop
 
@@ -71,6 +75,14 @@ missions never claim the same vehicle. [`runner.py`](app/core/runner.py) wraps i
 in one async poll→plan→dispatch cycle, decoupled from `httpx` (duck-typed client)
 so it's unit-tested with a fake — jitter and back-off live there, not in the
 decision logic.
+
+[`transport.py`](app/domain/transport.py) routes patients to hospitals and
+prisoners to cells: nearest suitable target with a free bed/cell, honouring
+required specialty (Fachrichtung), max distance, and an alliance-tax ceiling,
+preferring own buildings. `route_transports` consumes capacity across a batch so
+two patients don't overfill one hospital; no target → `None` (release, a
+capture-pending write). The runner's `run_transports` performs them via the
+confirmed transport GETs.
 
 ### How requirements resolve (two paths)
 
