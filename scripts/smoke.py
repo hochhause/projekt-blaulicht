@@ -29,7 +29,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import get_settings  # noqa: E402
-from app.domain import AssetLibrary, MissionCatalog, MissionRequirementResolver  # noqa: E402
+from app.domain import (  # noqa: E402
+    AssetLibrary,
+    DispatchPolicy,
+    MissionCatalog,
+    MissionRequirementResolver,
+    plan_dispatches,
+)
 from app.game import GameClient, GameSession  # noqa: E402
 
 
@@ -62,20 +68,21 @@ async def main() -> int:
         print(f"→ buildings: {len(buildings)}")
         print(f"→ mission types (einsaetze): {len(einsaetze)}")
 
-        # End-to-end requirement resolution via the PRIMARY structured path:
-        # einsaetze.json (class -> count) joined with Vehicle.mscv (class -> IDs).
+        # Build the planner from the structured catalogue + salvaged assets.
         library = AssetLibrary.load(settings.vehicles_dir)
         catalog = MissionCatalog.from_payload(einsaetze)
         resolver = MissionRequirementResolver(catalog, library)
         print(f"→ catalogue: {len(catalog)} types; assets: {len(library.types)} vehicle types")
 
-        for m in missions[:3]:
-            res = resolver.resolve(m.mission_type_id) if m.mission_type_id is not None else None
-            if res and res.requirements:
-                need = ", ".join(f"{r.source}×{r.count}" for r in res.requirements)
-                print(f"→ mission #{m.id} {m.caption!r} (type {m.mission_type_id}) needs: {need}")
-            else:
-                print(f"→ mission #{m.id} {m.caption!r} (type {m.mission_type_id}) — no base requirements resolved")
+        # DRY RUN: compute what the bot WOULD dispatch — nothing is sent.
+        policy = DispatchPolicy(radius_km=40)
+        plan = plan_dispatches(missions, vehicles, buildings, resolver, policy)
+        print(f"\n=== DRY RUN dispatch plan (radius {policy.radius_km} km) — nothing sent ===")
+        print(f"→ would action {len(plan.planned)} mission(s), "
+              f"{plan.total_dispatches} vehicle(s); {len(plan.skipped)} skipped")
+        for mp in plan.planned[:10]:
+            flag = "" if mp.satisfied else f"  (SHORT: {mp.shortfall})"
+            print(f"   mission #{mp.mission_id} {mp.caption!r} <- vehicles {list(mp.vehicle_ids)}{flag}")
 
     return 0
 

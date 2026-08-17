@@ -61,3 +61,8 @@ class MissionRequirementResolver:
     def knows(self, mission_type_id: int) -> bool:
         """True if the catalogue has this mission type."""
         return self._catalog.get(mission_type_id) is not None
+
+    @property
+    def catalog(self) -> MissionCatalog:
+        """The underlying mission catalogue (for credits, names, etc.)."""
+        return self._catalog

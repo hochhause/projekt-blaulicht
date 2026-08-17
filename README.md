@@ -34,6 +34,8 @@ Built and **tested** (pure-stdlib, runs with no third-party packages — 63 test
 | Crew / trailer staffing math | `app/domain/crew.py` | ✅ tested |
 | **Reconciliation** (actual vs desired → actions) | `app/domain/reconcile.py` | ✅ tested |
 | Training requirements (wiki-sourced) | `app/domain/training.py` | ✅ tested |
+| **Dispatch planner** (poll→plan, delta, coverage) | `app/domain/dispatch.py` | ✅ tested |
+| **Dispatch runner** (one poll→plan→send cycle) | `app/core/runner.py` | ✅ tested |
 | Great-circle distance / radius | `app/domain/geo.py` | ✅ tested |
 
 Framework in place, awaiting live captures:
@@ -53,9 +55,22 @@ account — see the smoke test):
 | Typed game entities | `app/game/models.py` | ⚠️ field names provisional |
 | Settings / server table | `app/config.py` | ✅ loads |
 
-Not started (see the plan's roadmap): the dispatch loop, transport routing, the
-per-account runner, the multi-account orchestrator, the web panel, secret
-sealing, and Docker.
+Not started (see the plan's roadmap): transport routing (patient/prisoner), the
+multi-account orchestrator, the web panel, secret sealing, and Docker. The
+dispatch decision + single-account cycle are built and tested; they still need a
+live account to confirm the provisional model field names (run `scripts/smoke.py`,
+which prints a **dry-run plan** — nothing is sent).
+
+### The dispatch loop
+
+[`dispatch.py`](app/domain/dispatch.py) is the pure planner — `plan_dispatches`
+turns the current missions + fleet + buildings into a `DispatchPlan`: filter by
+radius (nearest first), resolve requirements, subtract vehicles already en route
+(**delta**), run the **multi-role coverage** matcher, and consume the pool so two
+missions never claim the same vehicle. [`runner.py`](app/core/runner.py) wraps it
+in one async poll→plan→dispatch cycle, decoupled from `httpx` (duck-typed client)
+so it's unit-tested with a fake — jitter and back-off live there, not in the
+decision logic.
 
 ### How requirements resolve (two paths)
 
