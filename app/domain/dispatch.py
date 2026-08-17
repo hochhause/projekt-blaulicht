@@ -24,10 +24,20 @@ needs ``id``, ``caption``, ``mission_type_id``, ``position``; a vehicle needs
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from enum import Enum
 
 from .coverage import select_coverage
 from .geo import haversine_km, nearest_km
 from .resolver import MissionRequirementResolver
+
+
+class DispatchOrder(str, Enum):
+    """The order in which in-range missions are worked each cycle."""
+
+    NEAREST = "nearest"          # closest to your buildings first (default)
+    FARTHEST = "farthest"
+    CREDITS_HIGH = "credits_high"  # best-paying mission types first
+    CREDITS_LOW = "credits_low"
 
 
 @dataclass(frozen=True)
@@ -37,6 +47,10 @@ class DispatchPolicy:
     radius_km: float = 40.0
     credit_floor: int = 0
     max_vehicles_per_mission: int | None = None
+    order: DispatchOrder = DispatchOrder.NEAREST
+    batch_size: int | None = None
+    # Only work missions in these game categories (fire, police, …). Empty = all.
+    allowed_categories: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -77,8 +91,9 @@ def plan_dispatches(
     origins = [b.position for b in buildings if getattr(b, "position", None)]
     pool = [v for v in vehicles if getattr(v, "is_available", False)]
 
-    # In-range missions, nearest building first.
-    candidates: list[tuple[float, object]] = []
+    # Gather in-range, category-allowed missions with their distance and the
+    # mission type's average credits (used for ordering).
+    candidates: list[tuple[float, int, object]] = []  # (distance, credits, mission)
     for mission in missions:
         pos = getattr(mission, "position", None)
         if pos is None:
@@ -88,10 +103,28 @@ def plan_dispatches(
         if distance is None or distance > policy.radius_km:
             plan.skipped.append((mission.id, "out of range"))
             continue
-        candidates.append((distance, mission))
-    candidates.sort(key=lambda t: (t[0], t[1].id))
+        mtype = (
+            resolver.catalog.get(mission.mission_type_id)
+            if mission.mission_type_id is not None
+            else None
+        )
+        if policy.allowed_categories:
+            cats = set(mtype.categories) if mtype else set()
+            if not (cats & policy.allowed_categories):
+                plan.skipped.append((mission.id, "category filtered"))
+                continue
+        credits = mtype.average_credits if mtype else 0
+        candidates.append((distance, credits, mission))
 
-    for _, mission in candidates:
+    candidates = _order(candidates, policy.order)
+
+    # Only work a stack of `batch_size` per cycle (the rest wait for the next).
+    if policy.batch_size is not None and len(candidates) > policy.batch_size:
+        for _d, _c, mission in candidates[policy.batch_size:]:
+            plan.skipped.append((mission.id, "beyond batch size"))
+        candidates = candidates[: policy.batch_size]
+
+    for _distance, _credits, mission in candidates:
         outcome = _plan_one(mission, pool, resolver, policy, assigned)
         if isinstance(outcome, str):
             plan.skipped.append((mission.id, outcome))
@@ -102,6 +135,17 @@ def plan_dispatches(
         pool = [v for v in pool if v.id not in chosen_set]
 
     return plan
+
+
+def _order(candidates, order: DispatchOrder):
+    """Sort (distance, credits, mission) tuples by the chosen strategy."""
+    if order is DispatchOrder.CREDITS_HIGH:
+        return sorted(candidates, key=lambda t: (-t[1], t[0], t[2].id))
+    if order is DispatchOrder.CREDITS_LOW:
+        return sorted(candidates, key=lambda t: (t[1], t[0], t[2].id))
+    if order is DispatchOrder.FARTHEST:
+        return sorted(candidates, key=lambda t: (-t[0], t[2].id))
+    return sorted(candidates, key=lambda t: (t[0], t[2].id))  # NEAREST
 
 
 def _plan_one(mission, pool, resolver, policy, assigned):

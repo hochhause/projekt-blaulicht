@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block nav %}
+  <form method="post" action="/stop-all" class="inline"><button class="danger">Stop all</button></form>
+  <form method="post" action="/logout" class="inline"><button>Log out</button></form>
+{% endblock %}
+{% block content %}
+<h1>Accounts</h1>
+<p class="muted" style="margin-top:0">Manage the game accounts this instance runs. All local; nothing is shared.</p>
+
+<table>
+  <thead>
+    <tr><th>Label</th><th>Server</th><th>Status</th><th>Missions</th><th>Dispatched</th><th>Last cycle</th><th>Actions</th></tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td><a href="/accounts/{{ r.account.id }}">{{ r.account.label }}</a><br>
+          <span class="muted" style="font-size:12px">{{ r.account.email }}</span></td>
+      <td class="muted">{{ r.account.server }}</td>
+      <td><span class="pill {{ r.status }}">{{ r.status }}</span>
+          {% if r.last_error %}<div class="err" style="font-size:11px">{{ r.last_error }}</div>{% endif %}</td>
+      <td>{{ r.totals.missions }}</td>
+      <td>{{ r.totals.dispatched }}</td>
+      <td class="muted" style="font-size:12px">{{ r.last_cycle or "—" }}</td>
+      <td class="actions">
+        {% if r.account.enabled %}
+          <form method="post" action="/accounts/{{ r.account.id }}/disable"><button>Stop</button></form>
+        {% else %}
+          <form method="post" action="/accounts/{{ r.account.id }}/enable"><button class="primary">Start</button></form>
+        {% endif %}
+        <form method="post" action="/accounts/{{ r.account.id }}/delete"
+              onsubmit="return confirm('Delete {{ r.account.label }}?')"><button class="danger">Del</button></form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">No accounts yet — add one below.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="card">
+  <h2>Add account</h2>
+  <form method="post" action="/accounts">
+    <div class="grid">
+      <div class="field"><label>Label</label><input name="label" placeholder="nord-1" required></div>
+      <div class="field"><label>E-mail</label><input name="email" type="email" required></div>
+    </div>
+    <div class="field"><label>Password</label><input name="password" type="password" required></div>
+    <button type="submit" class="primary">Add account</button>
+    <span class="muted" style="font-size:12px">&nbsp;Password is encrypted at rest; only automation of a ToS-violating game — use a throwaway account.</span>
+  </form>
+</div>
+{% endblock %}

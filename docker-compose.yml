@@ -1,0 +1,24 @@
+services:
+  blaulicht:
+    build: .
+    restart: unless-stopped
+    # Bound to localhost ONLY — the panel holds live credentials. Put a TLS
+    # reverse proxy in front before ever exposing it beyond this machine.
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      # Persists the SQLite db + salvaged assets across restarts.
+      - ./data:/app/data
+    environment:
+      # Generate once:  python -c "import secrets; print(secrets.token_urlsafe(32))"
+      BOT_SECRET_KEY: "${BOT_SECRET_KEY:?set BOT_SECRET_KEY in your .env}"
+      # First-run bootstrap of the panel password.
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
+      TZ: "Europe/Berlin"
+      LOG_LEVEL: "info"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

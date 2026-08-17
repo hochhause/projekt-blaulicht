@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block nav %}<a href="/">&larr; Dashboard</a>{% endblock %}
+{% block content %}
+<h1>{{ account.label }}</h1>
+<p class="muted" style="margin-top:0">{{ account.email }} · server {{ account.server }}</p>
+
+<form method="post" action="/accounts/{{ account.id }}">
+  <div class="card">
+    <h2>Credentials</h2>
+    <div class="grid">
+      <div class="field"><label>Label</label><input name="label" value="{{ account.label }}" required></div>
+      <div class="field"><label>E-mail</label><input name="email" type="email" value="{{ account.email }}" required></div>
+    </div>
+    <div class="field"><label>New password (leave blank to keep)</label><input name="password" type="password" placeholder="••••••••"></div>
+  </div>
+
+  <div class="card">
+    <h2>Dispatch</h2>
+    <div class="grid">
+      <div class="field"><label>Radius (km)</label><input name="radius_km" type="number" step="1" value="{{ cfg.radius_km }}"></div>
+      <div class="field"><label>Credit floor</label><input name="credit_floor" type="number" step="1" value="{{ cfg.credit_floor }}"></div>
+      <div class="field"><label>Poll interval (s)</label><input name="poll_seconds" type="number" step="1" value="{{ cfg.poll_seconds }}"></div>
+      <div class="field"><label>Jitter (s)</label><input name="jitter_seconds" type="number" step="1" value="{{ cfg.jitter_seconds }}"></div>
+      <div class="field"><label>Max vehicles / mission (blank = no cap)</label>
+        <input name="max_vehicles_per_mission" type="number" step="1" value="{{ cfg.max_vehicles_per_mission if cfg.max_vehicles_per_mission is not none else '' }}"></div>
+      <div class="field"><label>Order — which missions first</label>
+        <select name="order">
+          <option value="nearest" {{ 'selected' if cfg.order == 'nearest' else '' }}>Nearest first</option>
+          <option value="farthest" {{ 'selected' if cfg.order == 'farthest' else '' }}>Farthest first</option>
+          <option value="credits_high" {{ 'selected' if cfg.order == 'credits_high' else '' }}>Highest credits first</option>
+          <option value="credits_low" {{ 'selected' if cfg.order == 'credits_low' else '' }}>Lowest credits first</option>
+        </select></div>
+      <div class="field"><label>Batch size — missions per cycle (blank = all)</label>
+        <input name="batch_size" type="number" step="1" value="{{ cfg.batch_size if cfg.batch_size is not none else '' }}"></div>
+      <div class="field"><label>Only these categories (comma-sep, blank = all)</label>
+        <input name="allowed_categories" value="{{ cfg.allowed_categories | join(', ') }}" placeholder="fire, police"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Transport</h2>
+    <div class="grid">
+      <div class="field"><label>Enabled</label>
+        <select name="transport_enabled"><option value="1" {{ 'selected' if cfg.transport_enabled else '' }}>yes</option><option value="" {{ '' if cfg.transport_enabled else 'selected' }}>no</option></select></div>
+      <div class="field"><label>Max distance (km)</label><input name="transport_max_distance_km" type="number" step="1" value="{{ cfg.transport_max_distance_km }}"></div>
+      <div class="field"><label>Max alliance tax % (blank = ignore)</label>
+        <input name="transport_max_tax" type="number" step="1" value="{{ cfg.transport_max_tax if cfg.transport_max_tax is not none else '' }}"></div>
+      <div class="field"><label>Prefer own buildings</label>
+        <select name="transport_prefer_own"><option value="1" {{ 'selected' if cfg.transport_prefer_own else '' }}>yes</option><option value="" {{ '' if cfg.transport_prefer_own else 'selected' }}>no</option></select></div>
+      <div class="field"><label>Allow alliance buildings</label>
+        <select name="transport_allow_alliance"><option value="1" {{ 'selected' if cfg.transport_allow_alliance else '' }}>yes</option><option value="" {{ '' if cfg.transport_allow_alliance else 'selected' }}>no</option></select></div>
+    </div>
+  </div>
+
+  <button type="submit" class="primary">Save</button>
+</form>
+{% endblock %}

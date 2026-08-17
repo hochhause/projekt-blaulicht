@@ -8,7 +8,7 @@ from .assets import AssetLibrary, ExtendRule, VehicleClassMap, VehicleType
 from .catalog import MissionCatalog, MissionType
 from .coverage import Assignment, CoverageResult, select_coverage
 from .crew import CrewGap, building_crew_requirement, crew_gap, required_crew
-from .dispatch import DispatchPlan, DispatchPolicy, MissionPlan, plan_dispatches
+from .dispatch import DispatchOrder, DispatchPlan, DispatchPolicy, MissionPlan, plan_dispatches
 from .estate import BuildingState
 from .geo import haversine_km, nearest_km, within_radius
 from .layout import BuildingLayout, EstateLayout
@@ -48,6 +48,7 @@ __all__ = [
     "plan_dispatches",
     "DispatchPlan",
     "DispatchPolicy",
+    "DispatchOrder",
     "MissionPlan",
     # transport routing
     "route_transport",

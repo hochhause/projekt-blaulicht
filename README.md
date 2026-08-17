@@ -39,6 +39,16 @@ Built and **tested** (pure-stdlib, runs with no third-party packages — 63 test
 | Dispatch + transport runner (one cycle) | `app/core/runner.py` | ✅ tested |
 | Great-circle distance / radius | `app/domain/geo.py` | ✅ tested |
 
+Operational layer — built and tested (web tests run the real app in a thread):
+
+| Area | Module | State |
+| --- | --- | --- |
+| SQLite store (thread-safe) | `app/store/db.py` | ✅ tested |
+| Account config → policies | `app/core/account_config.py` | ✅ tested |
+| Credential sealing (Fernet + scrypt) | `app/core/secrets.py` | ✅ tested |
+| Multi-account orchestrator | `app/core/orchestrator.py` | ✅ tested |
+| Web panel (FastAPI + Jinja2) | `app/web/` | ✅ tested |
+
 Framework in place, awaiting live captures:
 
 | Area | Module | State |
@@ -56,14 +66,19 @@ account — see the smoke test):
 | Typed game entities | `app/game/models.py` | ⚠️ field names provisional |
 | Settings / server table | `app/config.py` | ✅ loads |
 
-Not started (see the plan's roadmap): the multi-account orchestrator, the web
-panel, secret sealing, and Docker. The dispatch + transport decision logic and
-the single-account cycle are built and tested; they still need a live account to
-confirm the provisional model field names (run `scripts/smoke.py`, which prints a
-**dry-run plan** — nothing is sent). One read-layer gap remains before transport
-runs live: detecting requests (which vehicle carries a patient/prisoner, any
-required specialty) and building hospital/cell targets from `/api/buildings` —
-provisional field names, pending a live capture.
+**What's left before it runs for real** (everything is built; these are
+verification + live-data gaps, not missing features):
+
+- **Live field-name verification** — the game-model parsers (`/api/v2/vehicles`,
+  `/api/buildings`, `/map/missions_json`) are provisional. Running
+  `scripts/smoke.py` on a throwaway account confirms them; it's the gate before
+  trusting real dispatch.
+- **Transport request detection** — routing and execution are built and tested,
+  but detecting *which* vehicle carries a patient/prisoner (and any required
+  specialty) and building hospital/cell targets from `/api/buildings` is a
+  provisional read step, pending a live capture.
+- **Estate write captures** — build/hire/train/assign are reported until each
+  action's POST is captured (see the write-capture seams above).
 
 ### The dispatch loop
 
@@ -220,8 +235,25 @@ python -m unittest discover -s tests -t . -v
 ```bash
 pip install -e .                     # installs httpx
 export BLAULICHT_EMAIL=...  BLAULICHT_PASSWORD=...
-python scripts/smoke.py
+python scripts/smoke.py              # logs in, prints a DRY-RUN plan, sends nothing
 ```
+
+**Run the web panel** (the whole thing — orchestrator + UI):
+
+```bash
+pip install -e ".[web]"
+export BOT_SECRET_KEY=$(python -c "import secrets;print(secrets.token_urlsafe(32))")
+export ADMIN_PASSWORD=choose-one
+uvicorn app.main:app --host 127.0.0.1 --port 8080
+# open http://127.0.0.1:8080  — add an account, set dispatch order / batch /
+# categories, then Start. Or: docker compose up (see docker-compose.yml).
+```
+
+Dispatch behaviour is per-account and set in the panel: **order** (nearest /
+farthest / highest-credits / lowest-credits), **batch size** (missions worked
+per cycle, default 20), **categories** (only fire, only police, …), radius,
+credit floor, and per-mission vehicle cap. The runner works the batch one
+vehicle at a time with jitter, then waits `poll_seconds` (+ jitter) and repeats.
 
 ### Design notes for the next contributor
 

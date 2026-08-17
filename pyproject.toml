@@ -8,14 +8,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The web panel + orchestrator (Phase 5-7). Not needed for the domain layer
-# or the Phase 1 smoke test.
+# The web panel + orchestrator server. Not needed for the domain layer or the
+# Phase 1 smoke test. (Admin passwords use stdlib scrypt — no argon2 dep.)
 web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "jinja2>=3.1",
-    "argon2-cffi>=23.1",     # admin password hashing
-    "cryptography>=42.0",    # AES-GCM credential sealing
+    "python-multipart>=0.0.9",  # form posts
+    "cryptography>=42.0",       # Fernet credential sealing at rest
 ]
 dev = [
     "pytest>=8.0",

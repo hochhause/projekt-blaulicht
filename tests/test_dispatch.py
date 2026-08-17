@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from app.domain.assets import AssetLibrary
 from app.domain.catalog import MissionCatalog
-from app.domain.dispatch import DispatchPolicy, plan_dispatches
+from app.domain.dispatch import DispatchOrder, DispatchPolicy, plan_dispatches
 from app.domain.resolver import MissionRequirementResolver
 
 BASE = Path(__file__).resolve().parent
@@ -104,6 +104,43 @@ class DispatchPlannerTests(unittest.TestCase):
     def test_unavailable_vehicles_ignored(self):
         plan = self.plan([mission(1, 1, NEAR)], [vehicle(100, LF, available=False)])
         self.assertEqual(plan.planned, [])
+
+    def test_order_credits_high_first(self):
+        # type 1 avg 170, type 3 avg 320. Give each its own LF so both plan.
+        missions = [mission(1, 1, NEAR), mission(2, 3, NEAR2)]
+        vehicles = [vehicle(100, LF), vehicle(101, LF), vehicle(102, FUSTW)]
+        plan = plan_dispatches(
+            missions, vehicles, [building()], self.resolver,
+            DispatchPolicy(radius_km=40, order=DispatchOrder.CREDITS_HIGH),
+        )
+        # The 320-credit mission (id 2) is planned before the 170 one.
+        self.assertEqual(plan.planned[0].mission_id, 2)
+
+    def test_batch_size_limits_missions(self):
+        missions = [mission(i, 1, NEAR) for i in range(1, 6)]  # 5 firetruck missions
+        vehicles = [vehicle(100 + i, LF) for i in range(5)]
+        plan = plan_dispatches(
+            missions, vehicles, [building()], self.resolver,
+            DispatchPolicy(radius_km=40, batch_size=2),
+        )
+        self.assertEqual(len(plan.planned), 2)
+        self.assertIn((3, "beyond batch size"), [(mid, r) for mid, r in plan.skipped])
+
+    def test_category_filter(self):
+        # type 1 is category "fire"; only allow "police" -> filtered out.
+        plan = plan_dispatches(
+            [mission(1, 1, NEAR)], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, allowed_categories=frozenset({"police"})),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "category filtered")])
+
+    def test_category_filter_allows_matching(self):
+        plan = plan_dispatches(
+            [mission(1, 1, NEAR)], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, allowed_categories=frozenset({"fire"})),
+        )
+        self.assertEqual(len(plan.planned), 1)
 
 
 if __name__ == "__main__":
