@@ -33,15 +33,28 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _as_int(value: Any) -> int | None:
+    # mtid is an int for base missions but a variant string ("6/ab") for
+    # overlays — tolerate both rather than crash.
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass(frozen=True)
 class Mission:
-    """An open mission from ``/map/missions_json``."""
+    """An open mission from ``/map/missions_json`` (own or alliance-shared)."""
 
     id: int
     lat: float | None
     lon: float | None
-    mission_type_id: int | None
+    mission_type_id: int | None  # the int base type ("mtid")
     caption: str
+    alliance_id: int | None = None
+    alliance_shared_at: str | None = None
+    patients_count: int = 0
+    prisoners_count: int = 0
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> "Mission":
@@ -49,10 +62,12 @@ class Mission:
             id=int(d["id"]),
             lat=_as_float(_first(d, "lat", "latitude")),
             lon=_as_float(_first(d, "lng", "long", "longitude")),
-            mission_type_id=(
-                int(v) if (v := _first(d, "mission_type_id", "mtid")) is not None else None
-            ),
+            mission_type_id=_as_int(_first(d, "mission_type_id", "mtid")),
             caption=str(_first(d, "caption", "name", default="")),
+            alliance_id=_as_int(_first(d, "alliance_id")),
+            alliance_shared_at=_first(d, "alliance_shared_at"),
+            patients_count=_as_int(_first(d, "patients_count")) or 0,
+            prisoners_count=_as_int(_first(d, "prisoners_count")) or 0,
         )
 
     @property
@@ -60,6 +75,11 @@ class Mission:
         if self.lat is None or self.lon is None:
             return None
         return (self.lat, self.lon)
+
+    @property
+    def is_alliance(self) -> bool:
+        """True if this is an alliance-shared (Verbands-) mission."""
+        return self.alliance_shared_at is not None
 
 
 @dataclass(frozen=True)

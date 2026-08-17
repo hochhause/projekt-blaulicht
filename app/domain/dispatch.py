@@ -51,6 +51,10 @@ class DispatchPolicy:
     batch_size: int | None = None
     # Only work missions in these game categories (fire, police, …). Empty = all.
     allowed_categories: frozenset[str] = frozenset()
+    # Alliance (Verbands-) missions: whether to work them, and an optional
+    # separate radius (falls back to radius_km when unset).
+    alliance_enabled: bool = True
+    alliance_radius_km: float | None = None
 
 
 @dataclass(frozen=True)
@@ -102,12 +106,20 @@ def plan_dispatches(
     # mission type's average credits (used for ordering).
     candidates: list[tuple[float, int, object]] = []  # (distance, credits, mission)
     for mission in missions:
+        is_alliance = getattr(mission, "is_alliance", False)
+        if is_alliance and not policy.alliance_enabled:
+            plan.skipped.append((mission.id, "alliance disabled"))
+            continue
         pos = getattr(mission, "position", None)
         if pos is None:
             plan.skipped.append((mission.id, "no position"))
             continue
+        # Alliance missions may use their own radius.
+        radius = policy.radius_km
+        if is_alliance and policy.alliance_radius_km is not None:
+            radius = policy.alliance_radius_km
         distance = nearest_km(pos, origins)
-        if distance is None or distance > policy.radius_km:
+        if distance is None or distance > radius:
             plan.skipped.append((mission.id, "out of range"))
             continue
         mtype = (

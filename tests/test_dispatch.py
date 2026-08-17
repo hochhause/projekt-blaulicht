@@ -26,8 +26,10 @@ NEAR2 = (52.5250, 13.4000)  # ~0.6 km
 FAR = (53.5500, 9.9900)     # Hamburg, ~250 km
 
 
-def mission(mid, mtype, pos):
-    return SimpleNamespace(id=mid, caption=f"M{mid}", mission_type_id=mtype, position=pos)
+def mission(mid, mtype, pos, is_alliance=False):
+    return SimpleNamespace(
+        id=mid, caption=f"M{mid}", mission_type_id=mtype, position=pos, is_alliance=is_alliance
+    )
 
 
 def vehicle(vid, type_id, pos=BUILDING, available=True):
@@ -141,6 +143,34 @@ class DispatchPlannerTests(unittest.TestCase):
             DispatchPolicy(radius_km=40, allowed_categories=frozenset({"fire"})),
         )
         self.assertEqual(len(plan.planned), 1)
+
+    def test_alliance_mission_worked_by_default(self):
+        plan = self.plan([mission(1, 1, NEAR, is_alliance=True)], [vehicle(100, LF)])
+        self.assertEqual(len(plan.planned), 1)
+
+    def test_alliance_mission_skipped_when_disabled(self):
+        plan = plan_dispatches(
+            [mission(1, 1, NEAR, is_alliance=True)], [vehicle(100, LF)], [building()],
+            self.resolver, DispatchPolicy(radius_km=40, alliance_enabled=False),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "alliance disabled")])
+
+    def test_own_mission_unaffected_by_alliance_toggle(self):
+        plan = plan_dispatches(
+            [mission(1, 1, NEAR, is_alliance=False)], [vehicle(100, LF)], [building()],
+            self.resolver, DispatchPolicy(radius_km=40, alliance_enabled=False),
+        )
+        self.assertEqual(len(plan.planned), 1)
+
+    def test_alliance_radius_applied(self):
+        # Mission ~1.2 km away, own radius 40 (in range) but alliance radius 0.5
+        # (out of range) -> alliance mission skipped for distance.
+        plan = plan_dispatches(
+            [mission(1, 1, NEAR, is_alliance=True)], [vehicle(100, LF)], [building()],
+            self.resolver, DispatchPolicy(radius_km=40, alliance_radius_km=0.5),
+        )
+        self.assertEqual(plan.skipped, [(1, "out of range")])
 
     def test_vehicle_position_derived_from_building(self):
         # Vehicles carry no coordinates (real API); distance uses their building.

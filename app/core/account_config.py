@@ -25,6 +25,8 @@ class AccountConfig:
     order: str = DispatchOrder.NEAREST.value
     batch_size: int | None = 20
     allowed_categories: tuple[str, ...] = ()
+    alliance_enabled: bool = True
+    alliance_radius_km: float | None = None
     # transport
     transport_enabled: bool = True
     transport_max_distance_km: float = 100.0
@@ -44,6 +46,8 @@ class AccountConfig:
             order=order,
             batch_size=self.batch_size,
             allowed_categories=frozenset(self.allowed_categories),
+            alliance_enabled=self.alliance_enabled,
+            alliance_radius_km=self.alliance_radius_km,
         )
 
     def transport_policy(self) -> TransportPolicy:

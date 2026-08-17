@@ -34,6 +34,10 @@
         <input name="batch_size" type="number" step="1" value="{{ cfg.batch_size if cfg.batch_size is not none else '' }}"></div>
       <div class="field"><label>Only these categories (comma-sep, blank = all)</label>
         <input name="allowed_categories" value="{{ cfg.allowed_categories | join(', ') }}" placeholder="fire, police"></div>
+      <div class="field"><label>Alliance (Verbands-) missions</label>
+        <select name="alliance_enabled"><option value="1" {{ 'selected' if cfg.alliance_enabled else '' }}>yes</option><option value="" {{ '' if cfg.alliance_enabled else 'selected' }}>no</option></select></div>
+      <div class="field"><label>Alliance radius km (blank = same as radius)</label>
+        <input name="alliance_radius_km" type="number" step="1" value="{{ cfg.alliance_radius_km if cfg.alliance_radius_km is not none else '' }}"></div>
     </div>
   </div>
 

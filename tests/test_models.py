@@ -39,6 +39,37 @@ class VehicleParsingTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_HTTPX, "httpx not installed")
+class MissionParsingTests(unittest.TestCase):
+    def test_real_mission_shape(self):
+        from app.game.models import Mission
+
+        # Real /map/missions_json element (trimmed): mtid, latitude, alliance fields.
+        m = Mission.from_json({
+            "id": 999, "caption": "Verkehrsunfall", "mtid": 3,
+            "latitude": 47.5, "longitude": 7.6,
+            "alliance_id": 32819, "alliance_shared_at": "2026-08-16T10:00:00Z",
+            "patients_count": 2, "prisoners_count": 0,
+        })
+        self.assertEqual(m.id, 999)
+        self.assertEqual(m.mission_type_id, 3)     # from "mtid"
+        self.assertEqual(m.position, (47.5, 7.6))
+        self.assertTrue(m.is_alliance)
+        self.assertEqual(m.patients_count, 2)
+
+    def test_own_mission_not_alliance(self):
+        from app.game.models import Mission
+
+        m = Mission.from_json({"id": 1, "mtid": 1, "latitude": 47, "longitude": 7})
+        self.assertFalse(m.is_alliance)
+
+    def test_overlay_mtid_tolerated(self):
+        from app.game.models import Mission
+
+        m = Mission.from_json({"id": 1, "mtid": "6/ab", "latitude": 47, "longitude": 7})
+        self.assertIsNone(m.mission_type_id)  # variant id -> no int base, no crash
+
+
+@unittest.skipUnless(HAVE_HTTPX, "httpx not installed")
 class AsListTests(unittest.TestCase):
     def test_unwraps_result_envelope(self):
         from app.game.client import _as_list

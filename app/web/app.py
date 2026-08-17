@@ -125,6 +125,8 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth) -> Fa
         order: str = Form("nearest"),
         batch_size: str = Form(""),
         allowed_categories: str = Form(""),
+        alliance_enabled: str = Form(""),
+        alliance_radius_km: str = Form(""),
         transport_enabled: str = Form(""),
         transport_max_distance_km: float = Form(100.0),
         transport_max_tax: str = Form(""),
@@ -145,6 +147,8 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth) -> Fa
             allowed_categories=tuple(
                 c.strip() for c in allowed_categories.split(",") if c.strip()
             ),
+            alliance_enabled=bool(alliance_enabled),
+            alliance_radius_km=(float(alliance_radius_km) if alliance_radius_km.strip() else None),
             transport_enabled=bool(transport_enabled),
             transport_max_distance_km=transport_max_distance_km,
             transport_max_tax=_opt_int(transport_max_tax),
