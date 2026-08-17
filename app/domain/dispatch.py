@@ -214,7 +214,8 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None):
 
     coverage = select_coverage(requirements, pool, distance_of=distance_of)
     if not coverage.vehicle_ids:
-        return "no available vehicles for requirements"
+        needed = ", ".join(f"{r.source} x{r.count}" for r in requirements)
+        return f"no vehicles for: {needed}"
     if (
         policy.max_vehicles_per_mission is not None
         and len(coverage.vehicle_ids) > policy.max_vehicles_per_mission

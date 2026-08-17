@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block nav %}<a href="/">&larr; Dashboard</a>{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<p class="muted" style="margin-top:0">Global settings. Per-account dispatch/transport options live on each account's page.</p>
+
+<div class="card">
+  <h2>Change admin password</h2>
+  <form method="post" action="/settings/password">
+    <div class="grid">
+      <div class="field"><label>Current password</label><input name="current" type="password" required></div>
+      <div class="field"><label>New password</label><input name="new_password" type="password" required></div>
+    </div>
+    <button type="submit" class="primary">Change password</button>
+    {% if message %}<div style="color:var(--ok);font-size:13px;margin-top:8px">{{ message }}</div>{% endif %}
+    {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  </form>
+</div>
+
+<div class="card">
+  <h2>Status</h2>
+  <table>
+    <tr><th>Data directory</th><td class="muted">{{ data_dir }}</td></tr>
+    <tr><th>Encryption key</th><td>{{ 'set' if secret_set else 'MISSING (set BOT_SECRET_KEY)' }}</td></tr>
+    <tr><th>Running accounts</th><td>{{ running | length }}</td></tr>
+  </table>
+</div>
+{% endblock %}

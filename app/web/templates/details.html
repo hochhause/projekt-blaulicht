@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block nav %}
+  <a href="/">&larr; Dashboard</a>&nbsp;&nbsp;<a href="/accounts/{{ account.id }}">Configure</a>
+{% endblock %}
+{% block content %}
+<h1>{{ account.label }}</h1>
+<p class="muted" style="margin-top:0">{{ account.email }} · server {{ account.server }} ·
+   <span class="pill {{ status }}">{{ status }}</span></p>
+
+<div class="card">
+  <h2>Status</h2>
+  <table>
+    <tr><th>Missions handled</th><td>{{ totals.missions }}</td></tr>
+    <tr><th>Vehicles dispatched</th><td>{{ totals.dispatched }}</td></tr>
+    <tr><th>Last cycle</th><td class="muted">{{ last_cycle or "—" }}</td></tr>
+    {% if last_error %}<tr><th>Last error</th><td class="err">{{ last_error }}</td></tr>{% endif %}
+  </table>
+</div>
+
+<div class="card">
+  <h2>Activity log</h2>
+  <p class="muted" style="margin-top:0;font-size:13px">Newest first. Lines marked <b>MISSING</b> show vehicle roles a mission needed but had none available. Refresh to update.</p>
+  {% if log %}
+  <div style="font-family:var(--mono);font-size:12.5px;max-height:460px;overflow:auto;background:var(--ground);border:1px solid var(--line);border-radius:8px;padding:12px">
+    {% for e in log %}
+      <div><span class="muted">{{ e.ts }}</span>&nbsp;
+        {% if 'MISSING' in e.message or e.message.startswith('error') %}<span style="color:var(--amber)">{{ e.message }}</span>
+        {% elif e.message.startswith('sent') %}<span style="color:var(--ok)">{{ e.message }}</span>
+        {% else %}{{ e.message }}{% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No activity yet — start the account and let a cycle run.</p>
+  {% endif %}
+</div>
+{% endblock %}

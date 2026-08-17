@@ -31,13 +31,18 @@ class WebPanelTests(unittest.TestCase):
         from app.web.app import create_app
         from app.web.auth import AdminAuth
 
+        from app.core.logbuffer import LogStore
+
         self.store = Store(":memory:")
         self.box = SecretBox("test-master-key")
-        auth = AdminAuth(self.store)
-        auth.bootstrap("adminpw")
+        self.auth = AdminAuth(self.store)
+        self.auth.bootstrap("adminpw")
+        self.log_store = LogStore()
         # Factory is never invoked (no account is started in these tests).
         orch = Orchestrator(lambda aid: None)
-        self.client = TestClient(create_app(self.store, orch, self.box, get_settings(), auth))
+        self.client = TestClient(
+            create_app(self.store, orch, self.box, get_settings(), self.auth, self.log_store)
+        )
 
     def _login(self):
         r = self.client.post("/login", data={"password": "adminpw"}, follow_redirects=False)
@@ -97,6 +102,44 @@ class WebPanelTests(unittest.TestCase):
         cfg = json.loads(self.store.get_config(aid))
         self.assertEqual(cfg["radius_km"], 25)
         self.assertEqual(cfg["credit_floor"], 100)
+
+    def test_settings_page_and_password_change(self):
+        self._login()
+        self.assertEqual(self.client.get("/settings").status_code, 200)
+        # change password
+        r = self.client.post(
+            "/settings/password",
+            data={"current": "adminpw", "new_password": "newpw"},
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(self.auth.check("newpw"))
+        self.assertFalse(self.auth.check("adminpw"))
+
+    def test_password_change_rejects_wrong_current(self):
+        self._login()
+        r = self.client.post(
+            "/settings/password",
+            data={"current": "wrong", "new_password": "x"},
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertTrue(self.auth.check("adminpw"))  # unchanged
+
+    def test_details_page_shows_log_and_totals(self):
+        self._login()
+        self.client.post("/accounts", data={"label": "n", "email": "u@e.com", "password": "p"})
+        aid = self.store.list_accounts()[0].id
+        self.store.add_stat(aid, dispatched=4, missions=2)
+        self.log_store.append(aid, "sent to #123 'Brand': 2 vehicle(s)")
+        r = self.client.get(f"/accounts/{aid}/details")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Brand", r.text)
+        self.assertIn("4", r.text)  # dispatched total
+
+    def test_username_accepted_as_login_id(self):
+        # The account "email" field is just the login id; a username is fine.
+        self._login()
+        self.client.post("/accounts", data={"label": "n", "email": "just_a_username", "password": "p"})
+        self.assertEqual(self.store.list_accounts()[0].email, "just_a_username")
 
 
 if __name__ == "__main__":

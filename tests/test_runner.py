@@ -90,6 +90,25 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(client.dispatched, [])
         self.assertEqual(report.dispatched, 0)
 
+    def test_log_lines_report_missing_vehicles(self):
+        from app.core.runner import CycleReport
+        from app.domain.dispatch import DispatchPlan, MissionPlan
+
+        plan = DispatchPlan(
+            planned=[MissionPlan(1, "Brand", (100,), False, {"heavy_rescue_vehicles": 1})],
+            skipped=[],
+        )
+        lines = CycleReport(plan=plan, dispatched=1).log_lines()
+        self.assertTrue(any("MISSING" in ln and "heavy_rescue_vehicles" in ln for ln in lines))
+
+    def test_log_lines_idle_cycle(self):
+        from app.core.runner import CycleReport
+        from app.domain.dispatch import DispatchPlan
+
+        lines = CycleReport(plan=DispatchPlan(planned=[], skipped=[(1, "out of range")])).log_lines()
+        self.assertEqual(len(lines), 1)
+        self.assertIn("idle", lines[0])
+
     def test_failed_dispatch_counted(self):
         client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
 

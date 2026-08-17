@@ -29,7 +29,7 @@ def _opt_int(value: str | None) -> int | None:
     return int(value) if value else None
 
 
-def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth) -> FastAPI:
+def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_store=None) -> FastAPI:
     app = FastAPI(title="Projekt Blaulicht")
 
     def require_auth(request: Request) -> None:
@@ -85,6 +85,63 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth) -> Fa
                 }
             )
         return _TEMPLATES.TemplateResponse(request, "dashboard.html", {"rows": rows})
+
+    # -- per-account details / log ----------------------------------------
+    @app.get("/accounts/{account_id}/details", response_class=HTMLResponse)
+    async def details(account_id: int, request: Request, _=Depends(require_auth)):
+        account = store.get_account(account_id)
+        if account is None:
+            return RedirectResponse("/", status_code=303)
+        state = store.get_state(account_id) or {}
+        log = log_store.recent(account_id) if log_store is not None else []
+        return _TEMPLATES.TemplateResponse(
+            request,
+            "details.html",
+            {
+                "account": account,
+                "status": orchestrator.status().get(account_id, state.get("status", "stopped")),
+                "totals": store.totals(account_id),
+                "last_cycle": state.get("last_cycle"),
+                "last_error": state.get("last_error"),
+                "log": log,
+            },
+        )
+
+    # -- global settings ---------------------------------------------------
+    @app.get("/settings", response_class=HTMLResponse)
+    async def settings_page(request: Request, _=Depends(require_auth)):
+        return _TEMPLATES.TemplateResponse(
+            request,
+            "settings.html",
+            {
+                "message": None,
+                "error": None,
+                "running": orchestrator.running,
+                "data_dir": str(settings.data_dir),
+                "secret_set": bool(settings.secret_key),
+            },
+        )
+
+    @app.post("/settings/password")
+    async def change_password(
+        request: Request,
+        _=Depends(require_auth),
+        current: str = Form(...),
+        new_password: str = Form(...),
+    ):
+        ok = auth.change_password(current, new_password)
+        return _TEMPLATES.TemplateResponse(
+            request,
+            "settings.html",
+            {
+                "message": "Password changed." if ok else None,
+                "error": None if ok else "Current password is wrong (or new one empty).",
+                "running": orchestrator.running,
+                "data_dir": str(settings.data_dir),
+                "secret_set": bool(settings.secret_key),
+            },
+            status_code=200 if ok else 400,
+        )
 
     # -- account create / edit --------------------------------------------
     @app.post("/accounts")

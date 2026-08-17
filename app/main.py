@@ -27,6 +27,7 @@ except ImportError:
     pass
 
 from .config import get_settings
+from .core.logbuffer import LogStore
 from .core.orchestrator import Orchestrator, default_worker_factory
 from .core.secrets import SecretBox
 from .store import Store
@@ -55,8 +56,9 @@ def build_app():
         logger.warning("no admin password set — set ADMIN_PASSWORD on first run")
 
     secret_box = SecretBox(settings.secret_key)
-    orchestrator = Orchestrator(default_worker_factory(store, secret_box, settings))
-    app = create_app(store, orchestrator, secret_box, settings, auth)
+    log_store = LogStore()
+    orchestrator = Orchestrator(default_worker_factory(store, secret_box, settings, log_store))
+    app = create_app(store, orchestrator, secret_box, settings, auth, log_store)
 
     @app.on_event("startup")
     async def _resume_enabled() -> None:

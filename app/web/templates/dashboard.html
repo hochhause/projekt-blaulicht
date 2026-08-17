@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block nav %}
+  <a href="/settings" class="btn" style="text-decoration:none">Settings</a>
   <form method="post" action="/stop-all" class="inline"><button class="danger">Stop all</button></form>
   <form method="post" action="/logout" class="inline"><button>Log out</button></form>
 {% endblock %}
@@ -23,6 +24,7 @@
       <td>{{ r.totals.dispatched }}</td>
       <td class="muted" style="font-size:12px">{{ r.last_cycle or "—" }}</td>
       <td class="actions">
+        <a href="/accounts/{{ r.account.id }}/details" class="btn" style="text-decoration:none">Details</a>
         {% if r.account.enabled %}
           <form method="post" action="/accounts/{{ r.account.id }}/disable"><button>Stop</button></form>
         {% else %}
@@ -43,7 +45,7 @@
   <form method="post" action="/accounts">
     <div class="grid">
       <div class="field"><label>Label</label><input name="label" placeholder="nord-1" required></div>
-      <div class="field"><label>E-mail</label><input name="email" type="email" required></div>
+      <div class="field"><label>E-mail or username</label><input name="email" required></div>
     </div>
     <div class="field"><label>Password</label><input name="password" type="password" required></div>
     <button type="submit" class="primary">Add account</button>

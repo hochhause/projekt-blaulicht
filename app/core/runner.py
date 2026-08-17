@@ -59,6 +59,26 @@ class CycleReport:
             f"{self.failed} failed, {len(self.plan.skipped)} skipped"
         )
 
+    @property
+    def missions_actioned(self) -> int:
+        return len(self.plan.planned)
+
+    def log_lines(self) -> list[str]:
+        """Human-readable activity lines for the per-account details view."""
+        if not self.plan.planned and self.dispatched == 0:
+            return [f"idle - {len(self.plan.skipped)} mission(s) seen, none actionable"]
+        lines = [self.summary()]
+        for mp in self.plan.planned:
+            if mp.satisfied:
+                lines.append(f"sent to #{mp.mission_id} {mp.caption!r}: {len(mp.vehicle_ids)} vehicle(s)")
+            else:
+                missing = ", ".join(f"{cls} x{n}" for cls, n in mp.shortfall.items())
+                lines.append(
+                    f"partial #{mp.mission_id} {mp.caption!r}: sent {len(mp.vehicle_ids)}, "
+                    f"MISSING {missing}"
+                )
+        return lines
+
 
 @dataclass
 class TransportReport:

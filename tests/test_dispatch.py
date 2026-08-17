@@ -84,7 +84,7 @@ class DispatchPlannerTests(unittest.TestCase):
         plan = self.plan(missions, [vehicle(100, LF)])
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].mission_id, 2)  # nearest first
-        self.assertEqual(plan.skipped, [(1, "no available vehicles for requirements")])
+        self.assertEqual(plan.skipped, [(1, "no vehicles for: firetrucks x1")])
 
     def test_multi_role_hlf_used_across_requirements(self):
         # type 3 needs firetrucks:1 + police_cars:1. HLF covers firetrucks; a

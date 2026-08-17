@@ -55,6 +55,13 @@ class AdminAuth:
         stored = self._store.get_setting(_SETTING_KEY)
         return bool(stored) and verify_password(password, stored)
 
+    def change_password(self, current: str, new: str) -> bool:
+        """Replace the admin password if *current* verifies. Returns success."""
+        if not new or not self.check(current):
+            return False
+        self._store.set_setting(_SETTING_KEY, hash_password(new))
+        return True
+
     def issue(self) -> str:
         token = secrets.token_urlsafe(32)
         self._sessions.add(token)

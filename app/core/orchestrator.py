@@ -47,12 +47,16 @@ class AccountWorker:
         runner: _RunnerLike,
         timing: WorkerTiming | None = None,
         on_state: StateCallback | None = None,
+        on_cycle=None,
     ) -> None:
         self.account_id = account_id
         self.status = "idle"
         self._runner = runner
         self._timing = timing or WorkerTiming()
         self._on_state = on_state
+        # Called with (account_id, report) after each successful cycle so the
+        # caller can log activity and persist stats.
+        self._on_cycle = on_cycle
         self._consecutive_errors = 0
 
     def _emit(self, status: str, error: str | None = None) -> None:
@@ -66,6 +70,11 @@ class AccountWorker:
             report = await self._runner.run_cycle()
             self._consecutive_errors = 0
             self._emit("idle")
+            if self._on_cycle is not None:
+                try:
+                    self._on_cycle(self.account_id, report)
+                except Exception:  # noqa: BLE001 — logging must never break the loop
+                    logger.exception("on_cycle hook failed for account %s", self.account_id)
             return report
         except Exception as exc:  # noqa: BLE001 — isolation boundary
             self._consecutive_errors += 1
@@ -146,12 +155,13 @@ class Orchestrator:
         return {aid: worker.status for aid, (worker, _t, _s) in self._tasks.items()}
 
 
-def default_worker_factory(store, secret_box, settings) -> Callable[[int], AccountWorker]:
+def default_worker_factory(store, secret_box, settings, log_store=None) -> Callable[[int], AccountWorker]:
     """Build a factory that constructs real, session-backed workers.
 
     Imports the game layer lazily so importing this module stays ``httpx``-free.
     Each worker gets its own authenticated session and dispatch runner, built
-    from the account's stored config and sealed credentials.
+    from the account's stored config and sealed credentials. When *log_store* is
+    given, each cycle's activity is logged and stats are persisted.
     """
     from ..domain.assets import AssetLibrary
     from ..domain.catalog import MissionCatalog
@@ -191,8 +201,17 @@ def default_worker_factory(store, secret_box, settings) -> Callable[[int], Accou
 
         def on_state(aid: int, status: str, error: str | None) -> None:
             store.set_state(aid, status, error=error)
+            if log_store is not None and error:
+                log_store.append(aid, f"error: {error}")
 
-        return AccountWorker(account_id, cycle_runner, timing, on_state=on_state)
+        def on_cycle(aid: int, report) -> None:
+            if log_store is not None:
+                log_store.extend(aid, report.log_lines())
+            # Only record stats for active cycles, to keep the table lean.
+            if report.dispatched or report.missions_actioned:
+                store.add_stat(aid, dispatched=report.dispatched, missions=report.missions_actioned)
+
+        return AccountWorker(account_id, cycle_runner, timing, on_state=on_state, on_cycle=on_cycle)
 
     return factory
 

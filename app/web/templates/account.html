@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block nav %}<a href="/">&larr; Dashboard</a>{% endblock %}
+{% block nav %}<a href="/">&larr; Dashboard</a>&nbsp;&nbsp;<a href="/accounts/{{ account.id }}/details">Details / log</a>{% endblock %}
 {% block content %}
 <h1>{{ account.label }}</h1>
 <p class="muted" style="margin-top:0">{{ account.email }} · server {{ account.server }}</p>
@@ -9,7 +9,7 @@
     <h2>Credentials</h2>
     <div class="grid">
       <div class="field"><label>Label</label><input name="label" value="{{ account.label }}" required></div>
-      <div class="field"><label>E-mail</label><input name="email" type="email" value="{{ account.email }}" required></div>
+      <div class="field"><label>E-mail or username</label><input name="email" value="{{ account.email }}" required></div>
     </div>
     <div class="field"><label>New password (leave blank to keep)</label><input name="password" type="password" placeholder="••••••••"></div>
   </div>
