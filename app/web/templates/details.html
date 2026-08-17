@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block head %}<meta http-equiv="refresh" content="10">{% endblock %}
 {% block nav %}
   <a href="/">&larr; Dashboard</a>&nbsp;&nbsp;<a href="/accounts/{{ account.id }}">Configure</a>
 {% endblock %}
@@ -19,7 +20,7 @@
 
 <div class="card">
   <h2>Activity log</h2>
-  <p class="muted" style="margin-top:0;font-size:13px">Newest first. Lines marked <b>MISSING</b> show vehicle roles a mission needed but had none available. Refresh to update.</p>
+  <p class="muted" style="margin-top:0;font-size:13px">Newest first, auto-refreshing every 10s. Lines marked <b>MISSING</b> show vehicle roles a mission needed but had none available. Each cycle logs "polled N mission(s)" then a skip breakdown (e.g. "out of range") — that's how to see whether it's finding missions and why it acts or not.</p>
   {% if log %}
   <div style="font-family:var(--mono);font-size:12.5px;max-height:460px;overflow:auto;background:var(--ground);border:1px solid var(--line);border-radius:8px;padding:12px">
     {% for e in log %}

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Protocol
 
@@ -111,6 +112,7 @@ class DispatchRunner:
         *,
         buildings_cache: list | None = None,
         timing: RunnerTiming | None = None,
+        on_log: Callable[[str], None] | None = None,
     ) -> None:
         self._client = client
         self._resolver = resolver
@@ -119,6 +121,18 @@ class DispatchRunner:
         # avoid re-fetching them every cycle.
         self._buildings = buildings_cache
         self._timing = timing or RunnerTiming()
+        # Real-time activity sink (the panel's per-account log). Called as the
+        # cycle progresses, so a long or in-progress cycle still shows what it
+        # is doing rather than nothing until it finishes.
+        self._on_log = on_log
+
+    def _log(self, message: str) -> None:
+        logger.info(message)
+        if self._on_log is not None:
+            try:
+                self._on_log(message)
+            except Exception:  # noqa: BLE001 — logging must never break the cycle
+                logger.exception("on_log hook failed")
 
     async def _buildings_for_cycle(self) -> list:
         if self._buildings is None:
@@ -131,6 +145,9 @@ class DispatchRunner:
         vehicles = await self._client.fetch_vehicles()
         buildings = await self._buildings_for_cycle()
 
+        idle = sum(1 for v in vehicles if getattr(v, "is_available", False))
+        self._log(f"polled {len(missions)} mission(s), {idle} idle vehicle(s)")
+
         # Subtract vehicles already en route so missions are topped up, not
         # re-dispatched (avoids piling vehicles onto an already-covered mission).
         assigned = assigned_from_vehicles(vehicles)
@@ -139,11 +156,21 @@ class DispatchRunner:
         )
         report = CycleReport(plan=plan)
 
+        # Show why missions were (or weren't) actionable — the key diagnostic.
+        reasons = Counter(reason for _mid, reason in plan.skipped)
+        if reasons:
+            breakdown = "; ".join(f"{n}x {r}" for r, n in reasons.most_common(6))
+            self._log(f"plan: {len(plan.planned)} actionable, {len(plan.skipped)} skipped ({breakdown})")
+        else:
+            self._log(f"plan: {len(plan.planned)} actionable")
+
         for mission_plan in plan.planned:
+            sent = 0
             for vehicle_id in mission_plan.vehicle_ids:
                 ok = await self._client.dispatch(mission_plan.mission_id, vehicle_id)
                 if ok:
                     report.dispatched += 1
+                    sent += 1
                 else:
                     report.failed += 1
                     logger.warning(
@@ -152,8 +179,10 @@ class DispatchRunner:
                         vehicle_id,
                     )
                 await self._timing.sleep(self._timing.between_dispatches)
+            note = "" if mission_plan.satisfied else f" (still MISSING {mission_plan.shortfall})"
+            self._log(f"sent {sent} vehicle(s) to #{mission_plan.mission_id} {mission_plan.caption!r}{note}")
 
-        logger.info("cycle done: %s", report.summary())
+        self._log(f"cycle done: {report.summary()}")
         return report
 
     async def run_transports(

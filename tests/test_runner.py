@@ -109,6 +109,25 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertIn("idle", lines[0])
 
+    def test_realtime_log_reports_poll_and_skip_reasons(self):
+        # A mission far out of range -> log shows it was polled and why skipped.
+        far = m(1, 1, pos=(53.55, 9.99))  # Hamburg, out of 40km radius
+        client = FakeClient([far], [v(100, 0)], [b()])
+        lines: list[str] = []
+
+        async def no_sleep(_):
+            return None
+
+        runner = DispatchRunner(
+            client, self.resolver, DispatchPolicy(radius_km=40),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+            on_log=lines.append,
+        )
+        asyncio.run(runner.run_cycle())
+        joined = "\n".join(lines)
+        self.assertIn("polled 1 mission", joined)
+        self.assertIn("out of range", joined)
+
     def test_failed_dispatch_counted(self):
         client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
 

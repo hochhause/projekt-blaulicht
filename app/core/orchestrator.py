@@ -179,6 +179,10 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
         config = AccountConfig.from_dict(_load_config(store, account_id))
         password = secret_box.open(store.get_secret(account_id))
 
+        def log(message: str) -> None:
+            if log_store is not None:
+                log_store.append(account_id, message)
+
         async def build_and_run_cycle():
             # A fresh session per cycle keeps this simple and stateless; a
             # longer-lived session is a later optimisation.
@@ -191,7 +195,7 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
                 einsaetze = await client.fetch_einsaetze()
                 catalog = MissionCatalog.from_payload(einsaetze)
                 resolver = MissionRequirementResolver(catalog, library)
-                runner = DispatchRunner(client, resolver, config.dispatch_policy())
+                runner = DispatchRunner(client, resolver, config.dispatch_policy(), on_log=log)
                 return await runner.run_cycle()
 
         # Adapt the per-cycle builder to the runner-like interface the worker
@@ -205,9 +209,8 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
                 log_store.append(aid, f"error: {error}")
 
         def on_cycle(aid: int, report) -> None:
-            if log_store is not None:
-                log_store.extend(aid, report.log_lines())
-            # Only record stats for active cycles, to keep the table lean.
+            # The runner already logs activity in real time (on_log); here we
+            # only persist stats, for active cycles, to keep the table lean.
             if report.dispatched or report.missions_actioned:
                 store.add_stat(aid, dispatched=report.dispatched, missions=report.missions_actioned)
 
