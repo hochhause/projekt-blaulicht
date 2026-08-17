@@ -142,6 +142,19 @@ class DispatchPlannerTests(unittest.TestCase):
         )
         self.assertEqual(len(plan.planned), 1)
 
+    def test_vehicle_position_derived_from_building(self):
+        # Vehicles carry no coordinates (real API); distance uses their building.
+        near_b = SimpleNamespace(id=1, position=NEAR)
+        far_b = SimpleNamespace(id=2, position=(52.90, 13.90))
+        v_near = SimpleNamespace(id=100, type_id=LF, is_available=True, position=None, building_id=1)
+        v_far = SimpleNamespace(id=101, type_id=LF, is_available=True, position=None, building_id=2)
+        plan = plan_dispatches(
+            [mission(1, 1, NEAR)], [v_far, v_near], [near_b, far_b], self.resolver,
+            DispatchPolicy(radius_km=200),
+        )
+        # The LF at the nearer building is chosen despite list order.
+        self.assertEqual(plan.planned[0].vehicle_ids, (100,))
+
 
 if __name__ == "__main__":
     unittest.main()

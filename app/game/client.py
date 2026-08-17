@@ -34,15 +34,25 @@ logger = logging.getLogger(__name__)
 _CTX = "sd=d&sk=ac"
 
 
+# Envelope keys the game wraps list payloads in (v2 endpoints are paginated
+# under "result"). Checked before falling back to id-keyed-map handling.
+_CONTAINER_KEYS = ("result", "results", "vehicles", "buildings", "missions", "data")
+
+
 def _as_list(payload: object) -> list[dict]:
     """Normalise an endpoint payload to a list of dicts.
 
-    The game returns either a bare JSON array or an object keyed by id; accept
-    both so a server-side shape change doesn't break reading.
+    Accepts a bare JSON array, an envelope like ``{"result": [...]}`` (v2
+    endpoints), or an object keyed by id — so a server-side shape difference
+    doesn't break reading.
     """
     if isinstance(payload, list):
         return [d for d in payload if isinstance(d, dict)]
     if isinstance(payload, dict):
+        for key in _CONTAINER_KEYS:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [d for d in value if isinstance(d, dict)]
         return [v for v in payload.values() if isinstance(v, dict)]
     return []
 

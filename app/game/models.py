@@ -75,7 +75,9 @@ class Vehicle:
     caption: str
     type_caption: str = ""
     """The vehicle *type* name (e.g. "NEF", "HLF 20") — the key used for
-    training lookups. Distinct from ``caption``, the user's custom vehicle name."""
+    training lookups. v2 leaves this empty, so it falls back to ``caption``."""
+    # NB: the vehicle API carries NO lat/lon — a vehicle's position is its
+    # building's. The dispatch planner resolves that via building_id.
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> "Vehicle":
@@ -89,7 +91,12 @@ class Vehicle:
             lat=_as_float(_first(d, "latitude", "lat")),
             lon=_as_float(_first(d, "longitude", "lng", "long")),
             caption=str(_first(d, "caption", default="")),
-            type_caption=str(_first(d, "vehicle_type_caption", "type_caption", default="")),
+            # v2 leaves vehicle_type_caption empty; the vehicle's own caption
+            # ("LF 20") is the default type name, so fall back to it for training.
+            type_caption=str(
+                _first(d, "vehicle_type_caption", "type_caption", default="")
+                or _first(d, "caption", default="")
+            ),
         )
 
     @property

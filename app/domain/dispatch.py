@@ -90,6 +90,13 @@ def plan_dispatches(
     plan = DispatchPlan()
     origins = [b.position for b in buildings if getattr(b, "position", None)]
     pool = [v for v in vehicles if getattr(v, "is_available", False)]
+    # Vehicles carry no coordinates — a vehicle's position is its building's,
+    # used to rank same-role candidates nearest-first.
+    building_pos = {
+        b.id: b.position
+        for b in buildings
+        if getattr(b, "position", None) and getattr(b, "id", None) is not None
+    }
 
     # Gather in-range, category-allowed missions with their distance and the
     # mission type's average credits (used for ordering).
@@ -125,7 +132,7 @@ def plan_dispatches(
         candidates = candidates[: policy.batch_size]
 
     for _distance, _credits, mission in candidates:
-        outcome = _plan_one(mission, pool, resolver, policy, assigned)
+        outcome = _plan_one(mission, pool, resolver, policy, assigned, building_pos)
         if isinstance(outcome, str):
             plan.skipped.append((mission.id, outcome))
             continue
@@ -148,8 +155,9 @@ def _order(candidates, order: DispatchOrder):
     return sorted(candidates, key=lambda t: (t[0], t[2].id))  # NEAREST
 
 
-def _plan_one(mission, pool, resolver, policy, assigned):
+def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None):
     """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string."""
+    building_pos = building_pos or {}
     if mission.mission_type_id is None:
         return "unknown mission type"
 
@@ -168,7 +176,10 @@ def _plan_one(mission, pool, resolver, policy, assigned):
     pos = mission.position
 
     def distance_of(vehicle) -> float:
-        vp = getattr(vehicle, "position", None)
+        # Prefer the vehicle's own position if present, else its building's.
+        vp = getattr(vehicle, "position", None) or building_pos.get(
+            getattr(vehicle, "building_id", None)
+        )
         return haversine_km(pos, vp) if vp else float("inf")
 
     coverage = select_coverage(requirements, pool, distance_of=distance_of)

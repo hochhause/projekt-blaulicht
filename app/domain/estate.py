@@ -37,15 +37,22 @@ class BuildingState:
         """Build from a ``/api/buildings/{id}`` object plus the type IDs of the
         vehicles stationed there. Field names are provisional (see module doc)."""
         raw_ext = building.get("extensions") or []
-        # Extensions may arrive as a list of ids, or of objects with an "id"
-        # and an "available"/"enabled" flag — accept both.
+        # Real shape: a list of {caption, available, enabled, type_id}. Count an
+        # extension as present when it's enabled or available. Bare-id lists are
+        # also accepted for forward-compatibility.
         ext_ids: set[int] = set()
         for e in raw_ext:
             if isinstance(e, dict):
-                if e.get("available", True) and "id" in e:
-                    ext_ids.add(int(e["id"]))
+                tid = e.get("type_id", e.get("id"))
+                if tid is not None and (e.get("enabled", True) or e.get("available", True)):
+                    ext_ids.add(int(tid))
             else:
                 ext_ids.add(int(e))
+
+        # The buildings API has no "free personnel" field — only personal_count
+        # (total hired). Use it for both; refine once assignment data is folded in.
+        total = int(building.get("personal_count") or building.get("personnel_total") or 0)
+        available = int(building.get("personal_free") or total)
 
         counts = dict(Counter(int(t) for t in vehicle_type_ids))
         return cls(
@@ -56,7 +63,7 @@ class BuildingState:
             level=int(building.get("level") or 0),
             extensions=frozenset(ext_ids),
             vehicle_type_counts=counts,
-            personnel_available=int(building.get("personal_free") or building.get("personnel_available") or 0),
-            personnel_total=int(building.get("personal_count") or building.get("personnel_total") or 0),
+            personnel_available=available,
+            personnel_total=total,
             caption=str(building.get("caption") or building.get("name") or ""),
         )
