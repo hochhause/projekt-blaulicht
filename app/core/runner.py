@@ -15,7 +15,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Protocol
 
-from ..domain.dispatch import DispatchPlan, DispatchPolicy, MissionRequirementResolver, plan_dispatches
+from ..domain.dispatch import (
+    DispatchPlan,
+    DispatchPolicy,
+    MissionRequirementResolver,
+    assigned_from_vehicles,
+    plan_dispatches,
+)
 from ..domain.transport import (
     TransportKind,
     TransportPolicy,
@@ -105,7 +111,12 @@ class DispatchRunner:
         vehicles = await self._client.fetch_vehicles()
         buildings = await self._buildings_for_cycle()
 
-        plan = plan_dispatches(missions, vehicles, buildings, self._resolver, self._policy)
+        # Subtract vehicles already en route so missions are topped up, not
+        # re-dispatched (avoids piling vehicles onto an already-covered mission).
+        assigned = assigned_from_vehicles(vehicles)
+        plan = plan_dispatches(
+            missions, vehicles, buildings, self._resolver, self._policy, assigned=assigned
+        )
         report = CycleReport(plan=plan)
 
         for mission_plan in plan.planned:

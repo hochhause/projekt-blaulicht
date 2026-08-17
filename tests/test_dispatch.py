@@ -5,7 +5,12 @@ from types import SimpleNamespace
 
 from app.domain.assets import AssetLibrary
 from app.domain.catalog import MissionCatalog
-from app.domain.dispatch import DispatchOrder, DispatchPolicy, plan_dispatches
+from app.domain.dispatch import (
+    DispatchOrder,
+    DispatchPolicy,
+    assigned_from_vehicles,
+    plan_dispatches,
+)
 from app.domain.resolver import MissionRequirementResolver
 
 BASE = Path(__file__).resolve().parent
@@ -92,6 +97,27 @@ class DispatchPlannerTests(unittest.TestCase):
     def test_delta_already_covered_is_skipped(self):
         # A firetruck already en route to mission 1 (type 1) -> nothing to do.
         plan = self.plan([mission(1, 1, NEAR)], [vehicle(100, LF)], assigned={1: [LF]})
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "already covered")])
+
+    def test_assigned_from_vehicles(self):
+        vehicles = [
+            SimpleNamespace(id=1, type_id=LF, target_type="mission", target_id=555),
+            SimpleNamespace(id=2, type_id=FUSTW, target_type="mission", target_id=555),
+            SimpleNamespace(id=3, type_id=LF, target_type=None, target_id=None),      # idle
+            SimpleNamespace(id=4, type_id=LF, target_type="building", target_id=999),  # returning
+        ]
+        self.assertEqual(assigned_from_vehicles(vehicles), {555: [LF, FUSTW]})
+
+    def test_delta_from_en_route_vehicle_prevents_redispatch(self):
+        # Mission 1 (firetrucks:1) already has an LF en route (target_type=mission)
+        # plus a spare idle LF -> the spare is NOT sent.
+        enroute = SimpleNamespace(id=1, type_id=LF, is_available=False,
+                                  position=BUILDING, building_id=1,
+                                  target_type="mission", target_id=1)
+        spare = vehicle(2, LF)
+        assigned = assigned_from_vehicles([enroute, spare])
+        plan = self.plan([mission(1, 1, NEAR)], [enroute, spare], assigned=assigned)
         self.assertEqual(plan.planned, [])
         self.assertEqual(plan.skipped, [(1, "already covered")])
 

@@ -78,6 +78,24 @@ class DispatchPlan:
         return sum(len(m.vehicle_ids) for m in self.planned)
 
 
+def assigned_from_vehicles(vehicles) -> dict[int, list[int]]:
+    """Map mission id → vehicle type IDs already en route to it (the delta).
+
+    A vehicle carries ``target_type == 'mission'`` and ``target_id`` (the mission
+    id) while assigned; those reduce that mission's outstanding requirements so
+    the loop tops missions up instead of re-dispatching to them.
+    """
+    assigned: dict[int, list[int]] = {}
+    for vehicle in vehicles:
+        if getattr(vehicle, "target_type", None) != "mission":
+            continue
+        mission_id = getattr(vehicle, "target_id", None)
+        type_id = getattr(vehicle, "type_id", None)
+        if mission_id is not None and type_id is not None:
+            assigned.setdefault(int(mission_id), []).append(int(type_id))
+    return assigned
+
+
 def plan_dispatches(
     missions,
     vehicles,

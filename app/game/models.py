@@ -94,6 +94,8 @@ class Vehicle:
     lon: float | None
     caption: str
     type_caption: str = ""
+    target_type: str | None = None  # 'mission' when en route to a mission
+    target_id: int | None = None    # the mission id it is assigned to
     """The vehicle *type* name (e.g. "NEF", "HLF 20") — the key used for
     training lookups. v2 leaves this empty, so it falls back to ``caption``."""
     # NB: the vehicle API carries NO lat/lon — a vehicle's position is its
@@ -117,6 +119,8 @@ class Vehicle:
                 _first(d, "vehicle_type_caption", "type_caption", default="")
                 or _first(d, "caption", default="")
             ),
+            target_type=_first(d, "target_type"),
+            target_id=_as_int(_first(d, "target_id")),
         )
 
     @property
