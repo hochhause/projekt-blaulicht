@@ -94,6 +94,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
             return RedirectResponse("/", status_code=303)
         state = store.get_state(account_id) or {}
         log = log_store.recent(account_id) if log_store is not None else []
+        cfg = AccountConfig.from_dict(_load_config(store, account_id))
         return _TEMPLATES.TemplateResponse(
             request,
             "details.html",
@@ -104,6 +105,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
                 "last_cycle": state.get("last_cycle"),
                 "last_error": state.get("last_error"),
                 "log": log,
+                "cfg": cfg,
             },
         )
 

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block head %}<meta http-equiv="refresh" content="10">{% endblock %}
+{% block head %}<meta http-equiv="refresh" content="5">{% endblock %}
 {% block nav %}
   <a href="/">&larr; Dashboard</a>&nbsp;&nbsp;<a href="/accounts/{{ account.id }}">Configure</a>
 {% endblock %}
@@ -15,6 +15,19 @@
     <tr><th>Vehicles dispatched</th><td>{{ totals.dispatched }}</td></tr>
     <tr><th>Last cycle</th><td class="muted">{{ last_cycle or "—" }}</td></tr>
     {% if last_error %}<tr><th>Last error</th><td class="err">{{ last_error }}</td></tr>{% endif %}
+  </table>
+</div>
+
+<div class="card">
+  <h2>Dispatch config</h2>
+  <p class="muted" style="margin-top:0;font-size:13px">Set the mission <b>sort order</b> and everything else on the
+     <a href="/accounts/{{ account.id }}">Configure</a> page.</p>
+  <table>
+    <tr><th>Order</th><td>{{ cfg.order }}</td></tr>
+    <tr><th>Radius</th><td>{{ cfg.radius_km }} km{% if cfg.alliance_enabled and cfg.alliance_radius_km %} (alliance {{ cfg.alliance_radius_km }} km){% endif %}</td></tr>
+    <tr><th>Batch size</th><td>{{ cfg.batch_size if cfg.batch_size is not none else 'all' }}</td></tr>
+    <tr><th>Alliance missions</th><td>{{ 'yes' if cfg.alliance_enabled else 'no' }}</td></tr>
+    <tr><th>Categories</th><td>{{ cfg.allowed_categories | join(', ') if cfg.allowed_categories else 'all' }}</td></tr>
   </table>
 </div>
 

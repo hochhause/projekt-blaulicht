@@ -104,6 +104,13 @@ class AccountWorker:
                     continue  # normal: slept the full delay
         finally:
             self._emit("stopped")
+            # Close the persistent session cleanly on stop, if the runner has one.
+            close = getattr(self._runner, "aclose", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception:  # noqa: BLE001
+                    logger.exception("closing runner for account %s failed", self.account_id)
 
 
 class Orchestrator:
@@ -164,12 +171,8 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
     given, each cycle's activity is logged and stats are persisted.
     """
     from ..domain.assets import AssetLibrary
-    from ..domain.catalog import MissionCatalog
-    from ..domain.resolver import MissionRequirementResolver
-    from ..game.client import GameClient
-    from ..game.session import GameSession
     from .account_config import AccountConfig
-    from .runner import DispatchRunner
+    from .account_runner import AccountRunner
 
     # Shared, static reference data — loaded once for all accounts.
     library = AssetLibrary.load(settings.vehicles_dir)
@@ -183,24 +186,22 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
             if log_store is not None:
                 log_store.append(account_id, message)
 
-        async def build_and_run_cycle():
-            # A fresh session per cycle keeps this simple and stateless; a
-            # longer-lived session is a later optimisation.
-            base = settings.base_url(account.server)
-            async with GameSession(base, user_agent=settings.user_agent) as session:
-                result = await session.login(account.email, password)
-                if not result.ok:
-                    raise RuntimeError(f"login failed: {result.status.value}")
-                client = GameClient(session)
-                einsaetze = await client.fetch_einsaetze()
-                catalog = MissionCatalog.from_payload(einsaetze)
-                resolver = MissionRequirementResolver(catalog, library)
-                runner = DispatchRunner(client, resolver, config.dispatch_policy(), on_log=log)
-                return await runner.run_cycle()
+        def stat(dispatched: int, missions: int) -> None:
+            if dispatched or missions:
+                store.add_stat(account_id, dispatched=dispatched, missions=missions)
 
-        # Adapt the per-cycle builder to the runner-like interface the worker
-        # expects (an object with async run_cycle()).
-        cycle_runner = type("_CycleRunner", (), {"run_cycle": staticmethod(build_and_run_cycle)})()
+        # One persistent session for this account — connects once, reuses across
+        # cycles, reconnects only on failure/expiry.
+        runner = AccountRunner(
+            base_url=settings.base_url(account.server),
+            user_agent=settings.user_agent,
+            email=account.email,
+            password=password,
+            library=library,
+            policy=config.dispatch_policy(),
+            on_log=log,
+            on_stat=stat,
+        )
         timing = WorkerTiming(poll_seconds=config.poll_seconds, jitter_seconds=config.jitter_seconds)
 
         def on_state(aid: int, status: str, error: str | None) -> None:
@@ -208,13 +209,7 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
             if log_store is not None and error:
                 log_store.append(aid, f"error: {error}")
 
-        def on_cycle(aid: int, report) -> None:
-            # The runner already logs activity in real time (on_log); here we
-            # only persist stats, for active cycles, to keep the table lean.
-            if report.dispatched or report.missions_actioned:
-                store.add_stat(aid, dispatched=report.dispatched, missions=report.missions_actioned)
-
-        return AccountWorker(account_id, cycle_runner, timing, on_state=on_state, on_cycle=on_cycle)
+        return AccountWorker(account_id, runner, timing, on_state=on_state)
 
     return factory
 

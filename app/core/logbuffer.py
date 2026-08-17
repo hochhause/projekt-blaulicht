@@ -21,7 +21,7 @@ class LogEntry:
 
 
 class LogStore:
-    def __init__(self, capacity: int = 200) -> None:
+    def __init__(self, capacity: int = 500) -> None:
         self._cap = capacity
         self._by_account: dict[int, deque[LogEntry]] = {}
         self._lock = threading.Lock()

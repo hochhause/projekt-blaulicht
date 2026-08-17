@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Protocol
@@ -32,6 +33,14 @@ from ..domain.transport import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _vehicle_name(vehicle, vehicle_id: int) -> str:
+    """Readable label for a vehicle in the log (type name, else its caption)."""
+    if vehicle is None:
+        return f"vehicle #{vehicle_id}"
+    label = getattr(vehicle, "type_caption", "") or getattr(vehicle, "caption", "")
+    return f"{label} (#{vehicle_id})" if label else f"vehicle #{vehicle_id}"
 
 
 class GameClientLike(Protocol):
@@ -97,8 +106,15 @@ class TransportReport:
 class RunnerTiming:
     """Timing between actions. Injectable so tests run instantly."""
 
-    between_dispatches: float = 0.8  # human-ish gap between individual sends
+    # Human-ish gap between individual sends: a random value in this range.
+    between_dispatches: float = 0.9
+    between_dispatches_max: float = 2.2
     sleep: Callable[[float], Awaitable[None]] = field(default=asyncio.sleep)
+
+    def dispatch_gap(self) -> float:
+        lo = self.between_dispatches
+        hi = max(lo, self.between_dispatches_max)
+        return random.uniform(lo, hi)
 
 
 class DispatchRunner:
@@ -113,6 +129,7 @@ class DispatchRunner:
         buildings_cache: list | None = None,
         timing: RunnerTiming | None = None,
         on_log: Callable[[str], None] | None = None,
+        on_stat: Callable[[int, int], None] | None = None,
     ) -> None:
         self._client = client
         self._resolver = resolver
@@ -125,6 +142,9 @@ class DispatchRunner:
         # cycle progresses, so a long or in-progress cycle still shows what it
         # is doing rather than nothing until it finishes.
         self._on_log = on_log
+        # Called (dispatched, missions) after each mission so the panel counters
+        # tick up during the cycle, not only at its end.
+        self._on_stat = on_stat
 
     def _log(self, message: str) -> None:
         logger.info(message)
@@ -164,23 +184,28 @@ class DispatchRunner:
         else:
             self._log(f"plan: {len(plan.planned)} actionable")
 
+        veh_by_id = {v.id: v for v in vehicles}
+
         for mission_plan in plan.planned:
             sent = 0
             for vehicle_id in mission_plan.vehicle_ids:
+                name = _vehicle_name(veh_by_id.get(vehicle_id), vehicle_id)
                 ok = await self._client.dispatch(mission_plan.mission_id, vehicle_id)
                 if ok:
                     report.dispatched += 1
                     sent += 1
+                    self._log(
+                        f"dispatched {name} → #{mission_plan.mission_id} {mission_plan.caption!r}"
+                    )
                 else:
                     report.failed += 1
-                    logger.warning(
-                        "dispatch failed: mission %s <- vehicle %s",
-                        mission_plan.mission_id,
-                        vehicle_id,
-                    )
-                await self._timing.sleep(self._timing.between_dispatches)
-            note = "" if mission_plan.satisfied else f" (still MISSING {mission_plan.shortfall})"
-            self._log(f"sent {sent} vehicle(s) to #{mission_plan.mission_id} {mission_plan.caption!r}{note}")
+                    self._log(f"FAILED {name} → #{mission_plan.mission_id} {mission_plan.caption!r}")
+                await self._timing.sleep(self._timing.dispatch_gap())
+            if not mission_plan.satisfied:
+                self._log(f"#{mission_plan.mission_id} still MISSING {mission_plan.shortfall}")
+            # Tick the counters per mission, not only at cycle end.
+            if self._on_stat is not None and sent:
+                self._on_stat(sent, 1)
 
         self._log(f"cycle done: {report.summary()}")
         return report
