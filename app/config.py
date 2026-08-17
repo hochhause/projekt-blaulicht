@@ -42,7 +42,11 @@ class Settings:
     """Infrastructure settings resolved from environment variables."""
 
     # Where SQLite and the salvaged assets live (mounted as a volume in Docker).
-    data_dir: Path = field(default_factory=lambda: REPO_ROOT / "data")
+    # BOT_DATA_DIR pins it explicitly in the container (avoids any ambiguity
+    # between the source tree and an installed copy).
+    data_dir: Path = field(
+        default_factory=lambda: Path(os.environ.get("BOT_DATA_DIR") or (REPO_ROOT / "data"))
+    )
 
     # Master key for AES-GCM credential sealing. Required in production; the
     # app refuses to store credentials without it.
@@ -73,11 +77,20 @@ class Settings:
 
     @property
     def vehicles_dir(self) -> Path:
-        """Directory of salvaged German vehicle assets."""
-        return self.data_dir / "de" / "vehicles"
+        """Salvaged German vehicle assets — a read-only, code-tree resource.
+
+        Anchored to the repo (not ``data_dir``) so it's always found regardless
+        of where the mutable db volume points.
+        """
+        return REPO_ROOT / "data" / "de" / "vehicles"
+
+    @property
+    def training_file(self) -> Path:
+        return REPO_ROOT / "data" / "de" / "training.json"
 
     @property
     def db_path(self) -> Path:
+        """The mutable SQLite db — follows BOT_DATA_DIR (the persisted volume)."""
         return self.data_dir / "blaulicht.db"
 
     def base_url(self, server: str | None = None) -> str:

@@ -15,6 +15,17 @@ from __future__ import annotations
 import logging
 import sys
 
+# Load a local .env (if python-dotenv is installed) so BOT_SECRET_KEY,
+# ADMIN_PASSWORD etc. persist across restarts — the secret key MUST be stable
+# or previously-sealed credentials can't be decrypted. Must run before
+# get_settings() reads the environment.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
 from .config import get_settings
 from .core.orchestrator import Orchestrator, default_worker_factory
 from .core.secrets import SecretBox

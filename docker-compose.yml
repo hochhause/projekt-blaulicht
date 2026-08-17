@@ -14,6 +14,7 @@ services:
       BOT_SECRET_KEY: "${BOT_SECRET_KEY:?set BOT_SECRET_KEY in your .env}"
       # First-run bootstrap of the panel password.
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
+      BOT_DATA_DIR: "/app/data"
       TZ: "Europe/Berlin"
       LOG_LEVEL: "info"
     healthcheck:
