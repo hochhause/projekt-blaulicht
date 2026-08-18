@@ -34,7 +34,7 @@ class AccountRunner:
         base_url: str,
         user_agent: str,
         email: str,
-        password: str,
+        password_provider,
         library,
         policy: DispatchPolicy,
         timeout: float = 20.0,
@@ -45,7 +45,10 @@ class AccountRunner:
         self._base_url = base_url
         self._user_agent = user_agent
         self._email = email
-        self._password = password
+        # A callable returning the plaintext password — decryption is deferred
+        # to connect time so a bad key surfaces as an account error, not a
+        # startup crash.
+        self._password_provider = password_provider
         self._library = library
         self._policy = policy
         self._timeout = timeout
@@ -61,8 +64,9 @@ class AccountRunner:
 
     async def _connect(self) -> None:
         self._log("connecting to game…")
+        password = self._password_provider()  # may raise (e.g. bad key) -> account error
         session = GameSession(self._base_url, user_agent=self._user_agent, timeout=self._timeout)
-        result = await session.login(self._email, self._password)
+        result = await session.login(self._email, password)
         if not result.ok:
             await session.aclose()
             raise RuntimeError(f"login {result.status.value}: {result.detail}".rstrip(": "))

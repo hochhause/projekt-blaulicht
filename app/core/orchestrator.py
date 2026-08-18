@@ -180,7 +180,21 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
     def factory(account_id: int) -> AccountWorker:
         account = store.get_account(account_id)
         config = AccountConfig.from_dict(_load_config(store, account_id))
-        password = secret_box.open(store.get_secret(account_id))
+
+        def password_provider() -> str:
+            # Decrypt lazily at connect time. A changed BOT_SECRET_KEY (or a
+            # missing secret) becomes a clear per-account error instead of a
+            # server-wide startup crash.
+            token = store.get_secret(account_id)
+            if token is None:
+                raise RuntimeError("no stored password — re-enter it on the Configure page")
+            try:
+                return secret_box.open(token)
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    "cannot decrypt stored password (BOT_SECRET_KEY changed?) - "
+                    "re-enter it on the Configure page"
+                ) from exc
 
         def log(message: str) -> None:
             if log_store is not None:
@@ -196,7 +210,7 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
             base_url=settings.base_url(account.server),
             user_agent=settings.user_agent,
             email=account.email,
-            password=password,
+            password_provider=password_provider,
             library=library,
             policy=config.dispatch_policy(),
             on_log=log,

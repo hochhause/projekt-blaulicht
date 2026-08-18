@@ -63,8 +63,13 @@ def build_app():
     @app.on_event("startup")
     async def _resume_enabled() -> None:
         for account in store.list_accounts():
-            if account.enabled:
+            if not account.enabled:
+                continue
+            try:
                 await orchestrator.start(account.id)
+            except Exception as exc:  # noqa: BLE001 — one bad account must not stop startup
+                logger.exception("could not resume account %s", account.id)
+                store.set_state(account.id, "error", error=str(exc))
         logger.info("orchestrator resumed %d account(s)", len(orchestrator.running))
 
     @app.on_event("shutdown")

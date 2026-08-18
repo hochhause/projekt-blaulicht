@@ -1,4 +1,4 @@
-"""Translate .NET-flavoured regular expressions to Python's :mod:`re` dialect.
+r"""Translate .NET-flavoured regular expressions to Python's :mod:`re` dialect.
 
 The salvaged requirement patterns were authored for the original bot's .NET
 runtime, so their **named groups** use .NET syntax that Python does not accept:

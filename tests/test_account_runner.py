@@ -68,12 +68,13 @@ class AccountRunnerTests(unittest.TestCase):
         _C.sessions = _C.logins = _C.closes = 0
         self.lib = AssetLibrary.load(VEHICLES)
 
-    def _runner(self):
+    def _runner(self, password_provider=lambda: "p"):
         from app.core.account_runner import AccountRunner
         from app.domain.dispatch import DispatchPolicy
 
         return AccountRunner(
-            base_url="http://x", user_agent="ua", email="e", password="p",
+            base_url="http://x", user_agent="ua", email="e",
+            password_provider=password_provider,
             library=self.lib, policy=DispatchPolicy(),
         )
 
@@ -98,6 +99,20 @@ class AccountRunnerTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 asyncio.run(runner.run_cycle())
             self.assertEqual(_C.logins, 2)    # reconnected next cycle
+
+    def test_bad_credentials_surface_as_error_not_crash(self):
+        # A password_provider that raises (e.g. undecryptable secret) becomes a
+        # cycle error, not a hard failure at construction.
+        def boom():
+            raise RuntimeError("cannot decrypt")
+
+        FakeSession, FakeClient = _make_fakes()
+        with mock.patch("app.core.account_runner.GameSession", FakeSession), \
+             mock.patch("app.core.account_runner.GameClient", FakeClient):
+            runner = self._runner(password_provider=boom)
+            with self.assertRaises(RuntimeError):
+                asyncio.run(runner.run_cycle())
+            self.assertEqual(_C.logins, 0)  # never got as far as logging in
 
 
 if __name__ == "__main__":
