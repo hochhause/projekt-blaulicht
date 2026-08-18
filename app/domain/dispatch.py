@@ -34,10 +34,20 @@ from .resolver import MissionRequirementResolver
 class DispatchOrder(str, Enum):
     """The order in which in-range missions are worked each cycle."""
 
-    NEAREST = "nearest"          # closest to your buildings first (default)
+    NEAREST = "nearest"            # closest to your buildings first (default)
     FARTHEST = "farthest"
-    CREDITS_HIGH = "credits_high"  # best-paying mission types first
-    CREDITS_LOW = "credits_low"
+    CREDITS_HIGH = "credits_high"  # most cash first
+    CREDITS_LOW = "credits_low"    # least cash first
+    OLDEST = "oldest"              # longest-open first (by created_at)
+    NEWEST = "newest"
+
+
+class MissionSource(str, Enum):
+    """Which missions to work: your own, alliance-shared, or both."""
+
+    BOTH = "both"
+    OWN = "own"
+    ALLIANCE = "alliance"
 
 
 @dataclass(frozen=True)
@@ -45,15 +55,15 @@ class DispatchPolicy:
     """Per-account dispatch settings (a slice of the account config)."""
 
     radius_km: float = 40.0
-    credit_floor: int = 0
+    credit_floor: int = 0          # skip missions paying less than this (0 = no min)
+    credit_ceiling: int = 0        # skip missions paying more than this (0 = no max)
     max_vehicles_per_mission: int | None = None
     order: DispatchOrder = DispatchOrder.NEAREST
     batch_size: int | None = None
     # Only work missions in these game categories (fire, police, …). Empty = all.
     allowed_categories: frozenset[str] = frozenset()
-    # Alliance (Verbands-) missions: whether to work them, and an optional
-    # separate radius (falls back to radius_km when unset).
-    alliance_enabled: bool = True
+    # Which missions to work, and an optional separate radius for alliance ones.
+    mission_source: MissionSource = MissionSource.BOTH
     alliance_radius_km: float | None = None
 
 
@@ -125,8 +135,12 @@ def plan_dispatches(
     candidates: list[tuple[float, int, object]] = []  # (distance, credits, mission)
     for mission in missions:
         is_alliance = getattr(mission, "is_alliance", False)
-        if is_alliance and not policy.alliance_enabled:
-            plan.skipped.append((mission.id, "alliance disabled"))
+        # Source filter: own only / alliance only / both.
+        if policy.mission_source is MissionSource.OWN and is_alliance:
+            plan.skipped.append((mission.id, "own-only filter"))
+            continue
+        if policy.mission_source is MissionSource.ALLIANCE and not is_alliance:
+            plan.skipped.append((mission.id, "alliance-only filter"))
             continue
         pos = getattr(mission, "position", None)
         if pos is None:
@@ -150,7 +164,14 @@ def plan_dispatches(
             if not (cats & policy.allowed_categories):
                 plan.skipped.append((mission.id, "category filtered"))
                 continue
-        credits = mtype.average_credits if mtype else 0
+        # Prefer the mission's own credits; fall back to the type average.
+        credits = getattr(mission, "average_credits", 0) or (mtype.average_credits if mtype else 0)
+        if policy.credit_floor and credits < policy.credit_floor:
+            plan.skipped.append((mission.id, f"below credit floor ({credits})"))
+            continue
+        if policy.credit_ceiling and credits > policy.credit_ceiling:
+            plan.skipped.append((mission.id, f"above credit ceiling ({credits})"))
+            continue
         candidates.append((distance, credits, mission))
 
     candidates = _order(candidates, policy.order)
@@ -182,6 +203,15 @@ def _order(candidates, order: DispatchOrder):
         return sorted(candidates, key=lambda t: (t[1], t[0], t[2].id))
     if order is DispatchOrder.FARTHEST:
         return sorted(candidates, key=lambda t: (-t[0], t[2].id))
+    if order in (DispatchOrder.OLDEST, DispatchOrder.NEWEST):
+        # Sort by created_at (ISO strings sort chronologically). Missing
+        # timestamps sort last for oldest / first for newest via the sentinel.
+        reverse = order is DispatchOrder.NEWEST
+        return sorted(
+            candidates,
+            key=lambda t: (getattr(t[2], "created_at", None) or "9999", t[2].id),
+            reverse=reverse,
+        )
     return sorted(candidates, key=lambda t: (t[0], t[2].id))  # NEAREST
 
 
@@ -195,10 +225,7 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None):
     if not resolution.requirements:
         return "no known requirements"
 
-    mtype = resolver.catalog.get(mission.mission_type_id)
-    if policy.credit_floor and mtype and mtype.average_credits < policy.credit_floor:
-        return f"below credit floor ({mtype.average_credits} < {policy.credit_floor})"
-
+    # Credit gating already happened during candidate collection.
     requirements = _apply_delta(resolution.requirements, assigned, mission.id)
     if not requirements:
         return "already covered"

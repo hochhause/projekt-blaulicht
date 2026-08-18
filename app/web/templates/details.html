@@ -24,9 +24,10 @@
      <a href="/accounts/{{ account.id }}">Configure</a> page.</p>
   <table>
     <tr><th>Order</th><td>{{ cfg.order }}</td></tr>
-    <tr><th>Radius</th><td>{{ cfg.radius_km }} km{% if cfg.alliance_enabled and cfg.alliance_radius_km %} (alliance {{ cfg.alliance_radius_km }} km){% endif %}</td></tr>
+    <tr><th>Source</th><td>{{ cfg.mission_source }}</td></tr>
+    <tr><th>Radius</th><td>{{ cfg.radius_km }} km{% if cfg.alliance_radius_km %} (alliance {{ cfg.alliance_radius_km }} km){% endif %}</td></tr>
+    <tr><th>Cash</th><td>{{ cfg.credit_floor }}–{{ cfg.credit_ceiling if cfg.credit_ceiling else '∞' }}</td></tr>
     <tr><th>Batch size</th><td>{{ cfg.batch_size if cfg.batch_size is not none else 'all' }}</td></tr>
-    <tr><th>Alliance missions</th><td>{{ 'yes' if cfg.alliance_enabled else 'no' }}</td></tr>
     <tr><th>Categories</th><td>{{ cfg.allowed_categories | join(', ') if cfg.allowed_categories else 'all' }}</td></tr>
   </table>
 </div>

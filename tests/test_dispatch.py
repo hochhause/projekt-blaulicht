@@ -8,6 +8,7 @@ from app.domain.catalog import MissionCatalog
 from app.domain.dispatch import (
     DispatchOrder,
     DispatchPolicy,
+    MissionSource,
     assigned_from_vehicles,
     plan_dispatches,
 )
@@ -31,9 +32,10 @@ NEAR2 = (52.5250, 13.4000)  # ~0.6 km
 FAR = (53.5500, 9.9900)     # Hamburg, ~250 km
 
 
-def mission(mid, mtype, pos, is_alliance=False):
+def mission(mid, mtype, pos, is_alliance=False, average_credits=0, created_at=None):
     return SimpleNamespace(
-        id=mid, caption=f"M{mid}", mission_type_id=mtype, position=pos, is_alliance=is_alliance
+        id=mid, caption=f"M{mid}", mission_type_id=mtype, position=pos,
+        is_alliance=is_alliance, average_credits=average_credits, created_at=created_at,
     )
 
 
@@ -70,13 +72,21 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(plan.skipped, [(1, "out of range")])
 
     def test_credit_floor_skips_cheap_mission(self):
-        # type 1 avg 170 < floor 300 -> skipped.
+        # mission credits 170 < floor 300 -> skipped.
         plan = plan_dispatches(
-            [mission(1, 1, NEAR)], [vehicle(100, LF)], [building()],
+            [mission(1, 1, NEAR, average_credits=170)], [vehicle(100, LF)], [building()],
             self.resolver, DispatchPolicy(radius_km=40, credit_floor=300),
         )
         self.assertEqual(plan.planned, [])
         self.assertTrue(plan.skipped[0][1].startswith("below credit floor"))
+
+    def test_credit_ceiling_skips_expensive_mission(self):
+        plan = plan_dispatches(
+            [mission(1, 1, NEAR, average_credits=5000)], [vehicle(100, LF)], [building()],
+            self.resolver, DispatchPolicy(radius_km=40, credit_ceiling=1000),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertTrue(plan.skipped[0][1].startswith("above credit ceiling"))
 
     def test_pool_consumed_across_missions(self):
         # Two firetruck missions, only one LF -> nearest gets it, other short.
@@ -174,20 +184,45 @@ class DispatchPlannerTests(unittest.TestCase):
         plan = self.plan([mission(1, 1, NEAR, is_alliance=True)], [vehicle(100, LF)])
         self.assertEqual(len(plan.planned), 1)
 
-    def test_alliance_mission_skipped_when_disabled(self):
+    def test_own_only_filter_skips_alliance(self):
         plan = plan_dispatches(
             [mission(1, 1, NEAR, is_alliance=True)], [vehicle(100, LF)], [building()],
-            self.resolver, DispatchPolicy(radius_km=40, alliance_enabled=False),
+            self.resolver, DispatchPolicy(radius_km=40, mission_source=MissionSource.OWN),
         )
         self.assertEqual(plan.planned, [])
-        self.assertEqual(plan.skipped, [(1, "alliance disabled")])
+        self.assertEqual(plan.skipped, [(1, "own-only filter")])
 
-    def test_own_mission_unaffected_by_alliance_toggle(self):
+    def test_alliance_only_filter_skips_own(self):
         plan = plan_dispatches(
             [mission(1, 1, NEAR, is_alliance=False)], [vehicle(100, LF)], [building()],
-            self.resolver, DispatchPolicy(radius_km=40, alliance_enabled=False),
+            self.resolver, DispatchPolicy(radius_km=40, mission_source=MissionSource.ALLIANCE),
         )
-        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "alliance-only filter")])
+
+    def test_order_oldest_first(self):
+        missions = [
+            mission(1, 1, NEAR, created_at="2026-08-17T10:00:00"),
+            mission(2, 1, NEAR2, created_at="2026-08-17T08:00:00"),  # older
+        ]
+        vehicles = [vehicle(100, LF), vehicle(101, LF)]
+        plan = plan_dispatches(
+            missions, vehicles, [building()], self.resolver,
+            DispatchPolicy(radius_km=40, order=DispatchOrder.OLDEST),
+        )
+        self.assertEqual(plan.planned[0].mission_id, 2)  # oldest first
+
+    def test_order_newest_first(self):
+        missions = [
+            mission(1, 1, NEAR, created_at="2026-08-17T08:00:00"),
+            mission(2, 1, NEAR2, created_at="2026-08-17T10:00:00"),  # newer
+        ]
+        vehicles = [vehicle(100, LF), vehicle(101, LF)]
+        plan = plan_dispatches(
+            missions, vehicles, [building()], self.resolver,
+            DispatchPolicy(radius_km=40, order=DispatchOrder.NEWEST),
+        )
+        self.assertEqual(plan.planned[0].mission_id, 2)  # newest first
 
     def test_alliance_radius_applied(self):
         # Mission ~1.2 km away, own radius 40 (in range) but alliance radius 0.5

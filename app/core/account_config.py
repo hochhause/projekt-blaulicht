@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from ..domain.dispatch import DispatchOrder, DispatchPolicy
+from ..domain.dispatch import DispatchOrder, DispatchPolicy, MissionSource
 from ..domain.transport import TransportPolicy
 
 
@@ -21,11 +21,12 @@ class AccountConfig:
     poll_seconds: float = 45.0
     jitter_seconds: float = 10.0
     credit_floor: int = 0
+    credit_ceiling: int = 0
     max_vehicles_per_mission: int | None = None
     order: str = DispatchOrder.NEAREST.value
     batch_size: int | None = 20
     allowed_categories: tuple[str, ...] = ()
-    alliance_enabled: bool = True
+    mission_source: str = MissionSource.BOTH.value
     alliance_radius_km: float | None = None
     # transport
     transport_enabled: bool = True
@@ -39,14 +40,19 @@ class AccountConfig:
             order = DispatchOrder(self.order)
         except ValueError:
             order = DispatchOrder.NEAREST
+        try:
+            source = MissionSource(self.mission_source)
+        except ValueError:
+            source = MissionSource.BOTH
         return DispatchPolicy(
             radius_km=self.radius_km,
             credit_floor=self.credit_floor,
+            credit_ceiling=self.credit_ceiling,
             max_vehicles_per_mission=self.max_vehicles_per_mission,
             order=order,
             batch_size=self.batch_size,
             allowed_categories=frozenset(self.allowed_categories),
-            alliance_enabled=self.alliance_enabled,
+            mission_source=source,
             alliance_radius_km=self.alliance_radius_km,
         )
 

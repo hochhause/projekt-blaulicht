@@ -13,6 +13,7 @@ from .dispatch import (
     DispatchPlan,
     DispatchPolicy,
     MissionPlan,
+    MissionSource,
     assigned_from_vehicles,
     plan_dispatches,
 )
@@ -57,6 +58,7 @@ __all__ = [
     "DispatchPlan",
     "DispatchPolicy",
     "DispatchOrder",
+    "MissionSource",
     "MissionPlan",
     # transport routing
     "route_transport",
