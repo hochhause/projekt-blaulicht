@@ -46,7 +46,7 @@ def _make_fakes(missions_raise=False):
         async def fetch_buildings(self):
             return []
 
-        async def fetch_vehicles(self):
+        async def fetch_vehicles(self, cap=0):
             return []
 
         async def fetch_missions(self):

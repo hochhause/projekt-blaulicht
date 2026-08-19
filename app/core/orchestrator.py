@@ -215,6 +215,7 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
             policy=config.dispatch_policy(),
             on_log=log,
             on_stat=stat,
+            vehicle_cap=config.max_vehicles,
         )
         timing = WorkerTiming(poll_seconds=config.poll_seconds, jitter_seconds=config.jitter_seconds)
 

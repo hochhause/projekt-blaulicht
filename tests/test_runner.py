@@ -29,7 +29,7 @@ class FakeClient:
     async def fetch_missions(self):
         return self._missions
 
-    async def fetch_vehicles(self):
+    async def fetch_vehicles(self, cap: int = 0):
         return self._vehicles
 
     async def fetch_buildings(self):

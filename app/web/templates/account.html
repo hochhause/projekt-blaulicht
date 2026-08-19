@@ -49,6 +49,8 @@
         <input name="allowed_categories" value="{{ cfg.allowed_categories | join(', ') }}" placeholder="fire, police"></div>
       <div class="field"><label>Poll interval (s)</label><input name="poll_seconds" type="number" step="1" value="{{ cfg.poll_seconds }}"></div>
       <div class="field"><label>Jitter (s)</label><input name="jitter_seconds" type="number" step="1" value="{{ cfg.jitter_seconds }}"></div>
+      <div class="field"><label>Max vehicles to load (0 = ALL — set 0 unless huge)</label>
+        <input name="max_vehicles" type="number" step="1" value="{{ cfg.max_vehicles }}"></div>
     </div>
   </div>
 

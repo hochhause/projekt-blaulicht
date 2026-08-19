@@ -20,6 +20,9 @@ class AccountConfig:
     radius_km: float = 40.0
     poll_seconds: float = 45.0
     jitter_seconds: float = 10.0
+    # Max vehicles to load per cycle (0 = load ALL — needed on big accounts so
+    # the fleet isn't truncated and vehicles wrongly look unavailable).
+    max_vehicles: int = 0
     # Cash bounds, separate per source (0 = no bound).
     own_credit_min: int = 0
     own_credit_max: int = 0

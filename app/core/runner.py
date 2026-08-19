@@ -48,7 +48,7 @@ class GameClientLike(Protocol):
     """The slice of the game client the runner needs."""
 
     async def fetch_missions(self) -> list: ...
-    async def fetch_vehicles(self) -> list: ...
+    async def fetch_vehicles(self, cap: int = 0) -> list: ...
     async def fetch_buildings(self) -> list: ...
     async def dispatch(self, mission_id: int, vehicle_id: int) -> bool: ...
     async def transport_patient(self, vehicle_id: int, building_id: int) -> bool: ...
@@ -133,12 +133,14 @@ class DispatchRunner:
         on_stat: Callable[[int, int], None] | None = None,
         text_engine=None,
         strikes=None,
+        vehicle_cap: int = 0,
     ) -> None:
         self._client = client
         self._resolver = resolver
         self._policy = policy
         self._text_engine = text_engine
         self._strikes = strikes
+        self._vehicle_cap = vehicle_cap
         # Buildings change rarely; the runner may be handed a cached list to
         # avoid re-fetching them every cycle.
         self._buildings = buildings_cache
@@ -167,7 +169,7 @@ class DispatchRunner:
     async def run_cycle(self) -> CycleReport:
         """Run exactly one poll → plan → dispatch cycle."""
         missions = await self._client.fetch_missions()
-        vehicles = await self._client.fetch_vehicles()
+        vehicles = await self._client.fetch_vehicles(self._vehicle_cap)
         buildings = await self._buildings_for_cycle()
 
         idle = sum(1 for v in vehicles if getattr(v, "is_available", False))

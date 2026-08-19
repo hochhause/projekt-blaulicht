@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 # — they select the "dispatch centre" (sd=d) / action context (sk=ac) views.
 _CTX = "sd=d&sk=ac"
 
+# Safety bound on vehicle pagination (huge accounts still finish; a broken
+# endpoint can't loop forever).
+_MAX_VEHICLE_PAGES = 200
+
 
 # Envelope keys the game wraps list payloads in (v2 endpoints are paginated
 # under "result"). Checked before falling back to id-keyed-map handling.
@@ -73,10 +77,29 @@ class GameClient:
         payload = await self._s.get_json("/map/missions_json")
         return [Mission.from_json(d) for d in _as_list(payload)]
 
-    async def fetch_vehicles(self) -> list[Vehicle]:
-        """Your fleet, via the newer ``/api/v2/vehicles``."""
-        payload = await self._s.get_json("/api/v2/vehicles")
-        return [Vehicle.from_json(d) for d in _as_list(payload)]
+    async def fetch_vehicles(self, cap: int = 0) -> list[Vehicle]:
+        """Your **entire** fleet, paging through ``/api/v2/vehicles``.
+
+        Large accounts return the fleet in pages; fetching only page 1 makes the
+        bot think most vehicles are unavailable and rack up needless strikes. We
+        page until no new vehicles appear (dedup-guarded, so it also works if the
+        endpoint ignores ``?page=`` and just repeats page 1). *cap* > 0 stops
+        after that many vehicles (0 = load all).
+        """
+        seen: set[int] = set()
+        rows: list[dict] = []
+        for page in range(1, _MAX_VEHICLE_PAGES + 1):
+            payload = await self._s.get_json(f"/api/v2/vehicles?page={page}")
+            fresh = [d for d in _as_list(payload) if d.get("id") not in seen]
+            if not fresh:
+                break  # empty page, or a repeat -> no real pagination
+            for d in fresh:
+                seen.add(d.get("id"))
+                rows.append(d)
+            if cap and len(rows) >= cap:
+                rows = rows[:cap]
+                break
+        return [Vehicle.from_json(d) for d in rows]
 
     async def fetch_vehicle_states(self) -> dict:
         """FMS status summary (counts per status) — a cheap availability peek."""
