@@ -139,6 +139,25 @@ class WebPanelTests(unittest.TestCase):
         self.assertIn("Brand", r.text)
         self.assertIn("4", r.text)  # dispatched total
 
+    def test_classify_log_colors(self):
+        from app.web.app import classify_log
+        self.assertEqual(classify_log("FAILED LF (#1) → #2"), "log-err")
+        self.assertEqual(classify_log("STRUCK OUT: no firetrucks available"), "log-err")
+        self.assertEqual(classify_log("  short #5 'x': not enough vehicles"), "log-warn")
+        self.assertEqual(classify_log("dispatched RTW (#9) → #3"), "log-ok")
+        self.assertEqual(classify_log("polled 10 mission(s)"), "log-info")
+
+    def test_compound_log_on_dashboard(self):
+        self._login()
+        self.client.post("/accounts", data={"label": "nord", "email": "u", "password": "p"})
+        aid = self.store.list_accounts()[0].id
+        self.log_store.append(aid, "dispatched RTW (#9) → #3 'Unfall'")
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Live log", r.text)
+        self.assertIn("nord", r.text)      # account prefix
+        self.assertIn("dispatched RTW", r.text)
+
     def test_username_accepted_as_login_id(self):
         # The account "email" field is just the login id; a username is fine.
         self._login()

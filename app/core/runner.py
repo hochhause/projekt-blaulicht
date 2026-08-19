@@ -191,11 +191,24 @@ class DispatchRunner:
         else:
             self._log(f"plan: {len(plan.planned)} actionable")
 
+        # Log shortfalls / strike-outs prominently — these matter more than
+        # successes (they're why a mission didn't get handled).
+        by_id = {m.id: m for m in missions}
+        shortfalls = [
+            (mid, r) for mid, r in plan.skipped
+            if r.startswith("not enough vehicles") or r.startswith("needs struck-out")
+        ]
+        for mid, reason in shortfalls[:5]:
+            mm = by_id.get(mid)
+            cap = getattr(mm, "caption", "") if mm is not None else ""
+            self._log(f"  short #{mid} {cap!r}: {reason}")
+        if len(shortfalls) > 5:
+            self._log(f"  … and {len(shortfalls) - 5} more short/struck missions")
+
         # Diagnose unresolved missions: show a few with their live requirement
         # text so we can see whether it's empty or just not parsing.
         unresolved = [mid for mid, r in plan.skipped if r == "no requirements found"]
         if unresolved:
-            by_id = {m.id: m for m in missions}
             catalog = self._resolver.catalog
             for mid in unresolved[:3]:
                 mm = by_id.get(mid)

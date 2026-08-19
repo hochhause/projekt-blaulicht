@@ -18,15 +18,25 @@ DAY_SECONDS = 24 * 60 * 60
 
 
 class StrikeTracker:
-    def __init__(self, threshold: int = DEFAULT_THRESHOLD, window_seconds: float = DAY_SECONDS) -> None:
+    def __init__(
+        self,
+        threshold: int = DEFAULT_THRESHOLD,
+        window_seconds: float = DAY_SECONDS,
+        on_struck=None,
+    ) -> None:
         self._threshold = threshold
         self._window = window_seconds
         self._strikes: dict[str, list[float]] = {}
+        # Called once with the class name when it crosses into struck-out.
+        self._on_struck = on_struck
 
     def record(self, classes, now: float) -> None:
         """Add a strike (at time *now*) for each shortfall class."""
         for cls in classes:
+            was_struck = self.is_struck(cls, now)
             self._strikes.setdefault(cls, []).append(now)
+            if not was_struck and self._on_struck is not None and self.is_struck(cls, now):
+                self._on_struck(cls)
 
     def is_struck(self, cls: str, now: float) -> bool:
         """True if *cls* has reached the threshold within the window. Prunes

@@ -43,6 +43,14 @@
     .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;margin-top:18px}
     .err{color:var(--crit);font-size:13px;margin-top:8px}
     .actions form{display:inline}
+    /* log viewer */
+    .logbox{font-family:var(--mono);font-size:12.5px;max-height:460px;overflow:auto;
+            background:var(--ground);border:1px solid var(--line);border-radius:8px;padding:12px}
+    .logline{white-space:pre-wrap;line-height:1.5}
+    .logline .t{color:var(--muted)}
+    .log-ok{color:var(--ok)} .log-warn{color:var(--amber)} .log-err{color:var(--crit);font-weight:600}
+    .log-info{color:var(--blau)} .log-muted{color:var(--muted)}
+    .acct{font-weight:700;border-radius:4px;padding:0 5px}
   </style>
   {% block head %}{% endblock %}
 </head>

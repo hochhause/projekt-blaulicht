@@ -33,6 +33,16 @@ class LogStoreTests(unittest.TestCase):
     def test_unknown_account_empty(self):
         self.assertEqual(LogStore().recent(99), [])
 
+    def test_recent_all_merges_and_orders_globally(self):
+        log = LogStore()
+        log.append(1, "a1")
+        log.append(2, "b1")
+        log.append(1, "a2")
+        merged = log.recent_all()
+        # newest first, across accounts, with account ids
+        self.assertEqual([(aid, e.message) for aid, e in merged],
+                         [(1, "a2"), (2, "b1"), (1, "a1")])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block head %}<meta http-equiv="refresh" content="5">{% endblock %}
 {% block nav %}
   <a href="/settings" class="btn" style="text-decoration:none">Settings</a>
   <form method="post" action="/stop-all" class="inline"><button class="danger">Stop all</button></form>
@@ -15,7 +16,8 @@
   <tbody>
     {% for r in rows %}
     <tr>
-      <td><a href="/accounts/{{ r.account.id }}">{{ r.account.label }}</a><br>
+      <td><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:{{ r.color }};margin-right:6px"></span>
+          <a href="/accounts/{{ r.account.id }}">{{ r.account.label }}</a><br>
           <span class="muted" style="font-size:12px">{{ r.account.email }}</span></td>
       <td class="muted">{{ r.account.server }}</td>
       <td><span class="pill {{ r.status }}">{{ r.status }}</span>
@@ -39,6 +41,22 @@
     {% endfor %}
   </tbody>
 </table>
+
+<div class="card">
+  <h2>Live log — all accounts</h2>
+  <p class="muted" style="margin-top:0;font-size:13px">Newest first, auto-refreshing every 5s. Each line is prefixed by its account. Failures and strike-outs are highlighted.</p>
+  {% if compound %}
+  <div class="logbox">
+    {% for e in compound %}
+      <div class="logline"><span class="t">{{ e.ts }}</span>
+        <span class="acct" style="background:{{ e.color }}22;color:{{ e.color }}">{{ e.label }}</span>
+        <span class="{{ e.cls }}">{{ e.message }}</span></div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No activity yet.</p>
+  {% endif %}
+</div>
 
 <div class="card">
   <h2>Add account</h2>

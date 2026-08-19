@@ -19,6 +19,29 @@ from .auth import AdminAuth
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
+# Distinct per-account colours for the compound dashboard log, cycled by order.
+_ACCOUNT_COLORS = [
+    "#4a90ff", "#37c26b", "#ff9e2c", "#c678dd",
+    "#56b6c2", "#e06c75", "#e5c07b", "#98c379",
+]
+
+
+def classify_log(message: str) -> str:
+    """Map a log line to a colour class (see base.html .log-* rules)."""
+    m = message.strip()
+    low = m.lower()
+    if m.startswith("FAILED") or "struck out" in low or low.startswith("error"):
+        return "log-err"
+    if "not enough" in low or "needs struck-out" in low or "missing" in low or low.startswith("short "):
+        return "log-warn"
+    if m.startswith("dispatched") or "en route" in low:
+        return "log-ok"
+    if low.startswith(("polled", "plan:", "connected", "connecting", "cycle done")):
+        return "log-info"
+    if low.startswith(("unresolved", "idle")):
+        return "log-muted"
+    return ""
+
 
 class NotAuthenticated(Exception):
     """Raised by the auth dependency; handled by redirecting to /login."""
@@ -72,19 +95,38 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request, _=Depends(require_auth)):
         live = orchestrator.status()
+        accounts = store.list_accounts()
+        color_by_id = {a.id: _ACCOUNT_COLORS[i % len(_ACCOUNT_COLORS)] for i, a in enumerate(accounts)}
         rows = []
-        for account in store.list_accounts():
+        for account in accounts:
             state = store.get_state(account.id) or {}
             rows.append(
                 {
                     "account": account,
+                    "color": color_by_id[account.id],
                     "status": live.get(account.id, state.get("status", "stopped")),
                     "totals": store.totals(account.id),
                     "last_cycle": state.get("last_cycle"),
                     "last_error": state.get("last_error"),
                 }
             )
-        return _TEMPLATES.TemplateResponse(request, "dashboard.html", {"rows": rows})
+        # Compound feed: all accounts' activity, newest first, colour-prefixed.
+        compound = []
+        if log_store is not None:
+            label_by_id = {a.id: a.label for a in accounts}
+            for aid, entry in log_store.recent_all(120):
+                compound.append(
+                    {
+                        "ts": entry.ts,
+                        "label": label_by_id.get(aid, f"#{aid}"),
+                        "color": color_by_id.get(aid, "#8697ad"),
+                        "cls": classify_log(entry.message),
+                        "message": entry.message,
+                    }
+                )
+        return _TEMPLATES.TemplateResponse(
+            request, "dashboard.html", {"rows": rows, "compound": compound}
+        )
 
     # -- per-account details / log ----------------------------------------
     @app.get("/accounts/{account_id}/details", response_class=HTMLResponse)
@@ -93,7 +135,8 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
         if account is None:
             return RedirectResponse("/", status_code=303)
         state = store.get_state(account_id) or {}
-        log = log_store.recent(account_id) if log_store is not None else []
+        raw_log = log_store.recent(account_id) if log_store is not None else []
+        log = [{"ts": e.ts, "message": e.message, "cls": classify_log(e.message)} for e in raw_log]
         cfg = AccountConfig.from_dict(_load_config(store, account_id))
         return _TEMPLATES.TemplateResponse(
             request,

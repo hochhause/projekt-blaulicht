@@ -61,7 +61,12 @@ class AccountRunner:
         self._dispatch: DispatchRunner | None = None
         # Strikes persist across reconnects within this account's run; a real
         # restart (account stop/start) makes a fresh AccountRunner -> fresh tracker.
-        self._strikes = StrikeTracker()
+        # Struck-out classes are logged loudly (they stop whole mission types).
+        self._strikes = StrikeTracker(
+            on_struck=lambda cls: self._log(
+                f"STRUCK OUT: no {cls} available 3x - skipping its missions for 24h"
+            )
+        )
 
     def _log(self, message: str) -> None:
         if self._on_log is not None:
