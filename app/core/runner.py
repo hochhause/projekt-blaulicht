@@ -132,11 +132,13 @@ class DispatchRunner:
         on_log: Callable[[str], None] | None = None,
         on_stat: Callable[[int, int], None] | None = None,
         text_engine=None,
+        strikes=None,
     ) -> None:
         self._client = client
         self._resolver = resolver
         self._policy = policy
         self._text_engine = text_engine
+        self._strikes = strikes
         # Buildings change rarely; the runner may be handed a cached list to
         # avoid re-fetching them every cycle.
         self._buildings = buildings_cache
@@ -177,6 +179,7 @@ class DispatchRunner:
         plan = plan_dispatches(
             missions, vehicles, buildings, self._resolver, self._policy,
             assigned=assigned, text_engine=self._text_engine, now=time.time(),
+            strikes=self._strikes,
         )
         report = CycleReport(plan=plan)
 

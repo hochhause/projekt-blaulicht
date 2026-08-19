@@ -23,6 +23,14 @@ from .catalog import MissionCatalog
 from .requirements import Requirement, Resolution
 
 
+def _casualties(revealed: int, possible_live: int, possible_type: int) -> int:
+    """How many casualties to send for: the revealed count if any, else the max
+    possible (so hidden-count missions get vehicles for everyone)."""
+    if revealed and revealed > 0:
+        return int(revealed)
+    return int(possible_live or possible_type or 0)
+
+
 class MissionRequirementResolver:
     """Resolve a mission type's base requirements to vehicle-type demands."""
 
@@ -53,6 +61,61 @@ class MissionRequirementResolver:
                     source=vehicle_class,
                     type_ids=frozenset(type_ids),
                     count=int(count),
+                    matchless_type_ids=frozenset(type_ids) & self._matchless,
+                )
+            )
+        return resolution
+
+    def resolve_mission(self, mission) -> Resolution:
+        """Full requirement derivation for a *live* mission.
+
+        Combines, by vehicle class:
+          * ``requirements`` — fixed class→count;
+          * ``chances`` — every entry treated as certain (100%) so we never
+            under-send (e.g. an NEF for ``nef: 75``); non-vehicle keys like
+            ``patient_transport`` are ignored here (handled by transport);
+          * patients → one ambulance each, and prisoners → one police car each,
+            using the revealed live count if any, else the mission's max
+            possible (``possible_patients_count`` / catalogue ``possible_patient``).
+        """
+        resolution = Resolution()
+        mtid = getattr(mission, "mission_type_id", None)
+        mtype = self._catalog.get(mtid) if mtid is not None else None
+        if mtype is None:
+            return resolution
+
+        counts: dict[str, int] = {}
+        for cls, n in mtype.requirements.items():
+            counts[cls] = counts.get(cls, 0) + int(n)
+        for cls in mtype.chances:
+            if cls in self._library.class_map.by_class:
+                counts[cls] = counts.get(cls, 0) + 1
+
+        patients = _casualties(
+            getattr(mission, "patients_count", 0),
+            getattr(mission, "possible_patients_count", 0),
+            mtype.possible_patient,
+        )
+        if patients:
+            counts["ambulances"] = counts.get("ambulances", 0) + patients
+        prisoners = _casualties(
+            getattr(mission, "prisoners_count", 0),
+            getattr(mission, "possible_prisoners_count", 0),
+            mtype.possible_prisoner,
+        )
+        if prisoners:
+            counts["police_cars"] = counts.get("police_cars", 0) + prisoners
+
+        for cls, n in counts.items():
+            type_ids = self._library.class_map.by_class.get(cls, ())
+            if not type_ids:
+                resolution.unmatched.append(cls)
+                continue
+            resolution.requirements.append(
+                Requirement(
+                    source=cls,
+                    type_ids=frozenset(type_ids),
+                    count=int(n),
                     matchless_type_ids=frozenset(type_ids) & self._matchless,
                 )
             )

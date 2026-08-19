@@ -1,6 +1,7 @@
 import json
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.domain.assets import AssetLibrary
 from app.domain.catalog import MissionCatalog
@@ -53,6 +54,29 @@ class ResolverTests(unittest.TestCase):
         res = self.resolver.resolve(4242)
         self.assertEqual(res.requirements, [])
         self.assertEqual(res.unmatched, [])
+
+    # -- resolve_mission: chances + patients derivation ------------------------
+    def test_resolve_mission_base_requirements(self):
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0)
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertEqual(by["firetrucks"], 2)  # fixture type 2
+
+    def test_resolve_mission_patients_add_ambulances_revealed(self):
+        # A medical-ish mission: 3 patients revealed -> 3 ambulances.
+        m = SimpleNamespace(mission_type_id=1, patients_count=3, possible_patients_count=5,
+                            prisoners_count=0, possible_prisoners_count=0)
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertEqual(by.get("ambulances"), 3)  # revealed count wins over possible
+
+    def test_resolve_mission_patients_use_possible_when_hidden(self):
+        m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=4,
+                            prisoners_count=0, possible_prisoners_count=0)
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertEqual(by.get("ambulances"), 4)  # send for all possible
 
 
 if __name__ == "__main__":

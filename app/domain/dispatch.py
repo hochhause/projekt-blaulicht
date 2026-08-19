@@ -125,6 +125,7 @@ def plan_dispatches(
     assigned: dict[int, list[int]] | None = None,
     text_engine=None,
     now: float | None = None,
+    strikes=None,
 ) -> DispatchPlan:
     """Plan this cycle's dispatches.
 
@@ -212,7 +213,8 @@ def plan_dispatches(
         if policy.batch_size is not None and actioned >= policy.batch_size:
             plan.skipped.append((mission.id, "beyond batch size"))
             continue
-        outcome = _plan_one(mission, pool, resolver, policy, assigned, building_pos, text_engine)
+        outcome = _plan_one(mission, pool, resolver, policy, assigned, building_pos,
+                            text_engine, strikes, now)
         if isinstance(outcome, str):
             plan.skipped.append((mission.id, outcome))
             continue
@@ -277,15 +279,14 @@ def _order(candidates, order: DispatchOrder):
     return sorted(candidates, key=lambda t: (t[0], t[2].id))  # NEAREST
 
 
-def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None, text_engine=None):
+def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
+              text_engine=None, strikes=None, now=None):
     """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string."""
     building_pos = building_pos or {}
 
-    requirements = None
-    if mission.mission_type_id is not None:
-        resolution = resolver.resolve(mission.mission_type_id)
-        if resolution.requirements:
-            requirements = resolution.requirements
+    # Full derivation (requirements + chances + patients/prisoners).
+    resolution = resolver.resolve_mission(mission)
+    requirements = resolution.requirements or None
 
     # Fallback: parse the mission's live requirement text ("poll from the site")
     # when the structured catalogue doesn't cover this type.
@@ -299,6 +300,12 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None, text
 
     if not requirements:
         return "no requirements found"
+
+    # Strike-out: skip a mission needing a vehicle class that's out of supply.
+    if strikes is not None and now is not None:
+        struck = {r.source for r in requirements if strikes.is_struck(r.source, now)}
+        if struck:
+            return f"needs struck-out vehicle(s): {', '.join(sorted(struck))}"
 
     # Credit gating already happened during candidate collection.
     requirements = _apply_delta(requirements, assigned, mission.id)
@@ -315,9 +322,16 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None, text
         return haversine_km(pos, vp) if vp else float("inf")
 
     coverage = select_coverage(requirements, pool, distance_of=distance_of)
-    if not coverage.vehicle_ids:
-        needed = ", ".join(f"{r.source} x{r.count}" for r in requirements)
-        return f"no vehicles for: {needed}"
+
+    # Only dispatch missions we can FULLY crew — a partial send just ties up
+    # vehicles on a job that won't complete. A shortfall strikes the missing
+    # class(es) so we eventually stop trying missions we can't fill.
+    if not coverage.satisfied:
+        if strikes is not None and now is not None:
+            strikes.record(coverage.shortfall.keys(), now)
+        needed = ", ".join(f"{cls} x{n}" for cls, n in coverage.shortfall.items())
+        return f"not enough vehicles: short {needed}"
+
     if (
         policy.max_vehicles_per_mission is not None
         and len(coverage.vehicle_ids) > policy.max_vehicles_per_mission
@@ -328,8 +342,8 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None, text
         mission_id=mission.id,
         caption=getattr(mission, "caption", ""),
         vehicle_ids=tuple(coverage.vehicle_ids),
-        satisfied=coverage.satisfied,
-        shortfall=coverage.shortfall,
+        satisfied=True,
+        shortfall={},
     )
     return mission_plan, coverage.vehicle_ids
 

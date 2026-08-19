@@ -23,6 +23,7 @@ from .layout import BuildingLayout, EstateLayout
 from .reconcile import Action, ActionKind, Automation, ReconcileResult, reconcile
 from .requirements import Requirement, RequirementEngine, Resolution
 from .resolver import MissionRequirementResolver
+from .strikes import StrikeTracker
 from .training import TrainingCatalog, TrainingReport, analyze_fleet
 from .transport import (
     TransportDecision,
@@ -48,6 +49,7 @@ __all__ = [
     "Resolution",
     # requirements — secondary (regex scaling) path
     "RequirementEngine",
+    "StrikeTracker",
     # coverage (multi-role vehicle matching)
     "select_coverage",
     "CoverageResult",

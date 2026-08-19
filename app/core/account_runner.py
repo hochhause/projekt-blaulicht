@@ -19,6 +19,7 @@ from ..domain.catalog import MissionCatalog
 from ..domain.dispatch import DispatchPolicy
 from ..domain.requirements import RequirementEngine
 from ..domain.resolver import MissionRequirementResolver
+from ..domain.strikes import StrikeTracker
 from ..game.client import GameClient
 from ..game.session import GameSession
 from .runner import DispatchRunner, RunnerTiming
@@ -58,6 +59,9 @@ class AccountRunner:
         self._timing = timing
         self._session: GameSession | None = None
         self._dispatch: DispatchRunner | None = None
+        # Strikes persist across reconnects within this account's run; a real
+        # restart (account stop/start) makes a fresh AccountRunner -> fresh tracker.
+        self._strikes = StrikeTracker()
 
     def _log(self, message: str) -> None:
         if self._on_log is not None:
@@ -81,7 +85,7 @@ class AccountRunner:
         self._dispatch = DispatchRunner(
             client, resolver, self._policy,
             on_log=self._on_log, on_stat=self._on_stat, timing=self._timing,
-            text_engine=text_engine,
+            text_engine=text_engine, strikes=self._strikes,
         )
         self._log(f"connected — {len(resolver.catalog)} mission types loaded")
 

@@ -28,30 +28,43 @@ from typing import Any
 
 @dataclass(frozen=True)
 class MissionType:
-    """One mission type and its static, base requirements."""
+    """One mission type and its requirements.
+
+    Vehicle needs come from three places (see :meth:`resolve_mission`):
+    ``requirements`` (fixed class→count), ``chances`` (probabilistic extras,
+    which we treat as certain so we never under-send), and ``possible_patient``
+    / ``possible_prisoner`` (per-casualty transport vehicles).
+    """
 
     id: int
     name: str
     average_credits: int
     requirements: dict[str, int]
+    chances: dict[str, int] = field(default_factory=dict)
+    possible_patient: int = 0
+    possible_prisoner: int = 0
     categories: tuple[str, ...] = ()
     expansion_ids: tuple[int, ...] = ()
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> "MissionType":
-        raw_reqs = d.get("requirements") or {}
-        requirements = {
-            str(cls_name): int(count)
-            for cls_name, count in raw_reqs.items()
-            if isinstance(count, (int, float)) and not isinstance(count, bool)
-        }
+        def _int_map(raw) -> dict[str, int]:
+            return {
+                str(k): int(v)
+                for k, v in (raw or {}).items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            }
+
         additional = d.get("additional") or {}
         expansions = additional.get("expansion_missions_ids") or []
         return cls(
             id=int(d["id"]),
             name=str(d.get("name", "")),
             average_credits=int(d.get("average_credits") or 0),
-            requirements=requirements,
+            requirements=_int_map(d.get("requirements")),
+            chances=_int_map(d.get("chances")),
+            possible_patient=int(additional.get("possible_patient") or 0),
+            possible_prisoner=int(additional.get("possible_prisoner") or 0),
             categories=tuple(d.get("mission_categories") or ()),
             expansion_ids=tuple(int(x) for x in expansions),
         )

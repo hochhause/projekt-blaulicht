@@ -53,8 +53,10 @@ class Mission:
     caption: str
     alliance_id: int | None = None
     alliance_shared_at: str | None = None
-    patients_count: int = 0
+    patients_count: int = 0            # patients revealed so far (0 = hidden)
+    possible_patients_count: int = 0   # max patients this mission can have
     prisoners_count: int = 0
+    possible_prisoners_count: int = 0
     average_credits: int = 0
     created_at: str | None = None  # ISO-ish timestamp, for oldest/newest ordering
     missing_text: str = ""         # live "what's still needed" — requirement fallback
@@ -70,7 +72,9 @@ class Mission:
             alliance_id=_as_int(_first(d, "alliance_id")),
             alliance_shared_at=_first(d, "alliance_shared_at"),
             patients_count=_as_int(_first(d, "patients_count")) or 0,
+            possible_patients_count=_as_int(_first(d, "possible_patients_count")) or 0,
             prisoners_count=_as_int(_first(d, "prisoners_count")) or 0,
+            possible_prisoners_count=_as_int(_first(d, "possible_prisoners_count")) or 0,
             average_credits=_as_int(_first(d, "average_credits")) or 0,
             created_at=_first(d, "created_at"),
             missing_text=str(_first(d, "missing_text", default="") or ""),

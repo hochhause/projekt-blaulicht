@@ -130,7 +130,7 @@ class DispatchPlannerTests(unittest.TestCase):
         plan = self.plan(missions, [vehicle(100, LF)])
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].mission_id, 2)  # nearest first
-        self.assertEqual(plan.skipped, [(1, "no vehicles for: firetrucks x1")])
+        self.assertEqual(plan.skipped, [(1, "not enough vehicles: short firetrucks x1")])
 
     def test_multi_role_hlf_used_across_requirements(self):
         # type 3 needs firetrucks:1 + police_cars:1. HLF covers firetrucks; a
@@ -199,6 +199,35 @@ class DispatchPlannerTests(unittest.TestCase):
         )
         self.assertEqual(len(plan.planned), 2)
         self.assertIn((3, "beyond batch size"), [(mid, r) for mid, r in plan.skipped])
+
+    def test_shortfall_strikes_and_then_skips(self):
+        from app.domain.strikes import StrikeTracker
+
+        strikes = StrikeTracker()
+        # A firetruck mission with NO firetruck available -> shortfall each time.
+        def one_cycle():
+            return plan_dispatches(
+                [mission(1, 1, NEAR)], [vehicle(100, FUSTW)], [building()], self.resolver,
+                DispatchPolicy(radius_km=40), strikes=strikes, now=1000.0,
+            )
+
+        # First 3 cycles: "not enough vehicles" (each records a strike).
+        for _ in range(3):
+            plan = one_cycle()
+            self.assertTrue(plan.skipped[0][1].startswith("not enough vehicles"))
+        # 4th: firetrucks is struck out -> skipped before even trying.
+        plan = one_cycle()
+        self.assertTrue(plan.skipped[0][1].startswith("needs struck-out"))
+
+    def test_partial_coverage_is_not_dispatched(self):
+        # Mission needs firetrucks + police; only a firetruck is available ->
+        # not fully crewable -> skipped, nothing sent.
+        plan = plan_dispatches(
+            [mission(1, 3, NEAR)], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertTrue(plan.skipped[0][1].startswith("not enough vehicles"))
 
     def test_skipped_missions_do_not_consume_batch_slot(self):
         # batch_size=1. Mission A (processed first, nearest) is already covered
