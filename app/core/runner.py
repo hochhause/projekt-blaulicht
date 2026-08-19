@@ -193,12 +193,20 @@ class DispatchRunner:
         unresolved = [mid for mid, r in plan.skipped if r == "no requirements found"]
         if unresolved:
             by_id = {m.id: m for m in missions}
+            catalog = self._resolver.catalog
             for mid in unresolved[:3]:
                 mm = by_id.get(mid)
-                if mm is not None:
-                    text = (getattr(mm, "missing_text", "") or "").strip() or "(empty)"
-                    self._log(f"  unresolved #{mid} {getattr(mm, 'caption', '')!r}: "
-                              f"missing_text={text[:140]!r}")
+                if mm is None:
+                    continue
+                mtid = getattr(mm, "mission_type_id", None)
+                mtype = catalog.get(mtid) if mtid is not None else None
+                reqs = mtype.requirements if mtype is not None else None
+                text = (getattr(mm, "missing_text", "") or "").strip() or "(empty)"
+                self._log(
+                    f"  unresolved #{mid} {getattr(mm, 'caption', '')!r}: mtid={mtid} "
+                    f"in_catalog={mtype is not None} catalog_reqs={reqs} "
+                    f"missing_text={text[:100]!r}"
+                )
 
         veh_by_id = {v.id: v for v in vehicles}
 
