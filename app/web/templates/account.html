@@ -33,8 +33,12 @@
           <option value="own" {{ 'selected' if cfg.mission_source == 'own' else '' }}>My own only</option>
           <option value="alliance" {{ 'selected' if cfg.mission_source == 'alliance' else '' }}>Alliance shared only</option>
         </select></div>
-      <div class="field"><label>Min cash (0 = no min)</label><input name="credit_floor" type="number" step="1" value="{{ cfg.credit_floor }}"></div>
-      <div class="field"><label>Max cash (0 = no max)</label><input name="credit_ceiling" type="number" step="1" value="{{ cfg.credit_ceiling }}"></div>
+      <div class="field"><label>Own — min cash (0 = none)</label><input name="own_credit_min" type="number" step="1" value="{{ cfg.own_credit_min }}"></div>
+      <div class="field"><label>Own — max cash (0 = none)</label><input name="own_credit_max" type="number" step="1" value="{{ cfg.own_credit_max }}"></div>
+      <div class="field"><label>Alliance — min cash (0 = none)</label><input name="alliance_credit_min" type="number" step="1" value="{{ cfg.alliance_credit_min }}"></div>
+      <div class="field"><label>Alliance — max cash (0 = none)</label><input name="alliance_credit_max" type="number" step="1" value="{{ cfg.alliance_credit_max }}"></div>
+      <div class="field"><label>Alliance — min age since shared (min, 0 = none)</label><input name="alliance_min_age_minutes" type="number" step="0.5" value="{{ cfg.alliance_min_age_minutes }}"></div>
+      <div class="field"><label>Alliance — max age since shared (min, 0 = none)</label><input name="alliance_max_age_minutes" type="number" step="0.5" value="{{ cfg.alliance_max_age_minutes }}"></div>
       <div class="field"><label>Alliance radius km (blank = same as radius)</label>
         <input name="alliance_radius_km" type="number" step="1" value="{{ cfg.alliance_radius_km if cfg.alliance_radius_km is not none else '' }}"></div>
       <div class="field"><label>Batch size — missions per cycle (blank = all)</label>

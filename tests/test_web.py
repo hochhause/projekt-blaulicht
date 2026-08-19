@@ -93,7 +93,9 @@ class WebPanelTests(unittest.TestCase):
             data={
                 "label": "n", "email": "x@e.com", "password": "",
                 "radius_km": 25, "poll_seconds": 60, "jitter_seconds": 5,
-                "credit_floor": 100, "max_vehicles_per_mission": "",
+                "own_credit_min": 100, "alliance_credit_max": 8000,
+                "max_vehicles_per_mission": "", "order": "oldest",
+                "mission_source": "own",
                 "transport_enabled": "1", "transport_max_distance_km": 50,
                 "transport_max_tax": "", "transport_prefer_own": "1",
                 "transport_allow_alliance": "",
@@ -101,7 +103,9 @@ class WebPanelTests(unittest.TestCase):
         )
         cfg = json.loads(self.store.get_config(aid))
         self.assertEqual(cfg["radius_km"], 25)
-        self.assertEqual(cfg["credit_floor"], 100)
+        self.assertEqual(cfg["own_credit_min"], 100)
+        self.assertEqual(cfg["alliance_credit_max"], 8000)
+        self.assertEqual(cfg["mission_source"], "own")
 
     def test_settings_page_and_password_change(self):
         self._login()

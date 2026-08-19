@@ -20,8 +20,14 @@ class AccountConfig:
     radius_km: float = 40.0
     poll_seconds: float = 45.0
     jitter_seconds: float = 10.0
-    credit_floor: int = 0
-    credit_ceiling: int = 0
+    # Cash bounds, separate per source (0 = no bound).
+    own_credit_min: int = 0
+    own_credit_max: int = 0
+    alliance_credit_min: int = 0
+    alliance_credit_max: int = 0
+    # Alliance age-since-shared window, in MINUTES (0 = no bound).
+    alliance_min_age_minutes: float = 0.0
+    alliance_max_age_minutes: float = 0.0
     max_vehicles_per_mission: int | None = None
     order: str = DispatchOrder.NEAREST.value
     batch_size: int | None = 20
@@ -46,8 +52,12 @@ class AccountConfig:
             source = MissionSource.BOTH
         return DispatchPolicy(
             radius_km=self.radius_km,
-            credit_floor=self.credit_floor,
-            credit_ceiling=self.credit_ceiling,
+            own_credit_min=self.own_credit_min,
+            own_credit_max=self.own_credit_max,
+            alliance_credit_min=self.alliance_credit_min,
+            alliance_credit_max=self.alliance_credit_max,
+            alliance_min_age_seconds=int(self.alliance_min_age_minutes * 60),
+            alliance_max_age_seconds=int(self.alliance_max_age_minutes * 60),
             max_vehicles_per_mission=self.max_vehicles_per_mission,
             order=order,
             batch_size=self.batch_size,

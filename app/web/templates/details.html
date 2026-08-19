@@ -26,7 +26,9 @@
     <tr><th>Order</th><td>{{ cfg.order }}</td></tr>
     <tr><th>Source</th><td>{{ cfg.mission_source }}</td></tr>
     <tr><th>Radius</th><td>{{ cfg.radius_km }} km{% if cfg.alliance_radius_km %} (alliance {{ cfg.alliance_radius_km }} km){% endif %}</td></tr>
-    <tr><th>Cash</th><td>{{ cfg.credit_floor }}–{{ cfg.credit_ceiling if cfg.credit_ceiling else '∞' }}</td></tr>
+    <tr><th>Own cash</th><td>{{ cfg.own_credit_min }}–{{ cfg.own_credit_max if cfg.own_credit_max else '∞' }}</td></tr>
+    <tr><th>Alliance cash</th><td>{{ cfg.alliance_credit_min }}–{{ cfg.alliance_credit_max if cfg.alliance_credit_max else '∞' }}</td></tr>
+    <tr><th>Alliance age (min)</th><td>{{ cfg.alliance_min_age_minutes }}–{{ cfg.alliance_max_age_minutes if cfg.alliance_max_age_minutes else '∞' }}</td></tr>
     <tr><th>Batch size</th><td>{{ cfg.batch_size if cfg.batch_size is not none else 'all' }}</td></tr>
     <tr><th>Categories</th><td>{{ cfg.allowed_categories | join(', ') if cfg.allowed_categories else 'all' }}</td></tr>
   </table>

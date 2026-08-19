@@ -12,7 +12,7 @@ class AccountConfigTests(unittest.TestCase):
         self.assertTrue(tp.prefer_own)
 
     def test_roundtrip_dict(self):
-        cfg = AccountConfig(radius_km=25, credit_floor=100, max_vehicles_per_mission=6)
+        cfg = AccountConfig(radius_km=25, own_credit_min=100, max_vehicles_per_mission=6)
         again = AccountConfig.from_dict(cfg.to_dict())
         self.assertEqual(again, cfg)
 
@@ -26,12 +26,15 @@ class AccountConfigTests(unittest.TestCase):
 
     def test_policies_reflect_config(self):
         cfg = AccountConfig(
-            radius_km=15, credit_floor=200, max_vehicles_per_mission=3,
+            radius_km=15, own_credit_min=200, alliance_credit_max=9000,
+            alliance_min_age_minutes=2, max_vehicles_per_mission=3,
             transport_max_distance_km=50, transport_max_tax=10,
             transport_prefer_own=False, transport_allow_alliance=False,
         )
         dp = cfg.dispatch_policy()
-        self.assertEqual((dp.radius_km, dp.credit_floor, dp.max_vehicles_per_mission), (15, 200, 3))
+        self.assertEqual((dp.radius_km, dp.own_credit_min, dp.max_vehicles_per_mission), (15, 200, 3))
+        self.assertEqual(dp.alliance_credit_max, 9000)
+        self.assertEqual(dp.alliance_min_age_seconds, 120)  # 2 min -> 120 s
         tp = cfg.transport_policy()
         self.assertEqual((tp.max_distance_km, tp.max_tax), (50, 10))
         self.assertFalse(tp.prefer_own)

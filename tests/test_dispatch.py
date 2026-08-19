@@ -51,6 +51,7 @@ class DispatchPlannerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         library = AssetLibrary.load(VEHICLES_DIR)
+        cls.lib_for_engine = library
         catalog = MissionCatalog.from_payload(json.loads(FIXTURE.read_text(encoding="utf-8")))
         cls.resolver = MissionRequirementResolver(catalog, library)
 
@@ -71,22 +72,57 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(plan.planned, [])
         self.assertEqual(plan.skipped, [(1, "out of range")])
 
-    def test_credit_floor_skips_cheap_mission(self):
-        # mission credits 170 < floor 300 -> skipped.
+    def test_own_credit_floor_skips_cheap_mission(self):
         plan = plan_dispatches(
             [mission(1, 1, NEAR, average_credits=170)], [vehicle(100, LF)], [building()],
-            self.resolver, DispatchPolicy(radius_km=40, credit_floor=300),
+            self.resolver, DispatchPolicy(radius_km=40, own_credit_min=300),
         )
         self.assertEqual(plan.planned, [])
         self.assertTrue(plan.skipped[0][1].startswith("below credit floor"))
 
-    def test_credit_ceiling_skips_expensive_mission(self):
+    def test_own_credit_ceiling_skips_expensive_mission(self):
         plan = plan_dispatches(
             [mission(1, 1, NEAR, average_credits=5000)], [vehicle(100, LF)], [building()],
-            self.resolver, DispatchPolicy(radius_km=40, credit_ceiling=1000),
+            self.resolver, DispatchPolicy(radius_km=40, own_credit_max=1000),
         )
         self.assertEqual(plan.planned, [])
         self.assertTrue(plan.skipped[0][1].startswith("above credit ceiling"))
+
+    def test_credit_bounds_are_per_source(self):
+        # alliance min 1000 blocks a 500-credit alliance mission, but the same
+        # 500 own mission passes (own has no min).
+        alliance_m = mission(1, 1, NEAR, is_alliance=True, average_credits=500)
+        own_m = mission(2, 1, NEAR2, is_alliance=False, average_credits=500)
+        policy = DispatchPolicy(radius_km=40, alliance_credit_min=1000)
+        plan = plan_dispatches([alliance_m, own_m], [vehicle(100, LF), vehicle(101, LF)],
+                               [building()], self.resolver, policy)
+        ids = [mp.mission_id for mp in plan.planned]
+        self.assertIn(2, ids)       # own passed
+        self.assertNotIn(1, ids)    # alliance blocked by its own min
+
+    def test_alliance_age_window(self):
+        now = 1_000_000.0
+        # shared 30s ago; min age 60s -> too recent.
+        recent = mission(1, 1, NEAR, is_alliance=True)
+        recent.alliance_shared_at = now - 30
+        policy = DispatchPolicy(radius_km=40, alliance_min_age_seconds=60)
+        plan = plan_dispatches([recent], [vehicle(100, LF)], [building()],
+                               self.resolver, policy, now=now)
+        self.assertEqual(plan.skipped, [(1, "shared too recently")])
+
+    def test_missing_text_fallback_when_catalog_empty(self):
+        # Unknown mission type (999 not in fixture catalog) but missing_text
+        # names an RTW -> the regex engine resolves it and we dispatch.
+        from app.domain.requirements import RequirementEngine
+        engine = RequirementEngine(self.lib_for_engine)
+        m = mission(1, 999, NEAR)
+        m.missing_text = "noch benötigt: 1 RTW"
+        plan = plan_dispatches([m], [SimpleNamespace(id=100, type_id=28, is_available=True,
+                                                     position=BUILDING, building_id=1)],
+                               [building()], self.resolver, DispatchPolicy(radius_km=40),
+                               text_engine=engine)
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].vehicle_ids, (100,))  # RTW (type 28)
 
     def test_pool_consumed_across_missions(self):
         # Two firetruck missions, only one LF -> nearest gets it, other short.
@@ -163,6 +199,18 @@ class DispatchPlannerTests(unittest.TestCase):
         )
         self.assertEqual(len(plan.planned), 2)
         self.assertIn((3, "beyond batch size"), [(mid, r) for mid, r in plan.skipped])
+
+    def test_skipped_missions_do_not_consume_batch_slot(self):
+        # batch_size=1. Mission A (processed first, nearest) is already covered
+        # -> skipped, no slot used. Mission B then still gets dispatched.
+        a = mission(1, 1, NEAR2)  # nearest -> first
+        b = mission(2, 1, NEAR)
+        plan = plan_dispatches(
+            [a, b], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, batch_size=1), assigned={1: [LF]},
+        )
+        self.assertEqual([mp.mission_id for mp in plan.planned], [2])
+        self.assertIn((1, "already covered"), plan.skipped)
 
     def test_category_filter(self):
         # type 1 is category "fire"; only allow "police" -> filtered out.

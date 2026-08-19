@@ -17,6 +17,7 @@ import logging
 
 from ..domain.catalog import MissionCatalog
 from ..domain.dispatch import DispatchPolicy
+from ..domain.requirements import RequirementEngine
 from ..domain.resolver import MissionRequirementResolver
 from ..game.client import GameClient
 from ..game.session import GameSession
@@ -74,10 +75,13 @@ class AccountRunner:
         client = GameClient(session)
         einsaetze = await client.fetch_einsaetze()  # once per session, not per cycle
         resolver = MissionRequirementResolver(MissionCatalog.from_payload(einsaetze), self._library)
+        # Regex fallback for missions the structured catalogue doesn't cover.
+        text_engine = RequirementEngine(self._library)
         self._session = session
         self._dispatch = DispatchRunner(
             client, resolver, self._policy,
             on_log=self._on_log, on_stat=self._on_stat, timing=self._timing,
+            text_engine=text_engine,
         )
         self._log(f"connected — {len(resolver.catalog)} mission types loaded")
 

@@ -23,6 +23,7 @@ needs ``id``, ``caption``, ``mission_type_id``, ``position``; a vehicle needs
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -52,11 +53,20 @@ class MissionSource(str, Enum):
 
 @dataclass(frozen=True)
 class DispatchPolicy:
-    """Per-account dispatch settings (a slice of the account config)."""
+    """Per-account dispatch settings (a slice of the account config).
+
+    Cash bounds are separate for own vs alliance missions (0 = no bound).
+    Alliance missions additionally have an age window (seconds since shared, or
+    since the mission was created if the share time is unavailable).
+    """
 
     radius_km: float = 40.0
-    credit_floor: int = 0          # skip missions paying less than this (0 = no min)
-    credit_ceiling: int = 0        # skip missions paying more than this (0 = no max)
+    own_credit_min: int = 0
+    own_credit_max: int = 0
+    alliance_credit_min: int = 0
+    alliance_credit_max: int = 0
+    alliance_min_age_seconds: int = 0  # skip alliance missions shared too recently
+    alliance_max_age_seconds: int = 0  # skip alliance missions shared too long ago
     max_vehicles_per_mission: int | None = None
     order: DispatchOrder = DispatchOrder.NEAREST
     batch_size: int | None = None
@@ -113,11 +123,15 @@ def plan_dispatches(
     resolver: MissionRequirementResolver,
     policy: DispatchPolicy,
     assigned: dict[int, list[int]] | None = None,
+    text_engine=None,
+    now: float | None = None,
 ) -> DispatchPlan:
     """Plan this cycle's dispatches.
 
-    *assigned* optionally maps mission id → type IDs of vehicles already en route
-    to it (the delta); those reduce the mission's outstanding requirements.
+    *assigned* maps mission id → type IDs of vehicles already en route (the
+    delta). *text_engine* (a RequirementEngine) parses a mission's live
+    ``missing_text`` when the structured catalogue has no requirements. *now*
+    (epoch seconds) drives the alliance age-since-shared window.
     """
     plan = DispatchPlan()
     origins = [b.position for b in buildings if getattr(b, "position", None)]
@@ -166,33 +180,81 @@ def plan_dispatches(
                 continue
         # Prefer the mission's own credits; fall back to the type average.
         credits = getattr(mission, "average_credits", 0) or (mtype.average_credits if mtype else 0)
-        if policy.credit_floor and credits < policy.credit_floor:
+        # Cash bounds and (for alliance) the age window are per-source.
+        if is_alliance:
+            cmin, cmax = policy.alliance_credit_min, policy.alliance_credit_max
+            age = _age_seconds(mission, now)
+            if age is not None:
+                if policy.alliance_min_age_seconds and age < policy.alliance_min_age_seconds:
+                    plan.skipped.append((mission.id, "shared too recently"))
+                    continue
+                if policy.alliance_max_age_seconds and age > policy.alliance_max_age_seconds:
+                    plan.skipped.append((mission.id, "shared too long ago"))
+                    continue
+        else:
+            cmin, cmax = policy.own_credit_min, policy.own_credit_max
+        if cmin and credits < cmin:
             plan.skipped.append((mission.id, f"below credit floor ({credits})"))
             continue
-        if policy.credit_ceiling and credits > policy.credit_ceiling:
+        if cmax and credits > cmax:
             plan.skipped.append((mission.id, f"above credit ceiling ({credits})"))
             continue
         candidates.append((distance, credits, mission))
 
     candidates = _order(candidates, policy.order)
 
-    # Only work a stack of `batch_size` per cycle (the rest wait for the next).
-    if policy.batch_size is not None and len(candidates) > policy.batch_size:
-        for _d, _c, mission in candidates[policy.batch_size:]:
-            plan.skipped.append((mission.id, "beyond batch size"))
-        candidates = candidates[: policy.batch_size]
-
+    # Batch limits missions ACTUALLY DISPATCHED per cycle — not the number
+    # considered. Missions skipped (no vehicles, already covered, …) don't use a
+    # slot; only once `batch_size` missions have been actioned is the rest
+    # deferred as "beyond batch size".
+    actioned = 0
     for _distance, _credits, mission in candidates:
-        outcome = _plan_one(mission, pool, resolver, policy, assigned, building_pos)
+        if policy.batch_size is not None and actioned >= policy.batch_size:
+            plan.skipped.append((mission.id, "beyond batch size"))
+            continue
+        outcome = _plan_one(mission, pool, resolver, policy, assigned, building_pos, text_engine)
         if isinstance(outcome, str):
             plan.skipped.append((mission.id, outcome))
             continue
         mission_plan, chosen = outcome
         plan.planned.append(mission_plan)
+        actioned += 1
         chosen_set = set(chosen)
         pool = [v for v in pool if v.id not in chosen_set]
 
     return plan
+
+
+def _age_seconds(mission, now: float | None) -> float | None:
+    """Seconds since a mission was shared (or created), or ``None`` if unknown."""
+    if now is None:
+        return None
+    ref = getattr(mission, "alliance_shared_at", None) or getattr(mission, "created_at", None)
+    epoch = _to_epoch(ref)
+    if epoch is None:
+        return None
+    return max(0.0, now - epoch)
+
+
+def _to_epoch(ts) -> float | None:
+    """Best-effort parse of a timestamp (epoch number or ISO string) to epoch."""
+    if ts is None:
+        return None
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+        return float(ts)
+    s = str(ts).strip()
+    if not s:
+        return None
+    try:
+        return float(s)  # numeric string (unix epoch)
+    except ValueError:
+        pass
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except (ValueError, OSError):
+        return None
 
 
 def _order(candidates, order: DispatchOrder):
@@ -215,18 +277,31 @@ def _order(candidates, order: DispatchOrder):
     return sorted(candidates, key=lambda t: (t[0], t[2].id))  # NEAREST
 
 
-def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None):
+def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None, text_engine=None):
     """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string."""
     building_pos = building_pos or {}
-    if mission.mission_type_id is None:
-        return "unknown mission type"
 
-    resolution = resolver.resolve(mission.mission_type_id)
-    if not resolution.requirements:
-        return "no known requirements"
+    requirements = None
+    if mission.mission_type_id is not None:
+        resolution = resolver.resolve(mission.mission_type_id)
+        if resolution.requirements:
+            requirements = resolution.requirements
+
+    # Fallback: parse the mission's live requirement text ("poll from the site")
+    # when the structured catalogue doesn't cover this type.
+    if not requirements and text_engine is not None:
+        text = getattr(mission, "missing_text", "") or ""
+        if text.strip():
+            lines = re.split(r"[,;\n/]+", text)
+            parsed = text_engine.resolve(lines)
+            if parsed.requirements:
+                requirements = parsed.requirements
+
+    if not requirements:
+        return "no requirements found"
 
     # Credit gating already happened during candidate collection.
-    requirements = _apply_delta(resolution.requirements, assigned, mission.id)
+    requirements = _apply_delta(requirements, assigned, mission.id)
     if not requirements:
         return "already covered"
 
