@@ -188,6 +188,18 @@ class DispatchRunner:
         else:
             self._log(f"plan: {len(plan.planned)} actionable")
 
+        # Diagnose unresolved missions: show a few with their live requirement
+        # text so we can see whether it's empty or just not parsing.
+        unresolved = [mid for mid, r in plan.skipped if r == "no requirements found"]
+        if unresolved:
+            by_id = {m.id: m for m in missions}
+            for mid in unresolved[:3]:
+                mm = by_id.get(mid)
+                if mm is not None:
+                    text = (getattr(mm, "missing_text", "") or "").strip() or "(empty)"
+                    self._log(f"  unresolved #{mid} {getattr(mm, 'caption', '')!r}: "
+                              f"missing_text={text[:140]!r}")
+
         veh_by_id = {v.id: v for v in vehicles}
 
         for mission_plan in plan.planned:
