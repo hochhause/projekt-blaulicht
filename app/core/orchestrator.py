@@ -90,7 +90,8 @@ class AccountWorker:
         return base
 
     async def run_forever(self, stop: asyncio.Event) -> None:
-        """Loop until *stop* is set. The inter-cycle wait is interruptible."""
+        """Loop until *stop* is set. A cancel (from :meth:`Orchestrator.stop`)
+        interrupts a cycle mid-dispatch so sending stops immediately."""
         self._emit("running")
         try:
             while not stop.is_set():
@@ -102,6 +103,8 @@ class AccountWorker:
                     break  # stop was set during the wait
                 except asyncio.TimeoutError:
                     continue  # normal: slept the full delay
+        except asyncio.CancelledError:
+            pass  # stopped mid-cycle — fall through to clean up
         finally:
             self._emit("stopped")
             # Close the persistent session cleanly on stop, if the runner has one.
@@ -135,6 +138,7 @@ class Orchestrator:
             return
         _worker, task, stop = entry
         stop.set()
+        task.cancel()  # interrupt an in-progress dispatch cycle immediately
         try:
             await task
         except asyncio.CancelledError:  # pragma: no cover

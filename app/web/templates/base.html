@@ -64,5 +64,20 @@
   <div class="wrap">
     {% block content %}{% endblock %}
   </div>
+  <script>
+    // Preserve log scroll across the auto-refresh: newest is at the top, so
+    // staying at 0 keeps following new lines; scrolling down to read history is
+    // kept put instead of being yanked back on every refresh.
+    (function () {
+      var box = document.querySelector('.logbox');
+      if (!box) return;
+      var key = 'logscroll:' + location.pathname;
+      var saved = sessionStorage.getItem(key);
+      if (saved !== null) box.scrollTop = parseInt(saved, 10) || 0;
+      box.addEventListener('scroll', function () {
+        sessionStorage.setItem(key, box.scrollTop);
+      });
+    })();
+  </script>
 </body>
 </html>
