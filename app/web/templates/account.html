@@ -31,6 +31,8 @@
         <select name="parasite_mode"><option value="1" {{ 'selected' if cfg.parasite_mode else '' }}>on</option><option value="" {{ '' if cfg.parasite_mode else 'selected' }}>off</option></select></div>
       <div class="field"><label>Top-up / symbiont mode (only reinforce already-begun missions)</label>
         <select name="top_up_mode"><option value="1" {{ 'selected' if cfg.top_up_mode else '' }}>on</option><option value="" {{ '' if cfg.top_up_mode else 'selected' }}>off</option></select></div>
+      <div class="field"><label>Hilferuf (share own missions we can't crew to the alliance)</label>
+        <select name="hilferuf"><option value="1" {{ 'selected' if cfg.hilferuf else '' }}>on</option><option value="" {{ '' if cfg.hilferuf else 'selected' }}>off</option></select></div>
       <div class="field"><label>Mission source</label>
         <select name="mission_source">
           <option value="both" {{ 'selected' if cfg.mission_source == 'both' else '' }}>Both (own + alliance)</option>

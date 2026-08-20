@@ -83,6 +83,9 @@ class DispatchPolicy:
     # own or shared; send the useful vehicles we have (partial ok) and report the
     # rest. No leeching, no fresh missions.
     top_up_mode: bool = False
+    # Hilferuf ("call for help"): when we can't crew one of our OWN missions,
+    # share it to the alliance so members can help. Runner-level behaviour.
+    hilferuf: bool = False
 
 
 @dataclass(frozen=True)

@@ -46,6 +46,7 @@ class GameClientLike(Protocol):
     async def dispatch(self, mission_id: int, vehicle_id: int) -> bool: ...
     async def transport_targets(self, vehicle_id: int) -> list[str]: ...
     async def send_transport(self, action_url: str) -> bool: ...
+    async def share_mission(self, mission_id: int) -> bool: ...
 
 
 @dataclass
@@ -132,6 +133,9 @@ class DispatchRunner:
         # Buildings change rarely; the runner may be handed a cached list to
         # avoid re-fetching them every cycle.
         self._buildings = buildings_cache
+        # Missions already shared to the alliance this session (Hilferuf), so we
+        # don't re-share one every cycle before the shared flag propagates.
+        self._shared: set[int] = set()
         self._timing = timing or RunnerTiming()
         # Real-time activity sink (the panel's per-account log). Called as the
         # cycle progresses, so a long or in-progress cycle still shows what it
@@ -299,5 +303,27 @@ class DispatchRunner:
             if self._on_stat is not None and sent:
                 self._on_stat(sent, 1)
 
+        if getattr(self._policy, "hilferuf", False):
+            await self._hilferuf(plan, by_id)
+
         self._log(f"cycle done: {report.summary()}")
         return report
+
+    async def _hilferuf(self, plan, by_id) -> None:
+        """Share our OWN missions we couldn't crew to the alliance, so members
+        can help. Only shortfall skips of not-yet-shared own missions qualify."""
+        for mid, reason in plan.skipped:
+            if not reason.startswith("not enough vehicles"):
+                continue
+            mission = by_id.get(mid)
+            if mission is None or getattr(mission, "is_alliance", False):
+                continue  # not ours, or already shared
+            if mid in self._shared:
+                continue
+            if await self._client.share_mission(mid):
+                self._shared.add(mid)
+                self._log(
+                    f"Hilferuf: shared #{mid} {getattr(mission, 'caption', '')!r} "
+                    f"to the alliance — can't crew it"
+                )
+            await self._timing.sleep(self._timing.dispatch_gap())

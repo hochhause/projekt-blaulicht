@@ -41,6 +41,8 @@ class AccountConfig:
     # Top-up (symbiont) mode: only reinforce missions already begun (own or
     # shared), sending what useful vehicles we have and reporting the rest.
     top_up_mode: bool = False
+    # Hilferuf: share own missions we can't crew to the alliance.
+    hilferuf: bool = False
     # transport
     transport_enabled: bool = True
     transport_only: bool = False
@@ -74,6 +76,7 @@ class AccountConfig:
             alliance_radius_km=self.alliance_radius_km,
             parasite_mode=self.parasite_mode,
             top_up_mode=self.top_up_mode,
+            hilferuf=self.hilferuf,
         )
 
     def transport_policy(self) -> TransportPolicy:

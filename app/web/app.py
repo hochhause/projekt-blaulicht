@@ -36,7 +36,7 @@ def classify_log(message: str) -> str:
         return "log-warn"
     if m.startswith("dispatched") or "en route" in low:
         return "log-ok"
-    if low.startswith(("polled", "plan:", "connected", "connecting", "cycle done")):
+    if low.startswith(("polled", "plan:", "connected", "connecting", "cycle done", "hilferuf", "transport")):
         return "log-info"
     if low.startswith(("unresolved", "idle")):
         return "log-muted"
@@ -259,6 +259,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
         mission_source: str = Form("both"),
         parasite_mode: str = Form(""),
         top_up_mode: str = Form(""),
+        hilferuf: str = Form(""),
         batch_size: str = Form(""),
         allowed_categories: str = Form(""),
         alliance_radius_km: str = Form(""),
@@ -288,6 +289,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
             mission_source=mission_source,
             parasite_mode=bool(parasite_mode),
             top_up_mode=bool(top_up_mode),
+            hilferuf=bool(hilferuf),
             batch_size=_opt_int(batch_size),
             allowed_categories=tuple(
                 c.strip() for c in allowed_categories.split(",") if c.strip()

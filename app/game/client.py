@@ -224,6 +224,21 @@ class GameClient:
             return False
         return True
 
+    async def share_mission(self, mission_id: int) -> bool:
+        """Share an OWN mission with the alliance ("Hilferuf") so members can help.
+
+        Follows the in-game share link, ``GET /missions/{id}/alliance_share`` (the
+        "Im Verband alarmieren/teilen" button's href). This is a best-guess route
+        NOT yet re-verified against a live capture — if sharing doesn't take,
+        capture the real request and adjust here.
+        """
+        try:
+            await self._s.get_text(f"/missions/{mission_id}/alliance_share?{_CTX}")
+        except Exception:  # noqa: BLE001
+            logger.exception("sharing mission %s to alliance failed", mission_id)
+            return False
+        return True
+
     async def recall(self, vehicle_id: int) -> bool:
         """Recall an en-route vehicle (``backalarm``)."""
         try:

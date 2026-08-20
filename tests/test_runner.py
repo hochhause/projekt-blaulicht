@@ -25,6 +25,7 @@ class FakeClient:
         self._missions, self._vehicles, self._buildings = missions, vehicles, buildings
         self.dispatched: list[tuple[int, int]] = []
         self.transports: list[tuple[str, int, int]] = []
+        self.shared: list[int] = []
 
     async def fetch_missions(self):
         return self._missions
@@ -45,6 +46,10 @@ class FakeClient:
 
     async def send_transport(self, action_url):
         self.transports.append(action_url)
+        return True
+
+    async def share_mission(self, mission_id):
+        self.shared.append(mission_id)
         return True
 
 
@@ -174,6 +179,42 @@ class RunnerTests(unittest.TestCase):
         report2 = asyncio.run(runner.run_cycle())
         self.assertEqual(report2.failed, 0)
         self.assertEqual(report2.dispatched, 0)
+
+    def test_hilferuf_shares_own_uncrewable_mission(self):
+        # Own mission needs a firetruck; we only have police -> can't crew ->
+        # with Hilferuf on, share it to the alliance. Idempotent per session.
+        async def no_sleep(_):
+            return None
+
+        client = FakeClient([m(1, 1)], [v(100, 32)], [b()])  # need fire, only police
+        runner = DispatchRunner(
+            client, self.resolver, DispatchPolicy(radius_km=40, hilferuf=True),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.shared, [1])
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.shared, [1])  # not re-shared
+
+    def test_hilferuf_off_does_not_share(self):
+        client = FakeClient([m(1, 1)], [v(100, 32)], [b()])
+        asyncio.run(self._runner(client).run_cycle())  # hilferuf off by default
+        self.assertEqual(client.shared, [])
+
+    def test_hilferuf_ignores_alliance_missions(self):
+        async def no_sleep(_):
+            return None
+
+        # An alliance (already-shared) mission we can't crew is NOT ours to share.
+        am = SimpleNamespace(id=2, caption="A", mission_type_id=1, position=NEAR,
+                             is_alliance=True)
+        client = FakeClient([am], [v(100, 32)], [b()])
+        runner = DispatchRunner(
+            client, self.resolver, DispatchPolicy(radius_km=40, hilferuf=True),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.shared, [])
 
     def test_transport_phase_sends_fms5_vehicles(self):
         # A vehicle in FMS 5 (has a patient) gets its first offered target hit.
