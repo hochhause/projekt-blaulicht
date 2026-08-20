@@ -65,18 +65,53 @@
     {% block content %}{% endblock %}
   </div>
   <script>
-    // Preserve log scroll across the auto-refresh: newest is at the top, so
-    // staying at 0 keeps following new lines; scrolling down to read history is
-    // kept put instead of being yanked back on every refresh.
+    // Terminal-like log scrolling across the 5s auto-refresh. Newest lines are
+    // PREPENDED at the top, so a naive scroll restore drags whatever you're
+    // reading downward every refresh. Instead we anchor to the actual line at
+    // the top of your viewport (by its stable data-k = log seq):
+    //   • at the very top  -> stay at 0, following new lines as they arrive;
+    //   • scrolled into history -> keep that same line pinned in place, no matter
+    //     how many lines were added above it or dropped off the bottom.
     (function () {
       var box = document.querySelector('.logbox');
       if (!box) return;
-      var key = 'logscroll:' + location.pathname;
-      var saved = sessionStorage.getItem(key);
-      if (saved !== null) box.scrollTop = parseInt(saved, 10) || 0;
-      box.addEventListener('scroll', function () {
-        sessionStorage.setItem(key, box.scrollTop);
-      });
+      var key = 'loganchor:' + location.pathname;
+
+      function save() {
+        var atTop = box.scrollTop <= 4;
+        var anchor = { top: atTop, k: null, off: 0 };
+        if (!atTop) {
+          var lines = box.querySelectorAll('.logline');
+          for (var i = 0; i < lines.length; i++) {
+            // first line whose bottom is still below the top edge = topmost visible
+            if (lines[i].offsetTop + lines[i].offsetHeight > box.scrollTop) {
+              anchor.k = lines[i].getAttribute('data-k');
+              anchor.off = lines[i].offsetTop - box.scrollTop;  // its px offset in view
+              break;
+            }
+          }
+        }
+        try { sessionStorage.setItem(key, JSON.stringify(anchor)); } catch (e) {}
+      }
+
+      function restore() {
+        var raw = sessionStorage.getItem(key);
+        if (!raw) return;
+        var a; try { a = JSON.parse(raw); } catch (e) { return; }
+        if (a.top) { box.scrollTop = 0; return; }
+        if (!a.k) return;
+        var lines = box.querySelectorAll('.logline');
+        for (var i = 0; i < lines.length; i++) {
+          if (lines[i].getAttribute('data-k') === a.k) {
+            box.scrollTop = lines[i].offsetTop - a.off;  // pin it where it was
+            return;
+          }
+        }
+        // anchor line scrolled off the retained window — leave at top.
+      }
+
+      box.addEventListener('scroll', save);
+      restore();
     })();
   </script>
 </body>

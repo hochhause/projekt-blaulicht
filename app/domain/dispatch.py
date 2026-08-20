@@ -147,7 +147,18 @@ def plan_dispatches(
     """
     plan = DispatchPlan()
     origins = [b.position for b in buildings if getattr(b, "position", None)]
-    pool = [v for v in vehicles if getattr(v, "is_available", False)]
+    # Available fleet, minus any specific vehicles struck out for repeatedly
+    # FAILING to dispatch (looked free — FMS 1/2 — but the send failed, e.g. no
+    # crew). We simply stop trusting those trucks; a class we merely don't have
+    # is NOT struck — it's just absent from the pool and skipped per-mission.
+    def _usable(v) -> bool:
+        if not getattr(v, "is_available", False):
+            return False
+        if strikes is not None and now is not None and strikes.is_struck(str(v.id), now):
+            return False
+        return True
+
+    pool = [v for v in vehicles if _usable(v)]
     # Vehicles carry no coordinates — a vehicle's position is its building's,
     # used to rank same-role candidates nearest-first.
     building_pos = {
@@ -237,7 +248,7 @@ def plan_dispatches(
             plan.skipped.append((mission.id, "beyond batch size"))
             continue
         outcome = _plan_one(mission, pool, resolver, policy, assigned, building_pos,
-                            text_engine, strikes, now, allow_partial=policy.top_up_mode,
+                            text_engine, allow_partial=policy.top_up_mode,
                             shortfalls=plan.shortfalls)
         if isinstance(outcome, str):
             plan.skipped.append((mission.id, outcome))
@@ -387,29 +398,23 @@ def _note_shortfall(shortfalls, classes) -> None:
 
 
 def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
-              text_engine=None, strikes=None, now=None, allow_partial=False,
-              shortfalls=None):
+              text_engine=None, allow_partial=False, shortfalls=None):
     """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string.
 
     *allow_partial* (top-up/symbiont mode) sends whatever useful vehicles we
     have to an already-begun mission and reports the rest, instead of holding
-    out for a full crew. It never strikes — the mode is about helping, not
-    giving up on a class. *shortfalls* (a dict) tallies classes that leave a
-    mission short/struck for the dashboard.
+    out for a full crew. *shortfalls* (a dict) tallies classes that leave a
+    mission short for the dashboard.
+
+    Note: a class we simply don't have is only ever a shortfall here (skipped,
+    tallied) — never a strike. Strikes are for vehicles that looked dispatchable
+    but FAILED to send, and are recorded by the runner (see ``struck out``).
     """
     building_pos = building_pos or {}
 
     requirements = _derive_requirements(mission, resolver, text_engine) or None
     if not requirements:
         return "no requirements found"
-
-    # Strike-out: skip a mission needing a vehicle class that's out of supply.
-    # Skipped in top-up mode — there we contribute what we can and report the gap.
-    if not allow_partial and strikes is not None and now is not None:
-        struck = {r.source for r in requirements if strikes.is_struck(r.source, now)}
-        if struck:
-            _note_shortfall(shortfalls, struck)
-            return f"needs struck-out vehicle(s): {', '.join(sorted(struck))}"
 
     # Credit gating already happened during candidate collection.
     requirements = _apply_delta(requirements, assigned, mission.id)
@@ -419,8 +424,8 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
     coverage = select_coverage(requirements, pool, distance_of=_distance_fn(mission.position, building_pos))
 
     # Only dispatch missions we can FULLY crew — a partial send just ties up
-    # vehicles on a job that won't complete. A shortfall strikes the missing
-    # class(es) so we eventually stop trying missions we can't fill.
+    # vehicles on a job that won't complete. The classes we're short of are
+    # tallied (dashboard) but NOT struck: we merely don't have them right now.
     if not coverage.satisfied:
         _note_shortfall(shortfalls, coverage.shortfall.keys())
         if allow_partial:
@@ -435,8 +440,6 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
                 shortfall=dict(coverage.shortfall),
             )
             return plan, coverage.vehicle_ids
-        if strikes is not None and now is not None:
-            strikes.record(coverage.shortfall.keys(), now)
         needed = ", ".join(f"{cls} x{n}" for cls, n in coverage.shortfall.items())
         return f"not enough vehicles: short {needed}"
 

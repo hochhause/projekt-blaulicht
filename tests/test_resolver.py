@@ -78,6 +78,24 @@ class ResolverTests(unittest.TestCase):
         by = {r.source: r.count for r in res.requirements}
         self.assertEqual(by.get("ambulances"), 4)  # send for all possible
 
+    def test_resolve_mission_no_ambulances_when_patients_gone(self):
+        # A begun mission (vehicle_state=1 -> counts revealed) with 0 patients
+        # left: patients already carried off -> send NO ambulances, even though
+        # the type COULD have had some. Fixes RTWs piling onto an empty scene.
+        m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=4,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=1)
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertIsNone(by.get("ambulances"))
+
+    def test_resolve_mission_revealed_patients_still_counted_when_begun(self):
+        # Begun mission but patients still present -> still send for them.
+        m = SimpleNamespace(mission_type_id=1, patients_count=2, possible_patients_count=4,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=1)
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertEqual(by.get("ambulances"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

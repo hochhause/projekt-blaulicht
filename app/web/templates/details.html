@@ -40,7 +40,7 @@
   {% if log %}
   <div class="logbox">
     {% for e in log %}
-      <div class="logline"><span class="t">{{ e.ts }}</span> <span class="{{ e.cls }}">{{ e.message }}</span></div>
+      <div class="logline" data-k="{{ e.seq }}"><span class="t">{{ e.ts }}</span> <span class="{{ e.cls }}">{{ e.message }}</span></div>
     {% endfor %}
   </div>
   {% else %}

@@ -23,11 +23,21 @@ from .catalog import MissionCatalog
 from .requirements import Requirement, Resolution
 
 
-def _casualties(revealed: int, possible_live: int, possible_type: int) -> int:
-    """How many casualties to send for: the revealed count if any, else the max
-    possible (so hidden-count missions get vehicles for everyone)."""
+def _casualties(revealed: int, possible_live: int, possible_type: int,
+                count_revealed: bool = False) -> int:
+    """How many casualties to send transport for.
+
+    The revealed count if any. A count of 0 is ambiguous: on a fresh mission
+    nobody has reached yet it means "hidden" (so we pre-stock for the max
+    possible), but once someone is on scene it means "none left" — e.g. a shared
+    mission whose patients have already been carried off. *count_revealed* (set
+    when a unit is already on the mission) makes a 0 authoritative, so we stop
+    piling ambulances onto a mission with no patients left.
+    """
     if revealed and revealed > 0:
         return int(revealed)
+    if count_revealed:
+        return 0
     return int(possible_live or possible_type or 0)
 
 
@@ -91,10 +101,14 @@ class MissionRequirementResolver:
             if cls in self._library.class_map.by_class:
                 counts[cls] = counts.get(cls, 0) + 1
 
+        # A unit already on the mission means its casualty counts are revealed,
+        # so a 0 is real (patients/prisoners already dealt with) rather than hidden.
+        count_revealed = getattr(mission, "vehicle_state", 0) >= 1
         patients = _casualties(
             getattr(mission, "patients_count", 0),
             getattr(mission, "possible_patients_count", 0),
             mtype.possible_patient,
+            count_revealed,
         )
         if patients:
             counts["ambulances"] = counts.get("ambulances", 0) + patients
@@ -102,6 +116,7 @@ class MissionRequirementResolver:
             getattr(mission, "prisoners_count", 0),
             getattr(mission, "possible_prisoners_count", 0),
             mtype.possible_prisoner,
+            count_revealed,
         )
         if prisoners:
             counts["police_cars"] = counts.get("police_cars", 0) + prisoners

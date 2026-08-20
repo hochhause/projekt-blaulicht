@@ -139,6 +139,42 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(report.failed, 1)
         self.assertEqual(report.dispatched, 0)
 
+    def test_dispatch_failure_strikes_vehicle_and_excludes_it(self):
+        # A vehicle that LOOKS free but fails to send (e.g. no crew) is struck
+        # (keyed by id, threshold 1 here), tallied on the dashboard, and dropped
+        # from the pool next cycle so we stop retrying it.
+        import time as _time
+
+        from app.domain.strikes import StrikeTracker
+
+        client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
+
+        async def fail(mission_id, vehicle_id):
+            return False
+
+        client.dispatch = fail
+        strikes = StrikeTracker(threshold=1)
+        lines: list[str] = []
+
+        async def no_sleep(_):
+            return None
+
+        runner = DispatchRunner(
+            client, self.resolver, DispatchPolicy(radius_km=40),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+            strikes=strikes, on_log=lines.append,
+        )
+        report = asyncio.run(runner.run_cycle())
+        self.assertEqual(report.failed, 1)
+        self.assertIn("100", strikes.struck_classes(_time.time()))          # struck by id
+        self.assertEqual(report.plan.shortfalls.get("vehicle #100"), 1)     # on the left panel
+        self.assertTrue(any("struck out" in ln for ln in lines))
+
+        # Next cycle: the struck vehicle is excluded -> not attempted again.
+        report2 = asyncio.run(runner.run_cycle())
+        self.assertEqual(report2.failed, 0)
+        self.assertEqual(report2.dispatched, 0)
+
     def test_transport_phase_sends_fms5_vehicles(self):
         # A vehicle in FMS 5 (has a patient) gets its first offered target hit.
         v5 = SimpleNamespace(id=77, type_id=28, is_available=False, position=BUILDING, fms=5)

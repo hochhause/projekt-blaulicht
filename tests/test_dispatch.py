@@ -318,24 +318,36 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].vehicle_ids, (200,))  # FuStW tops it up
 
-    def test_shortfall_strikes_and_then_skips(self):
+    def test_absent_class_never_strikes(self):
+        # A firetruck mission with NO firetruck available: short EVERY cycle, but
+        # a class we simply don't have must NOT accrue strikes (it's not a
+        # phantom that failed to send — we just don't own one).
         from app.domain.strikes import StrikeTracker
 
-        strikes = StrikeTracker()
-        # A firetruck mission with NO firetruck available -> shortfall each time.
-        def one_cycle():
-            return plan_dispatches(
+        strikes = StrikeTracker(threshold=1)  # would strike on the first count
+        for _ in range(3):
+            plan = plan_dispatches(
                 [mission(1, 1, NEAR)], [vehicle(100, FUSTW)], [building()], self.resolver,
                 DispatchPolicy(radius_km=40), strikes=strikes, now=1000.0,
             )
-
-        # First 3 cycles: "not enough vehicles" (each records a strike).
-        for _ in range(3):
-            plan = one_cycle()
             self.assertTrue(plan.skipped[0][1].startswith("not enough vehicles"))
-        # 4th: firetrucks is struck out -> skipped before even trying.
-        plan = one_cycle()
-        self.assertTrue(plan.skipped[0][1].startswith("needs struck-out"))
+        self.assertEqual(strikes.struck_classes(1000.0), set())      # no strikes
+        self.assertEqual(plan.shortfalls.get("firetrucks"), 1)        # but still tallied
+
+    def test_struck_vehicle_excluded_from_pool(self):
+        # A specific vehicle struck out for repeated dispatch failures is dropped
+        # from the fleet, so the planner won't pick it (nor is anything else here,
+        # so the mission is simply short).
+        from app.domain.strikes import StrikeTracker
+
+        strikes = StrikeTracker(threshold=1)
+        strikes.record(["100"], 1000.0)  # vehicle #100 struck out (keyed by id)
+        plan = plan_dispatches(
+            [mission(1, 1, NEAR)], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40), strikes=strikes, now=1000.0,
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertTrue(plan.skipped[0][1].startswith("not enough vehicles"))
 
     def test_partial_coverage_is_not_dispatched(self):
         # Mission needs firetrucks + police; only a firetruck is available ->

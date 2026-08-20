@@ -149,6 +149,28 @@ class DispatchRunner:
             except Exception:  # noqa: BLE001 — logging must never break the cycle
                 logger.exception("on_log hook failed")
 
+    def _record_dispatch_failure(self, vehicle, vehicle_id: int, now: float, report) -> None:
+        """A vehicle that LOOKED dispatchable (FMS 1/2, in the fleet) failed to
+        send — most often it has no crew. Strike the specific vehicle; after 3
+        such failures in 24h the planner drops it from the pool. Also surface it
+        on the dashboard's "struggling to field" list (trouble dispatching)."""
+        label = (
+            getattr(vehicle, "type_caption", "")
+            or getattr(vehicle, "caption", "")
+            or f"vehicle #{vehicle_id}"
+        )
+        tally = report.plan.shortfalls
+        tally[label] = tally.get(label, 0) + 1
+        if self._strikes is None:
+            return
+        self._strikes.record([str(vehicle_id)], now)
+        if self._strikes.is_struck(str(vehicle_id), now):
+            name = _vehicle_name(vehicle, vehicle_id)
+            self._log(
+                f"struck out {name}: failed to dispatch 3× — likely no crew; "
+                f"skipping this vehicle for 24h"
+            )
+
     async def _buildings_for_cycle(self) -> list:
         if self._buildings is None:
             self._buildings = await self._client.fetch_buildings()
@@ -197,10 +219,11 @@ class DispatchRunner:
 
         # Subtract vehicles already en route so missions are topped up, not
         # re-dispatched (avoids piling vehicles onto an already-covered mission).
+        now = time.time()
         assigned = assigned_from_vehicles(vehicles)
         plan = plan_dispatches(
             missions, vehicles, buildings, self._resolver, self._policy,
-            assigned=assigned, text_engine=self._text_engine, now=time.time(),
+            assigned=assigned, text_engine=self._text_engine, now=now,
             strikes=self._strikes,
         )
         report = CycleReport(plan=plan)
@@ -261,7 +284,10 @@ class DispatchRunner:
                     )
                 else:
                     report.failed += 1
-                    self._log(f"FAILED {name} → #{mission_plan.mission_id} {mission_plan.caption!r}")
+                    self._log(
+                        f"FAILED {name} → #{mission_plan.mission_id} {mission_plan.caption!r} (no crew?)"
+                    )
+                    self._record_dispatch_failure(veh_by_id.get(vehicle_id), vehicle_id, now, report)
                 await self._timing.sleep(self._timing.dispatch_gap())
             if not mission_plan.satisfied:
                 self._log(f"#{mission_plan.mission_id} still MISSING {mission_plan.shortfall}")

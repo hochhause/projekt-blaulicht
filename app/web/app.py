@@ -117,6 +117,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
             for aid, entry in log_store.recent_all(120):
                 compound.append(
                     {
+                        "seq": entry.seq,
                         "ts": entry.ts,
                         "label": label_by_id.get(aid, f"#{aid}"),
                         "color": color_by_id.get(aid, "#8697ad"),
@@ -160,7 +161,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
             return RedirectResponse("/", status_code=303)
         state = store.get_state(account_id) or {}
         raw_log = log_store.recent(account_id) if log_store is not None else []
-        log = [{"ts": e.ts, "message": e.message, "cls": classify_log(e.message)} for e in raw_log]
+        log = [{"seq": e.seq, "ts": e.ts, "message": e.message, "cls": classify_log(e.message)} for e in raw_log]
         cfg = AccountConfig.from_dict(_load_config(store, account_id))
         return _TEMPLATES.TemplateResponse(
             request,

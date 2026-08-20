@@ -65,14 +65,12 @@ class AccountRunner:
         self._timing = timing
         self._session: GameSession | None = None
         self._dispatch: DispatchRunner | None = None
-        # Strikes persist across reconnects within this account's run; a real
-        # restart (account stop/start) makes a fresh AccountRunner -> fresh tracker.
-        # Struck-out classes are logged loudly (they stop whole mission types).
-        self._strikes = StrikeTracker(
-            on_struck=lambda cls: self._log(
-                f"STRUCK OUT: no {cls} available 3x - skipping its missions for 24h"
-            )
-        )
+        # Strikes are keyed by VEHICLE id now: a vehicle that repeatedly fails to
+        # dispatch (looked free but wouldn't send — usually no crew) is struck out
+        # and dropped from the pool. The runner logs the exclusion (it has the
+        # vehicle's name). Persists across reconnects; a real account restart makes
+        # a fresh AccountRunner -> fresh tracker.
+        self._strikes = StrikeTracker()
 
     def _log(self, message: str) -> None:
         if self._on_log is not None:
