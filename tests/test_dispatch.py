@@ -237,6 +237,57 @@ class DispatchPlannerTests(unittest.TestCase):
         # mission_source OWN filters it out; parasite didn't grab it (vehicle_state 0)
         self.assertEqual(plan.planned, [])
 
+    # -- top-up / symbiont mode ----------------------------------------------
+    def test_top_up_skips_fresh_mission(self):
+        # A brand-new mission nobody is on yet (vehicle_state=0) is left alone.
+        fresh = mission(1, 1, NEAR, vehicle_state=0)
+        plan = plan_dispatches(
+            [fresh], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, top_up_mode=True),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "not begun (top-up mode)")])
+
+    def test_top_up_partial_fills_begun_mission(self):
+        # A begun mission (vehicle_state=1) needs fire + police; we only have an
+        # LF. Top-up sends it and reports the police shortfall — no full crew
+        # required, unlike normal dispatch.
+        begun = mission(1, 3, NEAR, vehicle_state=1)
+        plan = plan_dispatches(
+            [begun], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, top_up_mode=True),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        mp = plan.planned[0]
+        self.assertEqual(mp.vehicle_ids, (100,))
+        self.assertFalse(mp.satisfied)
+        self.assertIn("police_cars", mp.shortfall)
+
+    def test_top_up_does_not_strike(self):
+        # Same partial situation, but with a strike tracker: top-up must NOT
+        # record ANY strike (it keeps helping, it doesn't give up on a class).
+        from app.domain.strikes import StrikeTracker
+
+        strikes = StrikeTracker(threshold=1)  # would strike on the first miss
+        begun = mission(1, 3, NEAR, vehicle_state=1)
+        plan_dispatches(
+            [begun], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, top_up_mode=True),
+            strikes=strikes, now=1000.0,
+        )
+        self.assertEqual(strikes.struck_classes(1000.0), set())
+
+    def test_normal_mode_still_requires_full_crew(self):
+        # Sanity: with top-up OFF, the same begun mission we can't fully crew is
+        # skipped (not partial-sent).
+        begun = mission(1, 3, NEAR, vehicle_state=1)
+        plan = plan_dispatches(
+            [begun], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, top_up_mode=False),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertTrue(plan.skipped[0][1].startswith("not enough vehicles"))
+
     def test_spread_mission_topped_up_first(self):
         # We're already on mission 1 (assigned an LF) but it still needs police;
         # priority pass tops it up before the batch even with batch_size 1.

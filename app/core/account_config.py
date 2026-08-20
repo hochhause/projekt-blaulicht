@@ -38,6 +38,9 @@ class AccountConfig:
     mission_source: str = MissionSource.BOTH.value
     alliance_radius_km: float | None = None
     parasite_mode: bool = False
+    # Top-up (symbiont) mode: only reinforce missions already begun (own or
+    # shared), sending what useful vehicles we have and reporting the rest.
+    top_up_mode: bool = False
     # transport
     transport_enabled: bool = True
     transport_only: bool = False
@@ -70,6 +73,7 @@ class AccountConfig:
             mission_source=source,
             alliance_radius_km=self.alliance_radius_km,
             parasite_mode=self.parasite_mode,
+            top_up_mode=self.top_up_mode,
         )
 
     def transport_policy(self) -> TransportPolicy:

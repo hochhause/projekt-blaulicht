@@ -233,6 +233,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
         order: str = Form("nearest"),
         mission_source: str = Form("both"),
         parasite_mode: str = Form(""),
+        top_up_mode: str = Form(""),
         batch_size: str = Form(""),
         allowed_categories: str = Form(""),
         alliance_radius_km: str = Form(""),
@@ -261,6 +262,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
             order=order,
             mission_source=mission_source,
             parasite_mode=bool(parasite_mode),
+            top_up_mode=bool(top_up_mode),
             batch_size=_opt_int(batch_size),
             allowed_categories=tuple(
                 c.strip() for c in allowed_categories.split(",") if c.strip()

@@ -79,6 +79,10 @@ class DispatchPolicy:
     # something useful if a role is missing, else send a spare vehicle just to
     # claim a participation share. Skips cash/source/category filters + batch/order.
     parasite_mode: bool = False
+    # Top-up (symbiont) mode: only work missions ALREADY begun (vehicle_state>=1),
+    # own or shared; send the useful vehicles we have (partial ok) and report the
+    # rest. No leeching, no fresh missions.
+    top_up_mode: bool = False
 
 
 @dataclass(frozen=True)
@@ -162,6 +166,10 @@ def plan_dispatches(
         if mission.id in handled:
             continue  # already actioned in the priority pass
         is_alliance = getattr(mission, "is_alliance", False)
+        # Top-up (symbiont) mode: only help missions someone has already begun.
+        if policy.top_up_mode and getattr(mission, "vehicle_state", 0) < 1:
+            plan.skipped.append((mission.id, "not begun (top-up mode)"))
+            continue
         # Source filter: own only / alliance only / both.
         if policy.mission_source is MissionSource.OWN and is_alliance:
             plan.skipped.append((mission.id, "own-only filter"))
@@ -226,7 +234,7 @@ def plan_dispatches(
             plan.skipped.append((mission.id, "beyond batch size"))
             continue
         outcome = _plan_one(mission, pool, resolver, policy, assigned, building_pos,
-                            text_engine, strikes, now)
+                            text_engine, strikes, now, allow_partial=policy.top_up_mode)
         if isinstance(outcome, str):
             plan.skipped.append((mission.id, outcome))
             continue
@@ -365,8 +373,14 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
 
 
 def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
-              text_engine=None, strikes=None, now=None):
-    """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string."""
+              text_engine=None, strikes=None, now=None, allow_partial=False):
+    """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string.
+
+    *allow_partial* (top-up/symbiont mode) sends whatever useful vehicles we
+    have to an already-begun mission and reports the rest, instead of holding
+    out for a full crew. It never strikes — the mode is about helping, not
+    giving up on a class.
+    """
     building_pos = building_pos or {}
 
     requirements = _derive_requirements(mission, resolver, text_engine) or None
@@ -374,7 +388,8 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
         return "no requirements found"
 
     # Strike-out: skip a mission needing a vehicle class that's out of supply.
-    if strikes is not None and now is not None:
+    # Skipped in top-up mode — there we contribute what we can and report the gap.
+    if not allow_partial and strikes is not None and now is not None:
         struck = {r.source for r in requirements if strikes.is_struck(r.source, now)}
         if struck:
             return f"needs struck-out vehicle(s): {', '.join(sorted(struck))}"
@@ -390,6 +405,18 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
     # vehicles on a job that won't complete. A shortfall strikes the missing
     # class(es) so we eventually stop trying missions we can't fill.
     if not coverage.satisfied:
+        if allow_partial:
+            # Top-up: send the useful vehicles we do have, report the shortfall.
+            if not coverage.vehicle_ids:
+                return "nothing useful to add"
+            plan = MissionPlan(
+                mission_id=mission.id,
+                caption=getattr(mission, "caption", ""),
+                vehicle_ids=tuple(coverage.vehicle_ids),
+                satisfied=False,
+                shortfall=dict(coverage.shortfall),
+            )
+            return plan, coverage.vehicle_ids
         if strikes is not None and now is not None:
             strikes.record(coverage.shortfall.keys(), now)
         needed = ", ".join(f"{cls} x{n}" for cls, n in coverage.shortfall.items())
