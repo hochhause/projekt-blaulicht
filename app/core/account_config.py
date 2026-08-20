@@ -43,6 +43,8 @@ class AccountConfig:
     top_up_mode: bool = False
     # Hilferuf: share own missions we can't crew to the alliance.
     hilferuf: bool = False
+    # Patient-only: dispatch only patient-clearing units; recall idle ones after.
+    patient_only: bool = False
     # transport
     transport_enabled: bool = True
     transport_only: bool = False
@@ -77,6 +79,7 @@ class AccountConfig:
             parasite_mode=self.parasite_mode,
             top_up_mode=self.top_up_mode,
             hilferuf=self.hilferuf,
+            patient_only=self.patient_only,
         )
 
     def transport_policy(self) -> TransportPolicy:

@@ -97,5 +97,33 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(by.get("ambulances"), 2)
 
 
+    # -- patient-only mode -----------------------------------------------------
+    def test_patient_only_transports_all_and_drops_non_patient(self):
+        # Fixture type 1 is a firetruck mission; in patient-only mode we ignore
+        # the firetruck and send an RTW per patient + an LNA above 5 patients.
+        m = SimpleNamespace(mission_type_id=1, patients_count=7, possible_patients_count=7,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=0)
+        res = self.resolver.resolve_patient_only(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertEqual(by.get("ambulances"), 7)
+        self.assertEqual(by.get("kdow_lna"), 1)      # >5 patients
+        self.assertNotIn("kdow_orgl", by)            # not yet >10
+        self.assertNotIn("firetrucks", by)           # non-patient class dropped
+
+    def test_patient_only_adds_orgl_above_ten(self):
+        m = SimpleNamespace(mission_type_id=1, patients_count=12, possible_patients_count=12,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=0)
+        by = {r.source: r.count for r in self.resolver.resolve_patient_only(m).requirements}
+        self.assertEqual(by.get("ambulances"), 12)
+        self.assertEqual(by.get("kdow_lna"), 1)
+        self.assertEqual(by.get("kdow_orgl"), 1)     # >10 patients
+
+    def test_patient_only_empty_when_no_patients_left(self):
+        # On scene (vehicle_state 1) with 0 patients -> nothing to send.
+        m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=5,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=1)
+        self.assertEqual(self.resolver.resolve_patient_only(m).requirements, [])
+
+
 if __name__ == "__main__":
     unittest.main()

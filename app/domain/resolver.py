@@ -136,6 +136,58 @@ class MissionRequirementResolver:
             )
         return resolution
 
+    def resolve_patient_only(self, mission) -> Resolution:
+        """Requirements for **patient-only** mode: just the units that get people
+        out — RTWs (``ambulances``), plus any NEF / rescue-helicopter the mission
+        type calls for, plus the incident-command units WE add by patient count
+        (missions don't list them): an LNA above 5 patients, an OrgL above 10.
+
+        Returns an empty resolution when there are no patients to move (nobody to
+        transport — the runner's recall pass then frees any idle units).
+        """
+        resolution = Resolution()
+        mtid = getattr(mission, "mission_type_id", None)
+        mtype = self._catalog.get(mtid) if mtid is not None else None
+        if mtype is None:
+            return resolution
+
+        count_revealed = getattr(mission, "vehicle_state", 0) >= 1
+        patients = _casualties(
+            getattr(mission, "patients_count", 0),
+            getattr(mission, "possible_patients_count", 0),
+            mtype.possible_patient,
+            count_revealed,
+        )
+        if patients <= 0:
+            return resolution
+
+        counts: dict[str, int] = {"ambulances": patients}
+        # Keep the Notarzt / rescue-helicopter the mission type itself asks for.
+        for cls in ("nef", "rescue_helicopter"):
+            n = int(mtype.requirements.get(cls, 0)) + (1 if cls in mtype.chances else 0)
+            if n:
+                counts[cls] = n
+        # Incident command scales with patient count — provided by us.
+        if patients > 5:
+            counts["kdow_lna"] = 1
+        if patients > 10:
+            counts["kdow_orgl"] = 1
+
+        for cls, n in counts.items():
+            type_ids = self._library.class_map.by_class.get(cls, ())
+            if not type_ids:
+                resolution.unmatched.append(cls)
+                continue
+            resolution.requirements.append(
+                Requirement(
+                    source=cls,
+                    type_ids=frozenset(type_ids),
+                    count=int(n),
+                    matchless_type_ids=frozenset(type_ids) & self._matchless,
+                )
+            )
+        return resolution
+
     def knows(self, mission_type_id: int) -> bool:
         """True if the catalogue has this mission type."""
         return self._catalog.get(mission_type_id) is not None

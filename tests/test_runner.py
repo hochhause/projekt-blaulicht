@@ -26,6 +26,7 @@ class FakeClient:
         self.dispatched: list[tuple[int, int]] = []
         self.transports: list[tuple[str, int, int]] = []
         self.shared: list[int] = []
+        self.recalled: list[int] = []
 
     async def fetch_missions(self):
         return self._missions
@@ -50,6 +51,10 @@ class FakeClient:
 
     async def share_mission(self, mission_id):
         self.shared.append(mission_id)
+        return True
+
+    async def recall(self, vehicle_id):
+        self.recalled.append(vehicle_id)
         return True
 
 
@@ -179,6 +184,36 @@ class RunnerTests(unittest.TestCase):
         report2 = asyncio.run(runner.run_cycle())
         self.assertEqual(report2.failed, 0)
         self.assertEqual(report2.dispatched, 0)
+
+    def test_patient_only_recalls_idle_units_when_cleared(self):
+        # A mission whose patients are all gone (patients_count 0, vehicle_state 1):
+        # an idle NEF on scene is recalled; an RTW with a patient aboard (FMS 5) is
+        # left to deliver.
+        async def no_sleep(_):
+            return None
+
+        mission = SimpleNamespace(id=5, caption="RD", mission_type_id=1, position=NEAR,
+                                  patients_count=0, vehicle_state=1)
+        nef = SimpleNamespace(id=10, type_id=29, is_available=False, position=BUILDING,
+                              fms=4, target_type="mission", target_id=5)
+        rtw = SimpleNamespace(id=11, type_id=28, is_available=False, position=BUILDING,
+                              fms=5, target_type="mission", target_id=5)
+        client = FakeClient([mission], [nef, rtw], [b()])
+        runner = DispatchRunner(
+            client, self.resolver, DispatchPolicy(radius_km=40, patient_only=True),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.recalled, [10])  # NEF home; transporting RTW kept
+
+    def test_no_recall_without_patient_only(self):
+        mission = SimpleNamespace(id=5, caption="RD", mission_type_id=1, position=NEAR,
+                                  patients_count=0, vehicle_state=1)
+        nef = SimpleNamespace(id=10, type_id=29, is_available=False, position=BUILDING,
+                              fms=4, target_type="mission", target_id=5)
+        client = FakeClient([mission], [nef], [b()])
+        asyncio.run(self._runner(client).run_cycle())  # patient_only off
+        self.assertEqual(client.recalled, [])
 
     def test_hilferuf_shares_own_uncrewable_mission(self):
         # Own mission needs a firetruck; we only have police -> can't crew ->

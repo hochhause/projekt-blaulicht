@@ -47,6 +47,7 @@ class GameClientLike(Protocol):
     async def transport_targets(self, vehicle_id: int) -> list[str]: ...
     async def send_transport(self, action_url: str) -> bool: ...
     async def share_mission(self, mission_id: int) -> bool: ...
+    async def recall(self, vehicle_id: int) -> bool: ...
 
 
 @dataclass
@@ -306,8 +307,34 @@ class DispatchRunner:
         if getattr(self._policy, "hilferuf", False):
             await self._hilferuf(plan, by_id)
 
+        if getattr(self._policy, "patient_only", False):
+            await self._recall_cleared_patient_missions(missions, vehicles)
+
         self._log(f"cycle done: {report.summary()}")
         return report
+
+    async def _recall_cleared_patient_missions(self, missions, vehicles) -> None:
+        """Patient-only cleanup: once a mission's patients are all carried away,
+        recall the units we still have there that aren't transporting one — they
+        did their job and can go home. A unit at FMS 5 (patient aboard) is left to
+        deliver."""
+        cleared = {
+            m.id for m in missions
+            if getattr(m, "patients_count", 0) == 0 and getattr(m, "vehicle_state", 0) >= 1
+        }
+        if not cleared:
+            return
+        for v in vehicles:
+            if getattr(v, "target_type", None) != "mission":
+                continue
+            if getattr(v, "target_id", None) not in cleared:
+                continue
+            if getattr(v, "fms", None) == 5:
+                continue  # patient aboard — must reach a hospital, don't recall
+            name = _vehicle_name(v, v.id)
+            if await self._client.recall(v.id):
+                self._log(f"recalled {name}: patients cleared at #{v.target_id}")
+            await self._timing.sleep(self._timing.dispatch_gap())
 
     async def _hilferuf(self, plan, by_id) -> None:
         """Share our OWN missions we couldn't crew to the alliance, so members

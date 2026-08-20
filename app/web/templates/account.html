@@ -33,6 +33,8 @@
         <select name="top_up_mode"><option value="1" {{ 'selected' if cfg.top_up_mode else '' }}>on</option><option value="" {{ '' if cfg.top_up_mode else 'selected' }}>off</option></select></div>
       <div class="field"><label>Hilferuf (share own missions we can't crew to the alliance)</label>
         <select name="hilferuf"><option value="1" {{ 'selected' if cfg.hilferuf else '' }}>on</option><option value="" {{ '' if cfg.hilferuf else 'selected' }}>off</option></select></div>
+      <div class="field"><label>Patient-only (only RTW/NEF/RTH + LNA&gt;5/OrgL&gt;10; recall idle units when patients cleared)</label>
+        <select name="patient_only"><option value="1" {{ 'selected' if cfg.patient_only else '' }}>on</option><option value="" {{ '' if cfg.patient_only else 'selected' }}>off</option></select></div>
       <div class="field"><label>Mission source</label>
         <select name="mission_source">
           <option value="both" {{ 'selected' if cfg.mission_source == 'both' else '' }}>Both (own + alliance)</option>

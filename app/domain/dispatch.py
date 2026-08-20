@@ -86,6 +86,10 @@ class DispatchPolicy:
     # Hilferuf ("call for help"): when we can't crew one of our OWN missions,
     # share it to the alliance so members can help. Runner-level behaviour.
     hilferuf: bool = False
+    # Patient-only mode: dispatch ONLY the units that clear patients (RTW/NEF/RTH
+    # + an LNA >5 patients, OrgL >10); the runner recalls idle units once a
+    # mission's patients are all gone.
+    patient_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -317,8 +321,15 @@ def _order(candidates, order: DispatchOrder):
     return sorted(candidates, key=lambda t: (t[0], t[2].id))  # NEAREST
 
 
-def _derive_requirements(mission, resolver, text_engine):
-    """Requirements for a mission: structured derivation, else missing_text."""
+def _derive_requirements(mission, resolver, text_engine, patient_only=False):
+    """Requirements for a mission: structured derivation, else missing_text.
+
+    In *patient_only* mode only the patient-clearing units are required (RTW/NEF/
+    RTH + LNA/OrgL by patient count); the text fallback is skipped (patient counts
+    come from the structured fields).
+    """
+    if patient_only:
+        return list(resolver.resolve_patient_only(mission).requirements)
     reqs = resolver.resolve_mission(mission).requirements or None
     if not reqs and text_engine is not None:
         text = getattr(mission, "missing_text", "") or ""
@@ -368,7 +379,9 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
             continue
 
         pos = getattr(mission, "position", None)
-        reqs = _apply_delta(_derive_requirements(mission, resolver, text_engine), assigned, mid)
+        reqs = _apply_delta(
+            _derive_requirements(mission, resolver, text_engine, policy.patient_only), assigned, mid
+        )
         chosen: list[int] = []
         if reqs and pos is not None:
             cov = select_coverage(reqs, pool, distance_of=_distance_fn(pos, building_pos))
@@ -415,7 +428,7 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
     """
     building_pos = building_pos or {}
 
-    requirements = _derive_requirements(mission, resolver, text_engine) or None
+    requirements = _derive_requirements(mission, resolver, text_engine, policy.patient_only) or None
     if not requirements:
         return "no requirements found"
 
