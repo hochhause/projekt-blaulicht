@@ -60,6 +60,12 @@ async def main() -> int:
             print("  " + json.dumps(slim, ensure_ascii=False, default=str)[:500])
         if hot:
             print("\nALL keys on first hot mission:", sorted(hot[0].keys()))
+            print("\nFULL first hot mission (values):")
+            print(json.dumps(hot[0], ensure_ascii=False, default=str)[:2500])
+            # Decode the cryptic short keys across all hot missions (value spread).
+            for k in ("sw", "vehicle_state", "handoff", "ct", "kt", "pt", "tv"):
+                vals = sorted({str(m.get(k)) for m in hot if k in m})
+                print(f"  {k} values seen: {vals[:12]}")
 
         # Vehicles currently in a speech-request-ish FMS status.
         vpayload = await session.get_json("/api/v2/vehicles")

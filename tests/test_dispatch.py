@@ -32,10 +32,11 @@ NEAR2 = (52.5250, 13.4000)  # ~0.6 km
 FAR = (53.5500, 9.9900)     # Hamburg, ~250 km
 
 
-def mission(mid, mtype, pos, is_alliance=False, average_credits=0, created_at=None):
+def mission(mid, mtype, pos, is_alliance=False, average_credits=0, created_at=None, vehicle_state=0):
     return SimpleNamespace(
         id=mid, caption=f"M{mid}", mission_type_id=mtype, position=pos,
         is_alliance=is_alliance, average_credits=average_credits, created_at=created_at,
+        vehicle_state=vehicle_state, missing_text="",
     )
 
 
@@ -199,6 +200,53 @@ class DispatchPlannerTests(unittest.TestCase):
         )
         self.assertEqual(len(plan.planned), 2)
         self.assertIn((3, "beyond batch size"), [(mid, r) for mid, r in plan.skipped])
+
+    # -- parasite mode --------------------------------------------------------
+    def test_parasite_leeches_shared_mission_with_spare(self):
+        # A shared mission others are on (vehicle_state=1), type our fleet can't
+        # usefully fill (needs police, we only have an LF) -> send a spare LF to
+        # claim participation. Filters/cash bypassed.
+        para = mission(1, 32, FAR, is_alliance=True, vehicle_state=1)  # far, out of normal range
+        # type 32 doesn't exist as a mission type in fixture -> resolve empty ->
+        # but parasite still leeches. Use a real fixture type needing police.
+        para = mission(1, 3, FAR, is_alliance=True, average_credits=99999, vehicle_state=1)
+        plan = plan_dispatches(
+            [para], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_mode=True, own_credit_max=1000),
+        )
+        # Useful (LF covers firetrucks part) OR leech — either way it's actioned,
+        # despite being far and over the cash cap.
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].mission_id, 1)
+
+    def test_parasite_off_leaves_shared_mission_to_filters(self):
+        para = mission(1, 3, FAR, is_alliance=True, vehicle_state=1)
+        plan = plan_dispatches(
+            [para], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_mode=False),
+        )
+        self.assertEqual(plan.planned, [])  # out of range, not leeched
+
+    def test_parasite_ignores_shared_mission_nobody_on(self):
+        # vehicle_state=0 -> nobody contributed yet -> not a leech target.
+        para = mission(1, 3, NEAR, is_alliance=True, vehicle_state=0)
+        plan = plan_dispatches(
+            [para], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_mode=True, mission_source=MissionSource.OWN),
+        )
+        # mission_source OWN filters it out; parasite didn't grab it (vehicle_state 0)
+        self.assertEqual(plan.planned, [])
+
+    def test_spread_mission_topped_up_first(self):
+        # We're already on mission 1 (assigned an LF) but it still needs police;
+        # priority pass tops it up before the batch even with batch_size 1.
+        m1 = mission(1, 3, NEAR)  # firetrucks + police; LF en route, needs FuStW
+        plan = plan_dispatches(
+            [m1], [vehicle(200, FUSTW)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, batch_size=1), assigned={1: [LF]},
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].vehicle_ids, (200,))  # FuStW tops it up
 
     def test_shortfall_strikes_and_then_skips(self):
         from app.domain.strikes import StrikeTracker

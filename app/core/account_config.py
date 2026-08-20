@@ -37,6 +37,7 @@ class AccountConfig:
     allowed_categories: tuple[str, ...] = ()
     mission_source: str = MissionSource.BOTH.value
     alliance_radius_km: float | None = None
+    parasite_mode: bool = False
     # transport
     transport_enabled: bool = True
     transport_max_distance_km: float = 100.0
@@ -67,6 +68,7 @@ class AccountConfig:
             allowed_categories=frozenset(self.allowed_categories),
             mission_source=source,
             alliance_radius_km=self.alliance_radius_km,
+            parasite_mode=self.parasite_mode,
         )
 
     def transport_policy(self) -> TransportPolicy:

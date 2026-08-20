@@ -75,6 +75,10 @@ class DispatchPolicy:
     # Which missions to work, and an optional separate radius for alliance ones.
     mission_source: MissionSource = MissionSource.BOTH
     alliance_radius_km: float | None = None
+    # Parasite mode: leech shared/event missions others are already on — contribute
+    # something useful if a role is missing, else send a spare vehicle just to
+    # claim a participation share. Skips cash/source/category filters + batch/order.
+    parasite_mode: bool = False
 
 
 @dataclass(frozen=True)
@@ -145,10 +149,18 @@ def plan_dispatches(
         if getattr(b, "position", None) and getattr(b, "id", None) is not None
     }
 
+    # PRIORITY PASS — spread/top-up (missions we're on) and, in parasite mode,
+    # leech targets. Runs first, bypassing filters/order/batch.
+    handled, priority_batch = _priority_pass(
+        plan, missions, pool, resolver, policy, assigned or {}, building_pos, text_engine
+    )
+
     # Gather in-range, category-allowed missions with their distance and the
     # mission type's average credits (used for ordering).
     candidates: list[tuple[float, int, object]] = []  # (distance, credits, mission)
     for mission in missions:
+        if mission.id in handled:
+            continue  # already actioned in the priority pass
         is_alliance = getattr(mission, "is_alliance", False)
         # Source filter: own only / alliance only / both.
         if policy.mission_source is MissionSource.OWN and is_alliance:
@@ -208,7 +220,7 @@ def plan_dispatches(
     # considered. Missions skipped (no vehicles, already covered, …) don't use a
     # slot; only once `batch_size` missions have been actioned is the rest
     # deferred as "beyond batch size".
-    actioned = 0
+    actioned = priority_batch  # priority useful contributions already count
     for _distance, _credits, mission in candidates:
         if policy.batch_size is not None and actioned >= policy.batch_size:
             plan.skipped.append((mission.id, "beyond batch size"))
@@ -279,25 +291,85 @@ def _order(candidates, order: DispatchOrder):
     return sorted(candidates, key=lambda t: (t[0], t[2].id))  # NEAREST
 
 
+def _derive_requirements(mission, resolver, text_engine):
+    """Requirements for a mission: structured derivation, else missing_text."""
+    reqs = resolver.resolve_mission(mission).requirements or None
+    if not reqs and text_engine is not None:
+        text = getattr(mission, "missing_text", "") or ""
+        if text.strip():
+            parsed = text_engine.resolve(re.split(r"[,;\n/]+", text))
+            if parsed.requirements:
+                reqs = parsed.requirements
+    return list(reqs) if reqs else []
+
+
+def _distance_fn(mission_pos, building_pos):
+    def distance_of(vehicle) -> float:
+        vp = getattr(vehicle, "position", None) or building_pos.get(getattr(vehicle, "building_id", None))
+        return haversine_km(mission_pos, vp) if (vp and mission_pos) else float("inf")
+    return distance_of
+
+
+def _abundance_vehicle(pool, mission_pos, building_pos):
+    """The nearest instance of whatever vehicle type we hold most of — a spare
+    to throw at a leech mission just to claim participation."""
+    if not pool:
+        return None
+    from collections import Counter
+
+    common_type = Counter(v.type_id for v in pool).most_common(1)[0][0]
+    candidates = [v for v in pool if v.type_id == common_type]
+    return min(candidates, key=_distance_fn(mission_pos, building_pos))
+
+
+def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_pos, text_engine):
+    """Handle spread/top-up and parasite missions BEFORE the normal filtered pass.
+
+    Bypasses cash/source/category filters, ordering and batch. Returns the set of
+    handled mission ids and how many count toward the batch (useful contributions
+    do; pure leech sends do not).
+    """
+    handled: set[int] = set()
+    batch_used = 0
+    assigned = assigned or {}
+    for mission in missions:
+        mid = mission.id
+        on_it = mid in assigned                       # a mission we're already on
+        others_on = getattr(mission, "vehicle_state", 0) >= 1
+        is_shared = getattr(mission, "is_alliance", False)
+        is_parasite = policy.parasite_mode and is_shared and others_on and not on_it
+        if not (on_it or is_parasite):
+            continue
+
+        pos = getattr(mission, "position", None)
+        reqs = _apply_delta(_derive_requirements(mission, resolver, text_engine), assigned, mid)
+        chosen: list[int] = []
+        if reqs and pos is not None:
+            cov = select_coverage(reqs, pool, distance_of=_distance_fn(pos, building_pos))
+            if cov.vehicle_ids:
+                chosen = list(cov.vehicle_ids)
+                plan.planned.append(MissionPlan(mid, getattr(mission, "caption", ""),
+                                                tuple(chosen), cov.satisfied, dict(cov.shortfall)))
+                batch_used += 1  # useful contribution -> counts to batch
+        if not chosen and is_parasite:
+            spare = _abundance_vehicle(pool, pos, building_pos)
+            if spare is not None:
+                chosen = [spare.id]
+                plan.planned.append(MissionPlan(mid, getattr(mission, "caption", ""),
+                                                (spare.id,), False, {}))  # pure leech, free
+        if chosen:
+            cset = set(chosen)
+            pool[:] = [v for v in pool if v.id not in cset]
+            handled.add(mid)
+    return handled, batch_used
+
+
 def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
               text_engine=None, strikes=None, now=None):
     """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string."""
     building_pos = building_pos or {}
 
-    # Full derivation (requirements + chances + patients/prisoners).
-    resolution = resolver.resolve_mission(mission)
-    requirements = resolution.requirements or None
-
-    # Fallback: parse the mission's live requirement text ("poll from the site")
-    # when the structured catalogue doesn't cover this type.
-    if not requirements and text_engine is not None:
-        text = getattr(mission, "missing_text", "") or ""
-        if text.strip():
-            lines = re.split(r"[,;\n/]+", text)
-            parsed = text_engine.resolve(lines)
-            if parsed.requirements:
-                requirements = parsed.requirements
-
+    requirements = _derive_requirements(mission, resolver, text_engine) or None
     if not requirements:
         return "no requirements found"
 
@@ -312,16 +384,7 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
     if not requirements:
         return "already covered"
 
-    pos = mission.position
-
-    def distance_of(vehicle) -> float:
-        # Prefer the vehicle's own position if present, else its building's.
-        vp = getattr(vehicle, "position", None) or building_pos.get(
-            getattr(vehicle, "building_id", None)
-        )
-        return haversine_km(pos, vp) if vp else float("inf")
-
-    coverage = select_coverage(requirements, pool, distance_of=distance_of)
+    coverage = select_coverage(requirements, pool, distance_of=_distance_fn(mission.position, building_pos))
 
     # Only dispatch missions we can FULLY crew — a partial send just ties up
     # vehicles on a job that won't complete. A shortfall strikes the missing
