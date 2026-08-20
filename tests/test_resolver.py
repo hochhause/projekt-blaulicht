@@ -124,6 +124,22 @@ class ResolverTests(unittest.TestCase):
                             prisoners_count=0, possible_prisoners_count=0, vehicle_state=1)
         self.assertEqual(self.resolver.resolve_patient_only(m).requirements, [])
 
+    def test_patient_only_excludes_end_patient_missions(self):
+        # Hitzschlag-style: the patient only appears at the end, so on-site count
+        # is 0 even though the mission COULD have one. Patient-only ignores it
+        # entirely (exact on-site count, no possible-max fallback).
+        m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=1,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=0)
+        self.assertEqual(self.resolver.resolve_patient_only(m).requirements, [])
+
+    def test_lna_added_in_normal_mode_above_five_patients(self):
+        # Point: the LNA/OrgL rule works in EVERY mode, not just patient-only.
+        m = SimpleNamespace(mission_type_id=1, patients_count=6, possible_patients_count=6,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=0)
+        by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("kdow_lna"), 1)
+        self.assertEqual(by.get("firetrucks"), 1)  # normal reqs still present
+
 
 if __name__ == "__main__":
     unittest.main()

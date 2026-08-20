@@ -206,6 +206,44 @@ class RunnerTests(unittest.TestCase):
         asyncio.run(runner.run_cycle())
         self.assertEqual(client.recalled, [10])  # NEF home; transporting RTW kept
 
+    def test_patient_only_recalls_en_route_once_confirmed_clear(self):
+        # An on-scene NEF confirms 0 patients; an en-route (FMS 3) spare RTW at the
+        # same mission is then recalled too (no wasted trip).
+        async def no_sleep(_):
+            return None
+
+        mission = SimpleNamespace(id=5, caption="RD", mission_type_id=1, position=NEAR,
+                                  patients_count=0, vehicle_state=1)
+        nef = SimpleNamespace(id=10, type_id=29, is_available=False, position=BUILDING,
+                              fms=4, target_type="mission", target_id=5)
+        spare = SimpleNamespace(id=12, type_id=28, is_available=False, position=BUILDING,
+                                fms=3, target_type="mission", target_id=5)
+        client = FakeClient([mission], [nef, spare], [b()])
+        runner = DispatchRunner(
+            client, self.resolver, DispatchPolicy(radius_km=40, patient_only=True),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(sorted(client.recalled), [10, 12])
+
+    def test_patient_only_keeps_units_until_someone_on_scene(self):
+        # No unit on scene yet (only en route) -> count may be hidden -> DON'T
+        # recall; units stick around until confirmed.
+        async def no_sleep(_):
+            return None
+
+        mission = SimpleNamespace(id=5, caption="RD", mission_type_id=1, position=NEAR,
+                                  patients_count=0, vehicle_state=1)
+        enroute = SimpleNamespace(id=12, type_id=28, is_available=False, position=BUILDING,
+                                  fms=3, target_type="mission", target_id=5)
+        client = FakeClient([mission], [enroute], [b()])
+        runner = DispatchRunner(
+            client, self.resolver, DispatchPolicy(radius_km=40, patient_only=True),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.recalled, [])
+
     def test_no_recall_without_patient_only(self):
         mission = SimpleNamespace(id=5, caption="RD", mission_type_id=1, position=NEAR,
                                   patients_count=0, vehicle_state=1)

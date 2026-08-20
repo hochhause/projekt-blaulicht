@@ -121,6 +121,14 @@ class MissionRequirementResolver:
         if prisoners:
             counts["police_cars"] = counts.get("police_cars", 0) + prisoners
 
+        # Incident command scales with casualty load and is provided by US —
+        # missions never request LNA/OrgL explicitly. Applies in EVERY mode: an
+        # LNA above 5 patients, an OrgL above 10.
+        if patients > 5:
+            counts["kdow_lna"] = max(counts.get("kdow_lna", 0), 1)
+        if patients > 10:
+            counts["kdow_orgl"] = max(counts.get("kdow_orgl", 0), 1)
+
         for cls, n in counts.items():
             type_ids = self._library.class_map.by_class.get(cls, ())
             if not type_ids:
@@ -137,37 +145,30 @@ class MissionRequirementResolver:
         return resolution
 
     def resolve_patient_only(self, mission) -> Resolution:
-        """Requirements for **patient-only** mode: just the units that get people
-        out — RTWs (``ambulances``), plus any NEF / rescue-helicopter the mission
-        type calls for, plus the incident-command units WE add by patient count
-        (missions don't list them): an LNA above 5 patients, an OrgL above 10.
+        """Requirements for **patient-only** mode: one RTW (``ambulances``) per
+        patient, any NEF / rescue-helicopter the mission calls for, and the
+        incident-command units we add by count — an LNA above 5, an OrgL above 10.
 
-        Returns an empty resolution when there are no patients to move (nobody to
-        transport — the runner's recall pass then frees any idle units).
+        Uses the **exact patients currently on site** (``patients_count``) and
+        deliberately does NOT fall back to the possible-max: a mission whose
+        patient only appears at the END (e.g. Hitzschlag) reads 0 until then and
+        is treated as having no patient at all, so we never park an RTW on it
+        waiting. Empty when there's no one on site to move.
         """
         resolution = Resolution()
         mtid = getattr(mission, "mission_type_id", None)
         mtype = self._catalog.get(mtid) if mtid is not None else None
         if mtype is None:
             return resolution
-
-        count_revealed = getattr(mission, "vehicle_state", 0) >= 1
-        patients = _casualties(
-            getattr(mission, "patients_count", 0),
-            getattr(mission, "possible_patients_count", 0),
-            mtype.possible_patient,
-            count_revealed,
-        )
+        patients = int(getattr(mission, "patients_count", 0) or 0)
         if patients <= 0:
             return resolution
 
         counts: dict[str, int] = {"ambulances": patients}
-        # Keep the Notarzt / rescue-helicopter the mission type itself asks for.
         for cls in ("nef", "rescue_helicopter"):
             n = int(mtype.requirements.get(cls, 0)) + (1 if cls in mtype.chances else 0)
             if n:
                 counts[cls] = n
-        # Incident command scales with patient count — provided by us.
         if patients > 5:
             counts["kdow_lna"] = 1
         if patients > 10:

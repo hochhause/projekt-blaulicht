@@ -430,7 +430,9 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
 
     requirements = _derive_requirements(mission, resolver, text_engine, policy.patient_only) or None
     if not requirements:
-        return "no requirements found"
+        # In patient-only mode an empty derivation just means "no patients here"
+        # (incl. Hitzschlag-style end-patients) — a quiet skip, not a catalogue gap.
+        return "no patients on site" if policy.patient_only else "no requirements found"
 
     # Credit gating already happened during candidate collection.
     requirements = _apply_delta(requirements, assigned, mission.id)

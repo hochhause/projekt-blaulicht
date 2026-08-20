@@ -314,14 +314,21 @@ class DispatchRunner:
         return report
 
     async def _recall_cleared_patient_missions(self, missions, vehicles) -> None:
-        """Patient-only cleanup: once a mission's patients are all carried away,
-        recall the units we still have there that aren't transporting one — they
-        did their job and can go home. A unit at FMS 5 (patient aboard) is left to
-        deliver."""
-        cleared = {
-            m.id for m in missions
-            if getattr(m, "patients_count", 0) == 0 and getattr(m, "vehicle_state", 0) >= 1
+        """Patient-only cleanup: recall units we no longer need at a mission whose
+        patients are all handled.
+
+        A mission counts as cleared only when one of OUR units is actually **on
+        scene** (FMS 4) and sees zero patients — so units stick around until every
+        patient is treated or on the way to a hospital, and we never recall on a
+        still-hidden count. Then every unit of ours there is recalled EXCEPT one
+        with a patient aboard (FMS 5), which is left to reach the hospital."""
+        patients_by_mid = {m.id: int(getattr(m, "patients_count", 0) or 0) for m in missions}
+        on_scene = {
+            getattr(v, "target_id", None)
+            for v in vehicles
+            if getattr(v, "target_type", None) == "mission" and getattr(v, "fms", None) == 4
         }
+        cleared = {mid for mid in on_scene if mid is not None and patients_by_mid.get(mid) == 0}
         if not cleared:
             return
         for v in vehicles:
