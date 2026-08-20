@@ -288,6 +288,25 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(plan.planned, [])
         self.assertTrue(plan.skipped[0][1].startswith("not enough vehicles"))
 
+    def test_plan_records_shortfall_classes(self):
+        # Mission needs fire + police; we only have an LF -> not enough, and the
+        # missing class is tallied on plan.shortfalls (for the dashboard list).
+        m = mission(1, 3, NEAR)
+        plan = plan_dispatches(
+            [m], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.shortfalls.get("police_cars"), 1)
+
+    def test_top_up_partial_also_records_shortfall(self):
+        begun = mission(1, 3, NEAR, vehicle_state=1)
+        plan = plan_dispatches(
+            [begun], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, top_up_mode=True),
+        )
+        self.assertEqual(plan.shortfalls.get("police_cars"), 1)
+
     def test_spread_mission_topped_up_first(self):
         # We're already on mission 1 (assigned an LF) but it still needs police;
         # priority pass tops it up before the batch even with batch_size 1.

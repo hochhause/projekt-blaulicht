@@ -124,8 +124,32 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
                         "message": entry.message,
                     }
                 )
+
+        # LEFT panel: per-account "vehicles we struggle to field" (collapsible).
+        strike_panels = []
+        for account in accounts:
+            rows_sf = store.shortfalls(account.id, limit=10)
+            top = max((it["count"] for it in rows_sf), default=0) or 1
+            strike_panels.append(
+                {
+                    "label": account.label,
+                    "color": color_by_id[account.id],
+                    "total": sum(it["count"] for it in rows_sf),
+                    "rows": [
+                        {"cls": it["vehicle_class"], "count": it["count"],
+                         "pct": round(it["count"] * 100 / top)}
+                        for it in rows_sf
+                    ],
+                }
+            )
+
+        # RIGHT panel: headline stats + a 24h dispatch chart.
+        stats = _dashboard_stats(store, accounts, color_by_id)
+
         return _TEMPLATES.TemplateResponse(
-            request, "dashboard.html", {"rows": rows, "compound": compound}
+            request,
+            "dashboard.html",
+            {"rows": rows, "compound": compound, "strike_panels": strike_panels, "stats": stats},
         )
 
     # -- per-account details / log ----------------------------------------
@@ -309,3 +333,45 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
 def _load_config(store, account_id: int) -> dict:
     raw = store.get_config(account_id)
     return json.loads(raw) if raw else {}
+
+
+def _dashboard_stats(store, accounts, color_by_id) -> dict:
+    """Headline numbers + a 24-bucket dispatch chart for the dashboard's right
+    panel. Credits are ESTIMATED from mission average-credits (no extra polling)."""
+    credits = dispatched = missions = 0
+    per_account = []
+    for account in accounts:
+        t = store.totals(account.id)
+        credits += t.get("credits", 0)
+        dispatched += t.get("dispatched", 0)
+        missions += t.get("missions", 0)
+        per_account.append(
+            {"label": account.label, "color": color_by_id[account.id], "credits": t.get("credits", 0)}
+        )
+    top_credit = max((p["credits"] for p in per_account), default=0) or 1
+    for p in per_account:
+        p["pct"] = round(p["credits"] * 100 / top_credit)
+        p["credits_fmt"] = f"{p['credits']:,}"
+    per_account.sort(key=lambda p: p["credits"], reverse=True)
+
+    series = store.stat_series(None, hours=24)
+    peak = max((s["dispatched"] for s in series), default=0) or 1
+    bars = [
+        {
+            "hour": (s["bucket"] or "")[-2:],
+            "dispatched": s["dispatched"],
+            "credits": s["credits"],
+            "pct": max(3, round(s["dispatched"] * 100 / peak)) if s["dispatched"] else 0,
+        }
+        for s in series
+    ]
+    return {
+        "credits": credits,
+        "credits_fmt": f"{credits:,}",
+        "dispatched": dispatched,
+        "dispatched_fmt": f"{dispatched:,}",
+        "missions": missions,
+        "missions_fmt": f"{missions:,}",
+        "accounts": per_account,
+        "bars": bars,
+    }

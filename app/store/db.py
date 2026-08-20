@@ -41,7 +41,16 @@ CREATE TABLE IF NOT EXISTS stat (
     account_id INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
     ts         TEXT NOT NULL DEFAULT (datetime('now')),
     dispatched INTEGER NOT NULL DEFAULT 0,
-    missions   INTEGER NOT NULL DEFAULT 0
+    missions   INTEGER NOT NULL DEFAULT 0,
+    credits    INTEGER NOT NULL DEFAULT 0
+);
+-- Cumulative tally of how often each vehicle class fell short / struck out per
+-- account (the "vehicles we struggle to field" list on the dashboard).
+CREATE TABLE IF NOT EXISTS shortfall (
+    account_id    INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    vehicle_class TEXT NOT NULL,
+    count         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (account_id, vehicle_class)
 );
 CREATE TABLE IF NOT EXISTS app_setting (
     key   TEXT PRIMARY KEY,
@@ -65,6 +74,18 @@ class Store:
             self._conn.execute("PRAGMA foreign_keys = ON")
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a DB was first created (existing installs
+        already have the tables; ``CREATE IF NOT EXISTS`` won't add new columns)."""
+        with self._lock:
+            cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(stat)")}
+            if "credits" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE stat ADD COLUMN credits INTEGER NOT NULL DEFAULT 0"
+                )
+                self._conn.commit()
 
     def close(self) -> None:
         with self._lock:
@@ -154,19 +175,64 @@ class Store:
         return dict(row) if row else None
 
     # -- stats -------------------------------------------------------------
-    def add_stat(self, account_id: int, dispatched: int, missions: int) -> None:
+    def add_stat(self, account_id: int, dispatched: int, missions: int, credits: int = 0) -> None:
         self._write(
-            "INSERT INTO stat (account_id, dispatched, missions) VALUES (?, ?, ?)",
-            (account_id, dispatched, missions),
+            "INSERT INTO stat (account_id, dispatched, missions, credits) VALUES (?, ?, ?, ?)",
+            (account_id, dispatched, missions, credits),
         )
 
     def totals(self, account_id: int) -> dict:
         row = self._one(
             "SELECT COALESCE(SUM(dispatched), 0) AS dispatched, "
-            "COALESCE(SUM(missions), 0) AS missions FROM stat WHERE account_id = ?",
+            "COALESCE(SUM(missions), 0) AS missions, "
+            "COALESCE(SUM(credits), 0) AS credits FROM stat WHERE account_id = ?",
             (account_id,),
         )
         return dict(row)
+
+    def stat_series(self, account_id: int | None = None, hours: int = 24) -> list[dict]:
+        """Hourly buckets of dispatched + credits, oldest→newest, for the chart.
+
+        *account_id* ``None`` combines all accounts.
+        """
+        if account_id is None:
+            rows = self._all(
+                "SELECT strftime('%Y-%m-%d %H', ts) AS bucket, "
+                "COALESCE(SUM(dispatched), 0) AS dispatched, "
+                "COALESCE(SUM(credits), 0) AS credits "
+                "FROM stat GROUP BY bucket ORDER BY bucket DESC LIMIT ?",
+                (hours,),
+            )
+        else:
+            rows = self._all(
+                "SELECT strftime('%Y-%m-%d %H', ts) AS bucket, "
+                "COALESCE(SUM(dispatched), 0) AS dispatched, "
+                "COALESCE(SUM(credits), 0) AS credits "
+                "FROM stat WHERE account_id = ? GROUP BY bucket ORDER BY bucket DESC LIMIT ?",
+                (account_id, hours),
+            )
+        return [dict(r) for r in reversed(rows)]
+
+    # -- shortfalls (struggling-to-field tally) ----------------------------
+    def add_shortfalls(self, account_id: int, counts) -> None:
+        """Increment the per-class shortfall tally. *counts* maps class → count."""
+        for vehicle_class, n in dict(counts).items():
+            if not n:
+                continue
+            self._write(
+                "INSERT INTO shortfall (account_id, vehicle_class, count) VALUES (?, ?, ?) "
+                "ON CONFLICT(account_id, vehicle_class) DO UPDATE SET "
+                "count = count + excluded.count",
+                (account_id, str(vehicle_class), int(n)),
+            )
+
+    def shortfalls(self, account_id: int, limit: int = 12) -> list[dict]:
+        rows = self._all(
+            "SELECT vehicle_class, count FROM shortfall WHERE account_id = ? "
+            "ORDER BY count DESC, vehicle_class LIMIT ?",
+            (account_id, limit),
+        )
+        return [dict(r) for r in rows]
 
     # -- app settings ------------------------------------------------------
     def set_setting(self, key: str, value: str) -> None:

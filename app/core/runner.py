@@ -55,6 +55,9 @@ class CycleReport:
     plan: DispatchPlan
     dispatched: int = 0
     failed: int = 0
+    # Estimated credits from the missions we fully crewed this cycle (mission
+    # average_credits summed). An estimate — no extra API call — labelled as such.
+    credits_est: int = 0
 
     def summary(self) -> str:
         return (
@@ -262,6 +265,10 @@ class DispatchRunner:
                 await self._timing.sleep(self._timing.dispatch_gap())
             if not mission_plan.satisfied:
                 self._log(f"#{mission_plan.mission_id} still MISSING {mission_plan.shortfall}")
+            # Estimate earned credits: a fully-crewed mission we actually sent to.
+            if sent and mission_plan.satisfied:
+                mm = by_id.get(mission_plan.mission_id)
+                report.credits_est += int(getattr(mm, "average_credits", 0) or 0)
             # Tick the counters per mission, not only at cycle end.
             if self._on_stat is not None and sent:
                 self._on_stat(sent, 1)

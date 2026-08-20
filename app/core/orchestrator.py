@@ -230,7 +230,18 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
             if log_store is not None and error:
                 log_store.append(aid, f"error: {error}")
 
-        return AccountWorker(account_id, runner, timing, on_state=on_state)
+        def on_cycle(aid: int, report) -> None:
+            # Persist per-cycle analytics for the dashboard: which classes we
+            # couldn't field, and estimated credits earned.
+            plan = getattr(report, "plan", None)
+            shortfalls = getattr(plan, "shortfalls", None) if plan is not None else None
+            if shortfalls:
+                store.add_shortfalls(aid, shortfalls)
+            credits = int(getattr(report, "credits_est", 0) or 0)
+            if credits:
+                store.add_stat(aid, 0, 0, credits=credits)
+
+        return AccountWorker(account_id, runner, timing, on_state=on_state, on_cycle=on_cycle)
 
     return factory
 

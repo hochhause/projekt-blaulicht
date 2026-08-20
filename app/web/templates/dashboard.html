@@ -1,5 +1,36 @@
 {% extends "base.html" %}
-{% block head %}<meta http-equiv="refresh" content="5">{% endblock %}
+{% block head %}<meta http-equiv="refresh" content="5">
+<style>
+  .wrap{max-width:1400px}
+  .triptych{display:grid;grid-template-columns:280px minmax(0,1fr) 300px;gap:16px;align-items:start;margin-top:18px}
+  .triptych > .card{margin-top:0}
+  .triptych h2{font-size:15px;margin:0 0 4px}
+  .triptych h3{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:18px 0 8px}
+  @media (max-width:1100px){.triptych{grid-template-columns:1fr}}
+  /* per-account collapsible shortfall blocks */
+  .acctblock{border:1px solid var(--line);border-radius:8px;padding:6px 11px;margin:9px 0;background:var(--ground)}
+  .acctblock summary{cursor:pointer;font-family:var(--mono);font-size:13px;display:flex;align-items:center;gap:8px;list-style:none;padding:3px 0}
+  .acctblock summary::-webkit-details-marker{display:none}
+  .acctblock summary .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+  .acctblock summary .grow{flex:1}
+  /* bar rows shared by shortfalls (amber) + credit breakdown (account colour) */
+  .sfrow{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;margin:5px 0}
+  .sfname{flex:0 0 92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sfbar{flex:1;height:7px;background:var(--raise);border-radius:999px;overflow:hidden}
+  .sfbar i{display:block;height:100%;background:var(--amber);border-radius:999px}
+  .sfcount{flex:0 0 auto;color:var(--muted);min-width:30px;text-align:right}
+  .small{font-size:12px}
+  /* headline numbers + chart */
+  .bignums{display:flex;gap:12px;margin-bottom:4px}
+  .bignum{flex:1;background:var(--ground);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+  .bignum .n{display:block;font-family:var(--mono);font-size:19px;font-weight:700;color:var(--ink)}
+  .bignum .l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+  .chart{display:flex;align-items:flex-end;gap:2px;height:104px;background:var(--ground);border:1px solid var(--line);border-radius:8px;padding:8px}
+  .chart .bar{flex:1;min-width:2px;min-height:2px;border-radius:2px 2px 0 0;
+              background:linear-gradient(to top,var(--blau),#8fbcff)}
+  .chart .bar.zero{background:var(--line)}
+</style>
+{% endblock %}
 {% block nav %}
   <a href="/settings" class="btn" style="text-decoration:none">Settings</a>
   <form method="post" action="/stop-all" class="inline"><button class="danger">Stop all</button></form>
@@ -42,17 +73,83 @@
   </tbody>
 </table>
 
-<div class="card">
-  <h2>Live log — all accounts</h2>
-  <p class="muted" style="margin-top:0;font-size:13px">Newest first, auto-refreshing every 5s. Each line is prefixed by its account. Failures and strike-outs are highlighted.</p>
-  {% if compound %}
-  <div class="logbox">
-    {% for e in compound %}<div class="logline"><span class="t">{{ e.ts }}</span> <span class="acct" style="background:{{ e.color }}22;color:{{ e.color }}">{{ e.label }}</span> <span class="{{ e.cls }}">{{ e.message }}</span></div>
+<div class="triptych">
+
+  <!-- LEFT: vehicles we struggle to field, per account -->
+  <div class="card">
+    <h2>Struggling to field</h2>
+    <p class="muted small" style="margin-top:0">Vehicle classes that left a mission short or struck out — cumulative, per account.</p>
+    {% for p in strike_panels %}
+    <details class="acctblock" {% if loop.first and p.rows %}open{% endif %}>
+      <summary>
+        <span class="dot" style="background:{{ p.color }}"></span>
+        <span class="grow">{{ p.label }}</span>
+        <span class="muted">{{ p.total }}</span>
+      </summary>
+      {% if p.rows %}
+        {% for it in p.rows %}
+        <div class="sfrow" title="{{ it.count }} shortfall(s)">
+          <span class="sfname">{{ it.cls }}</span>
+          <span class="sfbar"><i style="width:{{ it.pct }}%"></i></span>
+          <span class="sfcount">{{ it.count }}</span>
+        </div>
+        {% endfor %}
+      {% else %}
+        <p class="muted small" style="margin:6px 0 2px">No shortfalls yet — fleet keeps up.</p>
+      {% endif %}
+    </details>
+    {% else %}
+    <p class="muted">No accounts yet.</p>
     {% endfor %}
   </div>
-  {% else %}
-  <p class="muted">No activity yet.</p>
-  {% endif %}
+
+  <!-- CENTER: compound live log -->
+  <div class="card">
+    <h2>Live log — all accounts</h2>
+    <p class="muted small" style="margin-top:0">Newest first, auto-refreshing every 5s. Each line is prefixed by its account. Failures and strike-outs are highlighted.</p>
+    {% if compound %}
+    <div class="logbox">
+      {% for e in compound %}<div class="logline"><span class="t">{{ e.ts }}</span> <span class="acct" style="background:{{ e.color }}22;color:{{ e.color }}">{{ e.label }}</span> <span class="{{ e.cls }}">{{ e.message }}</span></div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted">No activity yet.</p>
+    {% endif %}
+  </div>
+
+  <!-- RIGHT: statistics -->
+  <div class="card">
+    <h2>Statistics</h2>
+    <div class="bignums">
+      <div class="bignum"><span class="n">{{ stats.credits_fmt }}</span><span class="l">credits · est.</span></div>
+      <div class="bignum"><span class="n">{{ stats.dispatched_fmt }}</span><span class="l">dispatched</span></div>
+    </div>
+    <p class="muted small" style="margin:2px 0 0">Credits estimated from mission average value — the bot only clears low-value clutter.</p>
+
+    <h3>Dispatches · last 24h</h3>
+    {% if stats.bars %}
+    <div class="chart">
+      {% for b in stats.bars %}
+      <div class="bar {{ 'zero' if not b.dispatched }}" style="height:{{ b.pct }}%"
+           title="{{ b.hour }}:00 — {{ b.dispatched }} sent, ~{{ b.credits }} cr"></div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted small">No dispatches yet.</p>
+    {% endif %}
+
+    <h3>Credits by account · est.</h3>
+    {% for a in stats.accounts %}
+    <div class="sfrow">
+      <span class="sfname" style="color:{{ a.color }}">{{ a.label }}</span>
+      <span class="sfbar"><i style="width:{{ a.pct }}%;background:{{ a.color }}"></i></span>
+      <span class="sfcount">{{ a.credits_fmt }}</span>
+    </div>
+    {% else %}
+    <p class="muted small">—</p>
+    {% endfor %}
+  </div>
+
 </div>
 
 <div class="card">

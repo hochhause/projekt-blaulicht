@@ -100,6 +100,9 @@ class MissionPlan:
 class DispatchPlan:
     planned: list[MissionPlan] = field(default_factory=list)
     skipped: list[tuple[int, str]] = field(default_factory=list)  # (mission_id, reason)
+    # class → how many missions this cycle we couldn't (fully) crew because of it
+    # (short supply or struck out). Feeds the dashboard's "struggling to field" list.
+    shortfalls: dict[str, int] = field(default_factory=dict)
 
     @property
     def total_dispatches(self) -> int:
@@ -234,7 +237,8 @@ def plan_dispatches(
             plan.skipped.append((mission.id, "beyond batch size"))
             continue
         outcome = _plan_one(mission, pool, resolver, policy, assigned, building_pos,
-                            text_engine, strikes, now, allow_partial=policy.top_up_mode)
+                            text_engine, strikes, now, allow_partial=policy.top_up_mode,
+                            shortfalls=plan.shortfalls)
         if isinstance(outcome, str):
             plan.skipped.append((mission.id, outcome))
             continue
@@ -358,6 +362,8 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
                 chosen = list(cov.vehicle_ids)
                 plan.planned.append(MissionPlan(mid, getattr(mission, "caption", ""),
                                                 tuple(chosen), cov.satisfied, dict(cov.shortfall)))
+                if not cov.satisfied:
+                    _note_shortfall(plan.shortfalls, cov.shortfall.keys())
                 batch_used += 1  # useful contribution -> counts to batch
         if not chosen and is_parasite:
             spare = _abundance_vehicle(pool, pos, building_pos)
@@ -372,14 +378,24 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
     return handled, batch_used
 
 
+def _note_shortfall(shortfalls, classes) -> None:
+    """Tally each class that left a mission short/struck this cycle."""
+    if shortfalls is None:
+        return
+    for cls in classes:
+        shortfalls[cls] = shortfalls.get(cls, 0) + 1
+
+
 def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
-              text_engine=None, strikes=None, now=None, allow_partial=False):
+              text_engine=None, strikes=None, now=None, allow_partial=False,
+              shortfalls=None):
     """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string.
 
     *allow_partial* (top-up/symbiont mode) sends whatever useful vehicles we
     have to an already-begun mission and reports the rest, instead of holding
     out for a full crew. It never strikes — the mode is about helping, not
-    giving up on a class.
+    giving up on a class. *shortfalls* (a dict) tallies classes that leave a
+    mission short/struck for the dashboard.
     """
     building_pos = building_pos or {}
 
@@ -392,6 +408,7 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
     if not allow_partial and strikes is not None and now is not None:
         struck = {r.source for r in requirements if strikes.is_struck(r.source, now)}
         if struck:
+            _note_shortfall(shortfalls, struck)
             return f"needs struck-out vehicle(s): {', '.join(sorted(struck))}"
 
     # Credit gating already happened during candidate collection.
@@ -405,6 +422,7 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
     # vehicles on a job that won't complete. A shortfall strikes the missing
     # class(es) so we eventually stop trying missions we can't fill.
     if not coverage.satisfied:
+        _note_shortfall(shortfalls, coverage.shortfall.keys())
         if allow_partial:
             # Top-up: send the useful vehicles we do have, report the shortfall.
             if not coverage.vehicle_ids:

@@ -71,6 +71,41 @@ class StoreTests(unittest.TestCase):
         self.store.set_setting("k", "v")
         self.assertEqual(self.store.get_setting("k"), "v")
 
+    def test_credits_tracked_in_stats(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.store.add_stat(aid, dispatched=3, missions=1, credits=500)
+        self.store.add_stat(aid, dispatched=0, missions=0, credits=250)
+        totals = self.store.totals(aid)
+        self.assertEqual(totals["credits"], 750)
+        self.assertEqual(totals["dispatched"], 3)
+
+    def test_stat_series_buckets_by_hour(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.store.add_stat(aid, dispatched=2, missions=1, credits=100)
+        self.store.add_stat(aid, dispatched=1, missions=1, credits=50)
+        series = self.store.stat_series(None, hours=24)
+        # same hour -> one bucket, summed
+        self.assertEqual(len(series), 1)
+        self.assertEqual(series[0]["dispatched"], 3)
+        self.assertEqual(series[0]["credits"], 150)
+
+    def test_shortfalls_increment_and_rank(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.store.add_shortfalls(aid, {"police_cars": 2, "ambulances": 1})
+        self.store.add_shortfalls(aid, {"police_cars": 3})
+        self.store.add_shortfalls(aid, {"ladders": 0})  # zero is ignored
+        rows = self.store.shortfalls(aid)
+        self.assertEqual(rows[0], {"vehicle_class": "police_cars", "count": 5})
+        classes = {r["vehicle_class"] for r in rows}
+        self.assertEqual(classes, {"police_cars", "ambulances"})
+
+    def test_shortfalls_scoped_per_account(self):
+        a1 = self.store.add_account("a", "a@e.com")
+        a2 = self.store.add_account("b", "b@e.com")
+        self.store.add_shortfalls(a1, {"police_cars": 1})
+        self.assertEqual(len(self.store.shortfalls(a1)), 1)
+        self.assertEqual(self.store.shortfalls(a2), [])
+
 
 if __name__ == "__main__":
     unittest.main()
