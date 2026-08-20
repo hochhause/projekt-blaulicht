@@ -23,9 +23,15 @@ never verified and is intentionally not attempted.
 from __future__ import annotations
 
 import logging
+import re
 
 from .models import Building, Mission, Vehicle
 from .session import GameSession
+
+# The "Anfahren" buttons on a vehicle's page — one per hospital/cell that still
+# has capacity (the game pre-filters by beds, range, price, own/alliance per the
+# vehicle's in-game transport settings). We just pick from what it offers.
+_APPROACH = re.compile(r'href="(/vehicles/\d+/(?:patient|gefangener)/\d+)"')
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +193,34 @@ class GameClient:
             )
         except Exception:  # noqa: BLE001 — caller decides how to react
             logger.exception("dispatch %s <- vehicle %s failed", mission_id, vehicle_id)
+            return False
+        return True
+
+    async def transport_targets(self, vehicle_id: int) -> list[str]:
+        """Hospitals/cells this vehicle can currently unload to, as action URLs.
+
+        Reads the vehicle's page and returns the ``/vehicles/{id}/patient|
+        gefangener/{building}`` links behind its "Anfahren" buttons — already
+        limited to targets with free capacity.
+        """
+        try:
+            page = await self._s.get_text(f"/vehicles/{vehicle_id}")
+        except Exception:  # noqa: BLE001
+            return []
+        # De-dup preserving order (page can repeat a link).
+        seen, out = set(), []
+        for href in _APPROACH.findall(page):
+            if href not in seen:
+                seen.add(href)
+                out.append(href)
+        return out
+
+    async def send_transport(self, action_url: str) -> bool:
+        """Perform one transport by following an ``Anfahren`` link."""
+        try:
+            await self._s.get_text(action_url)
+        except Exception:  # noqa: BLE001
+            logger.exception("transport %s failed", action_url)
             return False
         return True
 

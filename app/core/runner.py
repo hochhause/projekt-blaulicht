@@ -25,13 +25,6 @@ from ..domain.dispatch import (
     assigned_from_vehicles,
     plan_dispatches,
 )
-from ..domain.transport import (
-    TransportKind,
-    TransportPolicy,
-    TransportRequest,
-    TransportTarget,
-    route_transports,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +44,8 @@ class GameClientLike(Protocol):
     async def fetch_vehicles(self, cap: int = 0) -> list: ...
     async def fetch_buildings(self) -> list: ...
     async def dispatch(self, mission_id: int, vehicle_id: int) -> bool: ...
-    async def transport_patient(self, vehicle_id: int, building_id: int) -> bool: ...
-    async def transport_prisoner(self, vehicle_id: int, building_id: int) -> bool: ...
+    async def transport_targets(self, vehicle_id: int) -> list[str]: ...
+    async def send_transport(self, action_url: str) -> bool: ...
 
 
 @dataclass
@@ -92,18 +85,6 @@ class CycleReport:
 
 
 @dataclass
-class TransportReport:
-    """Outcome of a transport-handling pass."""
-
-    routed: int = 0
-    failed: int = 0
-    unroutable: int = 0  # no suitable target — needs release (capture-pending)
-
-    def summary(self) -> str:
-        return f"{self.routed} routed, {self.failed} failed, {self.unroutable} unroutable"
-
-
-@dataclass
 class RunnerTiming:
     """Timing between actions. Injectable so tests run instantly."""
 
@@ -134,6 +115,8 @@ class DispatchRunner:
         text_engine=None,
         strikes=None,
         vehicle_cap: int = 0,
+        transport_enabled: bool = True,
+        transport_only: bool = False,
     ) -> None:
         self._client = client
         self._resolver = resolver
@@ -141,6 +124,8 @@ class DispatchRunner:
         self._text_engine = text_engine
         self._strikes = strikes
         self._vehicle_cap = vehicle_cap
+        self._transport_enabled = transport_enabled
+        self._transport_only = transport_only
         # Buildings change rarely; the runner may be handed a cached list to
         # avoid re-fetching them every cycle.
         self._buildings = buildings_cache
@@ -166,10 +151,42 @@ class DispatchRunner:
             self._buildings = await self._client.fetch_buildings()
         return self._buildings
 
+    async def _handle_transports(self, vehicles) -> int:
+        """Unload patients/prisoners from vehicles requesting it (FMS 5).
+
+        Runs before dispatch each cycle. Picks the game's first offered
+        hospital/cell (already filtered to free capacity + the vehicle's own
+        in-game distance/price/own-alliance settings).
+        """
+        pending = [v for v in vehicles if getattr(v, "fms", None) == 5]
+        if not pending:
+            return 0
+        self._log(f"transport: {len(pending)} vehicle(s) awaiting a bed/cell")
+        done = 0
+        for v in pending:
+            name = _vehicle_name(v, v.id)
+            targets = await self._client.transport_targets(v.id)
+            if not targets:
+                self._log(f"  no free target for {name} — all full / out of range")
+                continue
+            if await self._client.send_transport(targets[0]):
+                done += 1
+                self._log(f"  transported {name}")
+            await self._timing.sleep(self._timing.dispatch_gap())
+        return done
+
     async def run_cycle(self) -> CycleReport:
-        """Run exactly one poll → plan → dispatch cycle."""
-        missions = await self._client.fetch_missions()
+        """Run one cycle: transport (Sprechwünsche) first, then poll → plan →
+        dispatch (skipped in transport-only mode)."""
         vehicles = await self._client.fetch_vehicles(self._vehicle_cap)
+
+        if self._transport_enabled:
+            await self._handle_transports(vehicles)
+        if self._transport_only:
+            self._log("transport-only mode: dispatch skipped")
+            return CycleReport(plan=DispatchPlan())
+
+        missions = await self._client.fetch_missions()
         buildings = await self._buildings_for_cycle()
 
         idle = sum(1 for v in vehicles if getattr(v, "is_available", False))
@@ -250,35 +267,4 @@ class DispatchRunner:
                 self._on_stat(sent, 1)
 
         self._log(f"cycle done: {report.summary()}")
-        return report
-
-    async def run_transports(
-        self,
-        requests: list[TransportRequest],
-        targets: list[TransportTarget],
-        policy: TransportPolicy,
-    ) -> TransportReport:
-        """Route and perform a batch of transports.
-
-        Detecting *requests* and building *targets* from live data is the
-        provisional read-layer step; given them, this routes each to the best
-        destination (consuming capacity) and calls the confirmed transport GET.
-        Requests with no suitable target are counted ``unroutable`` — a release
-        is the fallback, which is a capture-pending write.
-        """
-        report = TransportReport()
-        for request, decision in route_transports(requests, targets, policy):
-            if decision is None:
-                report.unroutable += 1
-                continue
-            if request.kind is TransportKind.PATIENT:
-                ok = await self._client.transport_patient(request.vehicle_id, decision.target_building_id)
-            else:
-                ok = await self._client.transport_prisoner(request.vehicle_id, decision.target_building_id)
-            if ok:
-                report.routed += 1
-            else:
-                report.failed += 1
-            await self._timing.sleep(self._timing.between_dispatches)
-        logger.info("transports done: %s", report.summary())
         return report

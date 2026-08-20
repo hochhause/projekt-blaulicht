@@ -44,11 +44,15 @@ class AccountRunner:
         on_stat=None,
         timing: RunnerTiming | None = None,
         vehicle_cap: int = 0,
+        transport_enabled: bool = True,
+        transport_only: bool = False,
     ) -> None:
         self._base_url = base_url
         self._user_agent = user_agent
         self._email = email
         self._vehicle_cap = vehicle_cap
+        self._transport_enabled = transport_enabled
+        self._transport_only = transport_only
         # A callable returning the plaintext password — decryption is deferred
         # to connect time so a bad key surfaces as an account error, not a
         # startup crash.
@@ -93,6 +97,7 @@ class AccountRunner:
             client, resolver, self._policy,
             on_log=self._on_log, on_stat=self._on_stat, timing=self._timing,
             text_engine=text_engine, strikes=self._strikes, vehicle_cap=self._vehicle_cap,
+            transport_enabled=self._transport_enabled, transport_only=self._transport_only,
         )
         self._log(f"connected — {len(resolver.catalog)} mission types loaded")
 

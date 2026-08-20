@@ -59,8 +59,10 @@
   <div class="card">
     <h2>Transport</h2>
     <div class="grid">
-      <div class="field"><label>Enabled</label>
+      <div class="field"><label>Enabled (handle Sprechwünsche each cycle)</label>
         <select name="transport_enabled"><option value="1" {{ 'selected' if cfg.transport_enabled else '' }}>yes</option><option value="" {{ '' if cfg.transport_enabled else 'selected' }}>no</option></select></div>
+      <div class="field"><label>Transport-only mode (no dispatching)</label>
+        <select name="transport_only"><option value="1" {{ 'selected' if cfg.transport_only else '' }}>yes</option><option value="" {{ '' if cfg.transport_only else 'selected' }}>no</option></select></div>
       <div class="field"><label>Max distance (km)</label><input name="transport_max_distance_km" type="number" step="1" value="{{ cfg.transport_max_distance_km }}"></div>
       <div class="field"><label>Max alliance tax % (blank = ignore)</label>
         <input name="transport_max_tax" type="number" step="1" value="{{ cfg.transport_max_tax if cfg.transport_max_tax is not none else '' }}"></div>

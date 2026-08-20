@@ -40,6 +40,7 @@ class AccountConfig:
     parasite_mode: bool = False
     # transport
     transport_enabled: bool = True
+    transport_only: bool = False
     transport_max_distance_km: float = 100.0
     transport_max_tax: int | None = None
     transport_prefer_own: bool = True

@@ -39,12 +39,12 @@ class FakeClient:
         self.dispatched.append((mission_id, vehicle_id))
         return True
 
-    async def transport_patient(self, vehicle_id, building_id):
-        self.transports.append(("patient", vehicle_id, building_id))
-        return True
+    async def transport_targets(self, vehicle_id):
+        # one hospital offered per vehicle
+        return [f"/vehicles/{vehicle_id}/patient/900{vehicle_id}"]
 
-    async def transport_prisoner(self, vehicle_id, building_id):
-        self.transports.append(("prisoner", vehicle_id, building_id))
+    async def send_transport(self, action_url):
+        self.transports.append(action_url)
         return True
 
 
@@ -139,22 +139,17 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(report.failed, 1)
         self.assertEqual(report.dispatched, 0)
 
-    def test_run_transports_calls_client(self):
-        from app.domain.transport import (
-            TransportKind, TransportPolicy, TransportRequest, TransportTarget,
-        )
+    def test_transport_phase_sends_fms5_vehicles(self):
+        # A vehicle in FMS 5 (has a patient) gets its first offered target hit.
+        v5 = SimpleNamespace(id=77, type_id=28, is_available=False, position=BUILDING, fms=5)
+        client = FakeClient([], [v5], [b()])
+        asyncio.run(self._runner(client).run_cycle())
+        self.assertEqual(client.transports, ["/vehicles/77/patient/90077"])
 
-        client = FakeClient([], [], [b()])
-        runner = self._runner(client)
-        requests = [
-            TransportRequest(500, TransportKind.PATIENT, NEAR),
-            TransportRequest(501, TransportKind.PRISONER, NEAR),
-        ]
-        targets = [TransportTarget(9, NEAR, free_capacity=5)]
-        report = asyncio.run(runner.run_transports(requests, targets, TransportPolicy()))
-        self.assertEqual(report.routed, 2)
-        self.assertIn(("patient", 500, 9), client.transports)
-        self.assertIn(("prisoner", 501, 9), client.transports)
+    def test_no_transport_when_no_fms5(self):
+        client = FakeClient([], [v(100, 0)], [b()])  # v() has no fms attr
+        asyncio.run(self._runner(client).run_cycle())
+        self.assertEqual(client.transports, [])
 
     def test_buildings_cache_avoids_refetch(self):
         calls = {"n": 0}

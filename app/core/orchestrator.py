@@ -220,6 +220,8 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
             on_log=log,
             on_stat=stat,
             vehicle_cap=config.max_vehicles,
+            transport_enabled=config.transport_enabled,
+            transport_only=config.transport_only,
         )
         timing = WorkerTiming(poll_seconds=config.poll_seconds, jitter_seconds=config.jitter_seconds)
 
