@@ -184,6 +184,9 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
     def factory(account_id: int) -> AccountWorker:
         account = store.get_account(account_id)
         config = AccountConfig.from_dict(_load_config(store, account_id))
+        # A (re)start begins a fresh run: reset the per-run "struggling to field"
+        # tally, mirroring the fresh StrikeTracker created below.
+        store.clear_shortfalls(account_id)
 
         def password_provider() -> str:
             # Decrypt lazily at connect time. A changed BOT_SECRET_KEY (or a

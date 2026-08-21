@@ -9,6 +9,7 @@ from app.domain.dispatch import (
     DispatchOrder,
     DispatchPolicy,
     MissionSource,
+    ModeScope,
     assigned_from_vehicles,
     plan_dispatches,
 )
@@ -212,7 +213,7 @@ class DispatchPlannerTests(unittest.TestCase):
         para = mission(1, 3, FAR, is_alliance=True, average_credits=99999, vehicle_state=1)
         plan = plan_dispatches(
             [para], [vehicle(100, LF)], [building()], self.resolver,
-            DispatchPolicy(radius_km=40, parasite_mode=True, own_credit_max=1000),
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE, own_credit_max=1000),
         )
         # Useful (LF covers firetrucks part) OR leech — either way it's actioned,
         # despite being far and over the cash cap.
@@ -223,7 +224,7 @@ class DispatchPlannerTests(unittest.TestCase):
         para = mission(1, 3, FAR, is_alliance=True, vehicle_state=1)
         plan = plan_dispatches(
             [para], [vehicle(100, LF)], [building()], self.resolver,
-            DispatchPolicy(radius_km=40, parasite_mode=False),
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.OFF),
         )
         self.assertEqual(plan.planned, [])  # out of range, not leeched
 
@@ -232,10 +233,40 @@ class DispatchPlannerTests(unittest.TestCase):
         para = mission(1, 3, NEAR, is_alliance=True, vehicle_state=0)
         plan = plan_dispatches(
             [para], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
-            DispatchPolicy(radius_km=40, parasite_mode=True, mission_source=MissionSource.OWN),
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE, mission_source=MissionSource.OWN),
         )
         # mission_source OWN filters it out; parasite didn't grab it (vehicle_state 0)
         self.assertEqual(plan.planned, [])
+
+    # -- per-mode scoping -----------------------------------------------------
+    def test_mode_scope_lets_normal_own_and_patient_alliance_coexist(self):
+        # Normal dispatch own-only, patient-only on alliance: an own fire mission
+        # gets a full firetruck; an alliance fire mission with a patient gets an
+        # RTW (patient-only), NOT a firetruck.
+        own = mission(1, 1, NEAR, is_alliance=False)
+        ally = mission(2, 1, NEAR2, is_alliance=True)
+        ally.patients_count = 1
+        policy = DispatchPolicy(radius_km=40, mission_source=MissionSource.OWN,
+                                patient_scope=ModeScope.ALLIANCE)
+        plan = plan_dispatches(
+            [own, ally], [vehicle(100, LF), vehicle(101, 28)],  # LF + RTW(28)
+            [building()], self.resolver, policy,
+        )
+        by = {mp.mission_id: set(mp.vehicle_ids) for mp in plan.planned}
+        self.assertEqual(by.get(1), {100})   # own -> LF (normal)
+        self.assertEqual(by.get(2), {101})   # alliance -> RTW (patient-only)
+
+    def test_mode_scope_alliance_leaves_own_out_of_scope(self):
+        # patient_scope=alliance and normal off for own -> an own mission nobody
+        # covers is skipped "out of scope".
+        own = mission(1, 1, NEAR, is_alliance=False)
+        plan = plan_dispatches(
+            [own], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, mission_source=MissionSource.ALLIANCE,
+                           patient_scope=ModeScope.ALLIANCE),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "out of scope")])
 
     # -- top-up / symbiont mode ----------------------------------------------
     def test_top_up_skips_fresh_mission(self):
@@ -243,10 +274,10 @@ class DispatchPlannerTests(unittest.TestCase):
         fresh = mission(1, 1, NEAR, vehicle_state=0)
         plan = plan_dispatches(
             [fresh], [vehicle(100, LF)], [building()], self.resolver,
-            DispatchPolicy(radius_km=40, top_up_mode=True),
+            DispatchPolicy(radius_km=40, top_up_scope=ModeScope.BOTH),
         )
         self.assertEqual(plan.planned, [])
-        self.assertEqual(plan.skipped, [(1, "not begun (top-up mode)")])
+        self.assertEqual(plan.skipped, [(1, "not begun (top-up)")])
 
     def test_top_up_partial_fills_begun_mission(self):
         # A begun mission (vehicle_state=1) needs fire + police; we only have an
@@ -255,7 +286,7 @@ class DispatchPlannerTests(unittest.TestCase):
         begun = mission(1, 3, NEAR, vehicle_state=1)
         plan = plan_dispatches(
             [begun], [vehicle(100, LF)], [building()], self.resolver,
-            DispatchPolicy(radius_km=40, top_up_mode=True),
+            DispatchPolicy(radius_km=40, top_up_scope=ModeScope.BOTH),
         )
         self.assertEqual(len(plan.planned), 1)
         mp = plan.planned[0]
@@ -272,7 +303,7 @@ class DispatchPlannerTests(unittest.TestCase):
         begun = mission(1, 3, NEAR, vehicle_state=1)
         plan_dispatches(
             [begun], [vehicle(100, LF)], [building()], self.resolver,
-            DispatchPolicy(radius_km=40, top_up_mode=True),
+            DispatchPolicy(radius_km=40, top_up_scope=ModeScope.BOTH),
             strikes=strikes, now=1000.0,
         )
         self.assertEqual(strikes.struck_classes(1000.0), set())
@@ -283,7 +314,7 @@ class DispatchPlannerTests(unittest.TestCase):
         begun = mission(1, 3, NEAR, vehicle_state=1)
         plan = plan_dispatches(
             [begun], [vehicle(100, LF)], [building()], self.resolver,
-            DispatchPolicy(radius_km=40, top_up_mode=False),
+            DispatchPolicy(radius_km=40, top_up_scope=ModeScope.OFF),
         )
         self.assertEqual(plan.planned, [])
         self.assertTrue(plan.skipped[0][1].startswith("not enough vehicles"))
@@ -303,7 +334,7 @@ class DispatchPlannerTests(unittest.TestCase):
         begun = mission(1, 3, NEAR, vehicle_state=1)
         plan = plan_dispatches(
             [begun], [vehicle(100, LF)], [building()], self.resolver,
-            DispatchPolicy(radius_km=40, top_up_mode=True),
+            DispatchPolicy(radius_km=40, top_up_scope=ModeScope.BOTH),
         )
         self.assertEqual(plan.shortfalls.get("police_cars"), 1)
 
@@ -397,7 +428,7 @@ class DispatchPlannerTests(unittest.TestCase):
             self.resolver, DispatchPolicy(radius_km=40, mission_source=MissionSource.OWN),
         )
         self.assertEqual(plan.planned, [])
-        self.assertEqual(plan.skipped, [(1, "own-only filter")])
+        self.assertEqual(plan.skipped, [(1, "out of scope")])
 
     def test_alliance_only_filter_skips_own(self):
         plan = plan_dispatches(
@@ -405,7 +436,7 @@ class DispatchPlannerTests(unittest.TestCase):
             self.resolver, DispatchPolicy(radius_km=40, mission_source=MissionSource.ALLIANCE),
         )
         self.assertEqual(plan.planned, [])
-        self.assertEqual(plan.skipped, [(1, "alliance-only filter")])
+        self.assertEqual(plan.skipped, [(1, "out of scope")])
 
     def test_order_oldest_first(self):
         missions = [

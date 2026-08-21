@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from ..domain.dispatch import DispatchOrder, DispatchPolicy, MissionSource
+from ..domain.dispatch import DispatchOrder, DispatchPolicy, MissionSource, ModeScope
 from ..domain.transport import TransportPolicy
 
 
@@ -37,14 +37,12 @@ class AccountConfig:
     allowed_categories: tuple[str, ...] = ()
     mission_source: str = MissionSource.BOTH.value
     alliance_radius_km: float | None = None
-    parasite_mode: bool = False
-    # Top-up (symbiont) mode: only reinforce missions already begun (own or
-    # shared), sending what useful vehicles we have and reporting the rest.
-    top_up_mode: bool = False
+    # Special modes, each scoped independently: off / own / alliance / both.
+    parasite_scope: str = ModeScope.OFF.value
+    top_up_scope: str = ModeScope.OFF.value
+    patient_scope: str = ModeScope.OFF.value
     # Hilferuf: share own missions we can't crew to the alliance.
     hilferuf: bool = False
-    # Patient-only: dispatch only patient-clearing units; recall idle ones after.
-    patient_only: bool = False
     # transport
     transport_enabled: bool = True
     transport_only: bool = False
@@ -62,6 +60,13 @@ class AccountConfig:
             source = MissionSource(self.mission_source)
         except ValueError:
             source = MissionSource.BOTH
+
+        def _scope(value) -> ModeScope:
+            try:
+                return ModeScope(value)
+            except ValueError:
+                return ModeScope.OFF
+
         return DispatchPolicy(
             radius_km=self.radius_km,
             own_credit_min=self.own_credit_min,
@@ -76,10 +81,10 @@ class AccountConfig:
             allowed_categories=frozenset(self.allowed_categories),
             mission_source=source,
             alliance_radius_km=self.alliance_radius_km,
-            parasite_mode=self.parasite_mode,
-            top_up_mode=self.top_up_mode,
+            parasite_scope=_scope(self.parasite_scope),
+            top_up_scope=_scope(self.top_up_scope),
+            patient_scope=_scope(self.patient_scope),
             hilferuf=self.hilferuf,
-            patient_only=self.patient_only,
         )
 
     def transport_policy(self) -> TransportPolicy:
@@ -99,6 +104,15 @@ class AccountConfig:
         for anything missing (so old configs survive new fields)."""
         if not d:
             return cls()
+        d = dict(d)
+        # Migrate legacy boolean modes to scopes so existing accounts keep working:
+        # parasite was alliance-only; top-up / patient-only applied to both sources.
+        if "parasite_scope" not in d and d.get("parasite_mode"):
+            d["parasite_scope"] = ModeScope.ALLIANCE.value
+        if "top_up_scope" not in d and d.get("top_up_mode"):
+            d["top_up_scope"] = ModeScope.BOTH.value
+        if "patient_scope" not in d and d.get("patient_only"):
+            d["patient_scope"] = ModeScope.BOTH.value
         known = {f for f in cls.__dataclass_fields__}
         values = {k: v for k, v in d.items() if k in known}
         if "allowed_categories" in values:  # JSON stores a list; keep it a tuple

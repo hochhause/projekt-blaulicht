@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from app.core.runner import DispatchRunner, RunnerTiming
 from app.domain.assets import AssetLibrary
 from app.domain.catalog import MissionCatalog
-from app.domain.dispatch import DispatchPolicy
+from app.domain.dispatch import DispatchPolicy, ModeScope
 from app.domain.resolver import MissionRequirementResolver
 
 BASE = Path(__file__).resolve().parent
@@ -200,7 +200,7 @@ class RunnerTests(unittest.TestCase):
                               fms=5, target_type="mission", target_id=5)
         client = FakeClient([mission], [nef, rtw], [b()])
         runner = DispatchRunner(
-            client, self.resolver, DispatchPolicy(radius_km=40, patient_only=True),
+            client, self.resolver, DispatchPolicy(radius_km=40, patient_scope=ModeScope.BOTH),
             timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
         )
         asyncio.run(runner.run_cycle())
@@ -220,7 +220,7 @@ class RunnerTests(unittest.TestCase):
                                 fms=3, target_type="mission", target_id=5)
         client = FakeClient([mission], [nef, spare], [b()])
         runner = DispatchRunner(
-            client, self.resolver, DispatchPolicy(radius_km=40, patient_only=True),
+            client, self.resolver, DispatchPolicy(radius_km=40, patient_scope=ModeScope.BOTH),
             timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
         )
         asyncio.run(runner.run_cycle())
@@ -238,7 +238,7 @@ class RunnerTests(unittest.TestCase):
                                   fms=3, target_type="mission", target_id=5)
         client = FakeClient([mission], [enroute], [b()])
         runner = DispatchRunner(
-            client, self.resolver, DispatchPolicy(radius_km=40, patient_only=True),
+            client, self.resolver, DispatchPolicy(radius_km=40, patient_scope=ModeScope.BOTH),
             timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
         )
         asyncio.run(runner.run_cycle())

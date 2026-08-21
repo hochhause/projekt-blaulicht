@@ -234,6 +234,11 @@ class Store:
         )
         return [dict(r) for r in rows]
 
+    def clear_shortfalls(self, account_id: int) -> None:
+        """Wipe the shortfall tally — called on account (re)start so the
+        'struggling to field' list reflects the current run, like strikes."""
+        self._write("DELETE FROM shortfall WHERE account_id = ?", (account_id,))
+
     # -- app settings ------------------------------------------------------
     def set_setting(self, key: str, value: str) -> None:
         self._write(

@@ -24,6 +24,25 @@ class AccountConfigTests(unittest.TestCase):
     def test_from_none(self):
         self.assertEqual(AccountConfig.from_dict(None), AccountConfig())
 
+    def test_legacy_mode_booleans_migrate_to_scopes(self):
+        # Old stored configs used booleans; they must map to the equivalent scope
+        # so existing accounts keep behaving (parasite was alliance-only).
+        cfg = AccountConfig.from_dict(
+            {"parasite_mode": True, "top_up_mode": True, "patient_only": True}
+        )
+        self.assertEqual(cfg.parasite_scope, "alliance")
+        self.assertEqual(cfg.top_up_scope, "both")
+        self.assertEqual(cfg.patient_scope, "both")
+        dp = cfg.dispatch_policy()
+        self.assertEqual(dp.parasite_scope.value, "alliance")
+        self.assertEqual(dp.patient_scope.value, "both")
+
+    def test_mode_scopes_roundtrip(self):
+        cfg = AccountConfig(parasite_scope="alliance", patient_scope="own")
+        again = AccountConfig.from_dict(cfg.to_dict())
+        self.assertEqual(again.parasite_scope, "alliance")
+        self.assertEqual(again.patient_scope, "own")
+
     def test_policies_reflect_config(self):
         cfg = AccountConfig(
             radius_km=15, own_credit_min=200, alliance_credit_max=9000,

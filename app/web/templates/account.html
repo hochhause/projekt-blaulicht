@@ -56,16 +56,26 @@
 
   <div class="card">
     <h2>Modes</h2>
-    <p class="err" style="margin-top:0">⚠ These change the whole strategy. Don't combine them carelessly — they may not be
-       compatible with each other (e.g. patient-only vs parasite/top-up), and compatibility isn't enforced yet.
-       Prefer running <b>one</b> at a time. Transport-only lives under Transport below.</p>
+    <p class="err" style="margin-top:0">⚠ These change the whole strategy. Each is scoped independently — <b>off</b>, your <b>own</b>
+       missions, <b>alliance</b> missions, or <b>both</b> — so you can e.g. keep normal dispatch (Mission source
+       above) to own only while running a mode on alliance missions. Don't combine them on the SAME missions
+       carelessly; when several cover one mission, precedence is patient &gt; top-up &gt; normal. Compatibility
+       isn't otherwise enforced yet. Transport-only lives under Transport below.</p>
+    {% macro scope_select(name, value) %}
+      <select name="{{ name }}">
+        <option value="off" {{ 'selected' if value == 'off' else '' }}>off</option>
+        <option value="own" {{ 'selected' if value == 'own' else '' }}>own only</option>
+        <option value="alliance" {{ 'selected' if value == 'alliance' else '' }}>alliance only</option>
+        <option value="both" {{ 'selected' if value == 'both' else '' }}>both</option>
+      </select>
+    {% endmacro %}
     <div class="grid">
       <div class="field"><label>Parasite (leech shared/event missions for participation)</label>
-        <select name="parasite_mode"><option value="1" {{ 'selected' if cfg.parasite_mode else '' }}>on</option><option value="" {{ '' if cfg.parasite_mode else 'selected' }}>off</option></select></div>
+        {{ scope_select('parasite_scope', cfg.parasite_scope) }}</div>
       <div class="field"><label>Top-up / symbiont (only reinforce already-begun missions)</label>
-        <select name="top_up_mode"><option value="1" {{ 'selected' if cfg.top_up_mode else '' }}>on</option><option value="" {{ '' if cfg.top_up_mode else 'selected' }}>off</option></select></div>
+        {{ scope_select('top_up_scope', cfg.top_up_scope) }}</div>
       <div class="field"><label>Patient-only (only RTW/NEF/RTH + LNA&gt;5/OrgL&gt;10; recall idle units when cleared)</label>
-        <select name="patient_only"><option value="1" {{ 'selected' if cfg.patient_only else '' }}>on</option><option value="" {{ '' if cfg.patient_only else 'selected' }}>off</option></select></div>
+        {{ scope_select('patient_scope', cfg.patient_scope) }}</div>
     </div>
     <div class="field" style="margin-top:14px"><label>Hilferuf — add-on: share own missions we can't crew to the alliance (safe with any mode)</label>
       <select name="hilferuf"><option value="1" {{ 'selected' if cfg.hilferuf else '' }}>on</option><option value="" {{ '' if cfg.hilferuf else 'selected' }}>off</option></select></div>

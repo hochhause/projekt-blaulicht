@@ -51,6 +51,38 @@ class MissionSource(str, Enum):
     ALLIANCE = "alliance"
 
 
+class ModeScope(str, Enum):
+    """Which missions a special mode (parasite / top-up / patient-only) applies
+    to, independently of the normal-dispatch source. Lets you e.g. run normal
+    dispatch on own missions only while a mode runs on alliance missions."""
+
+    OFF = "off"
+    OWN = "own"
+    ALLIANCE = "alliance"
+    BOTH = "both"
+
+
+def _scope_covers(scope, is_alliance: bool) -> bool:
+    """True if a :class:`ModeScope` value covers a mission of this source."""
+    scope = getattr(scope, "value", scope)
+    if scope == ModeScope.BOTH.value:
+        return True
+    if scope == ModeScope.OWN.value:
+        return not is_alliance
+    if scope == ModeScope.ALLIANCE.value:
+        return is_alliance
+    return False  # "off" / unknown
+
+
+def _source_covers(source: "MissionSource", is_alliance: bool) -> bool:
+    """True if the normal-dispatch mission_source covers this mission."""
+    if source is MissionSource.OWN:
+        return not is_alliance
+    if source is MissionSource.ALLIANCE:
+        return is_alliance
+    return True  # BOTH
+
+
 @dataclass(frozen=True)
 class DispatchPolicy:
     """Per-account dispatch settings (a slice of the account config).
@@ -73,23 +105,25 @@ class DispatchPolicy:
     # Only work missions in these game categories (fire, police, …). Empty = all.
     allowed_categories: frozenset[str] = frozenset()
     # Which missions to work, and an optional separate radius for alliance ones.
-    mission_source: MissionSource = MissionSource.BOTH
+    mission_source: MissionSource = MissionSource.BOTH  # normal full dispatch
     alliance_radius_km: float | None = None
-    # Parasite mode: leech shared/event missions others are already on — contribute
-    # something useful if a role is missing, else send a spare vehicle just to
-    # claim a participation share. Skips cash/source/category filters + batch/order.
-    parasite_mode: bool = False
-    # Top-up (symbiont) mode: only work missions ALREADY begun (vehicle_state>=1),
-    # own or shared; send the useful vehicles we have (partial ok) and report the
-    # rest. No leeching, no fresh missions.
-    top_up_mode: bool = False
+    # Special modes, each SCOPED independently (off / own / alliance / both) so you
+    # can e.g. keep normal dispatch own-only while a mode runs on alliance missions.
+    # When several cover the same mission, precedence is patient > top-up > normal.
+    #
+    # Parasite: leech missions others are already on — contribute a useful vehicle
+    # if a role is missing, else a spare just to claim a participation share
+    # (priority pass; bypasses cash/category filters + batch/order).
+    parasite_scope: ModeScope = ModeScope.OFF
+    # Top-up (symbiont): only reinforce ALREADY-begun missions (vehicle_state>=1),
+    # sending the useful vehicles we have (partial ok). No fresh missions.
+    top_up_scope: ModeScope = ModeScope.OFF
+    # Patient-only: dispatch ONLY the units that clear patients (RTW/NEF/RTH + an
+    # LNA >5 patients, OrgL >10); the runner recalls idle units once patients gone.
+    patient_scope: ModeScope = ModeScope.OFF
     # Hilferuf ("call for help"): when we can't crew one of our OWN missions,
-    # share it to the alliance so members can help. Runner-level behaviour.
+    # share it to the alliance so members can help. Runner-level add-on.
     hilferuf: bool = False
-    # Patient-only mode: dispatch ONLY the units that clear patients (RTW/NEF/RTH
-    # + an LNA >5 patients, OrgL >10); the runner recalls idle units once a
-    # mission's patients are all gone.
-    patient_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -180,23 +214,27 @@ def plan_dispatches(
         plan, missions, pool, resolver, policy, assigned or {}, building_pos, text_engine
     )
 
-    # Gather in-range, category-allowed missions with their distance and the
-    # mission type's average credits (used for ordering).
-    candidates: list[tuple[float, int, object]] = []  # (distance, credits, mission)
+    # Gather in-range, category-allowed missions with their distance, the mission
+    # type's average credits (for ordering) and the governing mode.
+    candidates: list[tuple[float, int, object, str]] = []  # (distance, credits, mission, mode)
     for mission in missions:
         if mission.id in handled:
             continue  # already actioned in the priority pass
         is_alliance = getattr(mission, "is_alliance", False)
-        # Top-up (symbiont) mode: only help missions someone has already begun.
-        if policy.top_up_mode and getattr(mission, "vehicle_state", 0) < 1:
-            plan.skipped.append((mission.id, "not begun (top-up mode)"))
+        # Resolve which treatment this mission gets from the per-mode scopes.
+        # Precedence when several cover it: patient > top-up > normal.
+        if _scope_covers(policy.patient_scope, is_alliance):
+            governing = "patient"
+        elif _scope_covers(policy.top_up_scope, is_alliance):
+            governing = "topup"
+        elif _source_covers(policy.mission_source, is_alliance):
+            governing = "normal"
+        else:
+            plan.skipped.append((mission.id, "out of scope"))
             continue
-        # Source filter: own only / alliance only / both.
-        if policy.mission_source is MissionSource.OWN and is_alliance:
-            plan.skipped.append((mission.id, "own-only filter"))
-            continue
-        if policy.mission_source is MissionSource.ALLIANCE and not is_alliance:
-            plan.skipped.append((mission.id, "alliance-only filter"))
+        # Top-up only reinforces missions someone has already begun.
+        if governing == "topup" and getattr(mission, "vehicle_state", 0) < 1:
+            plan.skipped.append((mission.id, "not begun (top-up)"))
             continue
         pos = getattr(mission, "position", None)
         if pos is None:
@@ -241,7 +279,7 @@ def plan_dispatches(
         if cmax and credits > cmax:
             plan.skipped.append((mission.id, f"above credit ceiling ({credits})"))
             continue
-        candidates.append((distance, credits, mission))
+        candidates.append((distance, credits, mission, governing))
 
     candidates = _order(candidates, policy.order)
 
@@ -250,13 +288,13 @@ def plan_dispatches(
     # slot; only once `batch_size` missions have been actioned is the rest
     # deferred as "beyond batch size".
     actioned = priority_batch  # priority useful contributions already count
-    for _distance, _credits, mission in candidates:
+    for _distance, _credits, mission, governing in candidates:
         if policy.batch_size is not None and actioned >= policy.batch_size:
             plan.skipped.append((mission.id, "beyond batch size"))
             continue
         outcome = _plan_one(mission, pool, resolver, policy, assigned, building_pos,
-                            text_engine, allow_partial=policy.top_up_mode,
-                            shortfalls=plan.shortfalls)
+                            text_engine, allow_partial=(governing == "topup"),
+                            patient_only=(governing == "patient"), shortfalls=plan.shortfalls)
         if isinstance(outcome, str):
             plan.skipped.append((mission.id, outcome))
             continue
@@ -373,14 +411,15 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
         mid = mission.id
         on_it = mid in assigned                       # a mission we're already on
         others_on = getattr(mission, "vehicle_state", 0) >= 1
-        is_shared = getattr(mission, "is_alliance", False)
-        is_parasite = policy.parasite_mode and is_shared and others_on and not on_it
+        is_alliance = getattr(mission, "is_alliance", False)
+        is_parasite = _scope_covers(policy.parasite_scope, is_alliance) and others_on and not on_it
         if not (on_it or is_parasite):
             continue
 
         pos = getattr(mission, "position", None)
+        patient_here = _scope_covers(policy.patient_scope, is_alliance)
         reqs = _apply_delta(
-            _derive_requirements(mission, resolver, text_engine, policy.patient_only), assigned, mid
+            _derive_requirements(mission, resolver, text_engine, patient_here), assigned, mid
         )
         chosen: list[int] = []
         if reqs and pos is not None:
@@ -414,13 +453,14 @@ def _note_shortfall(shortfalls, classes) -> None:
 
 
 def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
-              text_engine=None, allow_partial=False, shortfalls=None):
+              text_engine=None, allow_partial=False, patient_only=False, shortfalls=None):
     """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string.
 
-    *allow_partial* (top-up/symbiont mode) sends whatever useful vehicles we
-    have to an already-begun mission and reports the rest, instead of holding
-    out for a full crew. *shortfalls* (a dict) tallies classes that leave a
-    mission short for the dashboard.
+    *allow_partial* (top-up/symbiont) sends whatever useful vehicles we have to
+    an already-begun mission and reports the rest, instead of holding out for a
+    full crew. *patient_only* derives only patient-clearing units. Both come from
+    the mission's governing mode. *shortfalls* (a dict) tallies classes that leave
+    a mission short for the dashboard.
 
     Note: a class we simply don't have is only ever a shortfall here (skipped,
     tallied) — never a strike. Strikes are for vehicles that looked dispatchable
@@ -428,11 +468,11 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
     """
     building_pos = building_pos or {}
 
-    requirements = _derive_requirements(mission, resolver, text_engine, policy.patient_only) or None
+    requirements = _derive_requirements(mission, resolver, text_engine, patient_only) or None
     if not requirements:
         # In patient-only mode an empty derivation just means "no patients here"
         # (incl. Hitzschlag-style end-patients) — a quiet skip, not a catalogue gap.
-        return "no patients on site" if policy.patient_only else "no requirements found"
+        return "no patients on site" if patient_only else "no requirements found"
 
     # Credit gating already happened during candidate collection.
     requirements = _apply_delta(requirements, assigned, mission.id)

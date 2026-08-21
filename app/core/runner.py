@@ -307,7 +307,7 @@ class DispatchRunner:
         if getattr(self._policy, "hilferuf", False):
             await self._hilferuf(plan, by_id)
 
-        if getattr(self._policy, "patient_only", False):
+        if getattr(getattr(self._policy, "patient_scope", None), "value", "off") != "off":
             await self._recall_cleared_patient_missions(missions, vehicles)
 
         self._log(f"cycle done: {report.summary()}")
@@ -322,13 +322,21 @@ class DispatchRunner:
         patient is treated or on the way to a hospital, and we never recall on a
         still-hidden count. Then every unit of ours there is recalled EXCEPT one
         with a patient aboard (FMS 5), which is left to reach the hospital."""
-        patients_by_mid = {m.id: int(getattr(m, "patients_count", 0) or 0) for m in missions}
+        from ..domain.dispatch import _scope_covers
+
+        scope = getattr(self._policy, "patient_scope", None)
+        # Only recall from missions the patient mode actually governs.
+        patients_by_mid = {
+            m.id: int(getattr(m, "patients_count", 0) or 0)
+            for m in missions
+            if _scope_covers(scope, getattr(m, "is_alliance", False))
+        }
         on_scene = {
             getattr(v, "target_id", None)
             for v in vehicles
             if getattr(v, "target_type", None) == "mission" and getattr(v, "fms", None) == 4
         }
-        cleared = {mid for mid in on_scene if mid is not None and patients_by_mid.get(mid) == 0}
+        cleared = {mid for mid in on_scene if mid in patients_by_mid and patients_by_mid[mid] == 0}
         if not cleared:
             return
         for v in vehicles:

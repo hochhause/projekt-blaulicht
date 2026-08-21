@@ -99,6 +99,13 @@ class StoreTests(unittest.TestCase):
         classes = {r["vehicle_class"] for r in rows}
         self.assertEqual(classes, {"police_cars", "ambulances"})
 
+    def test_clear_shortfalls_on_restart(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.store.add_shortfalls(aid, {"police_cars": 3})
+        self.assertTrue(self.store.shortfalls(aid))
+        self.store.clear_shortfalls(aid)
+        self.assertEqual(self.store.shortfalls(aid), [])
+
     def test_shortfalls_scoped_per_account(self):
         a1 = self.store.add_account("a", "a@e.com")
         a2 = self.store.add_account("b", "b@e.com")
