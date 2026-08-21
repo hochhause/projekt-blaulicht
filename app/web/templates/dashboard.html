@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block head %}<meta http-equiv="refresh" content="5">
 <style>
-  .wrap{max-width:1400px}
+  .wrap{max-width:none}   /* use the full window width on the dashboard */
   .triptych{display:grid;grid-template-columns:280px minmax(0,1fr) 300px;gap:16px;align-items:start;margin-top:18px}
   .triptych > .card{margin-top:0}
   .triptych h2{font-size:15px;margin:0 0 4px}
@@ -29,6 +29,12 @@
   .chart .bar{flex:1;min-width:2px;min-height:2px;border-radius:2px 2px 0 0;
               background:linear-gradient(to top,var(--blau),#8fbcff)}
   .chart .bar.zero{background:var(--line)}
+  /* maximise the compound console to fill the window (not OS-fullscreen) */
+  .logfs-btn{float:right;font-size:12px;padding:3px 10px;margin-top:-2px}
+  .card.logfull{position:fixed;inset:8px;z-index:1000;margin:0;display:flex;flex-direction:column;
+                box-shadow:0 0 0 100vmax rgba(0,0,0,.55)}
+  .card.logfull .logbox{max-height:none;flex:1 1 auto}
+  body.has-logfull{overflow:hidden}
 </style>
 {% endblock %}
 {% block nav %}
@@ -104,7 +110,8 @@
   </div>
 
   <!-- CENTER: compound live log -->
-  <div class="card">
+  <div class="card" id="logcard">
+    <button type="button" class="btn logfs-btn" onclick="toggleLogFull()" title="Fill the window (Esc to exit)">⤢ Maximise</button>
     <h2>Live log — all accounts</h2>
     <p class="muted small" style="margin-top:0">Newest first, auto-refreshing every 5s. Each line is prefixed by its account. Failures and strike-outs are highlighted.</p>
     {% if compound %}
@@ -164,4 +171,26 @@
     <span class="muted" style="font-size:12px">&nbsp;Password is encrypted at rest; only automation of a ToS-violating game — use a throwaway account.</span>
   </form>
 </div>
+
+<script>
+  // Maximise the compound console to fill the window. Persisted in sessionStorage
+  // so it survives the 5s auto-refresh; Esc exits.
+  (function () {
+    var key = 'logfull:' + location.pathname;
+    var card = document.getElementById('logcard');
+    if (!card) return;
+    var btn = card.querySelector('.logfs-btn');
+    function apply(on) {
+      card.classList.toggle('logfull', on);
+      document.body.classList.toggle('has-logfull', on);
+      if (btn) btn.textContent = on ? '⤡ Exit' : '⤢ Maximise';
+      try { sessionStorage.setItem(key, on ? '1' : '0'); } catch (e) {}
+    }
+    window.toggleLogFull = function () { apply(!card.classList.contains('logfull')); };
+    try { if (sessionStorage.getItem(key) === '1') apply(true); } catch (e) {}
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && card.classList.contains('logfull')) apply(false);
+    });
+  })();
+</script>
 {% endblock %}

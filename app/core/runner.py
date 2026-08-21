@@ -278,10 +278,11 @@ class DispatchRunner:
                 mtid = getattr(mm, "mission_type_id", None)
                 mtype = catalog.get(mtid) if mtid is not None else None
                 reqs = mtype.requirements if mtype is not None else None
+                chances = mtype.chances if mtype is not None else None
                 text = (getattr(mm, "missing_text", "") or "").strip() or "(empty)"
                 self._log(
                     f"  unresolved #{mid} {getattr(mm, 'caption', '')!r}: mtid={mtid} "
-                    f"in_catalog={mtype is not None} catalog_reqs={reqs} "
+                    f"in_catalog={mtype is not None} catalog_reqs={reqs} chances={chances} "
                     f"missing_text={text[:100]!r}"
                 )
 
