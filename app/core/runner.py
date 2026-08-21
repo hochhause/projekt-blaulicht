@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -27,6 +28,15 @@ from ..domain.dispatch import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Strip the per-mission detail (a "(600)" credit value or a ": short …" list) so
+# the cycle summary compounds like reasons instead of one line per credit amount.
+_REASON_DETAIL = re.compile(r"\s*[:(].*$")
+
+
+def _summary_key(reason: str) -> str:
+    return _REASON_DETAIL.sub("", reason).strip()
 
 
 def _vehicle_name(vehicle, vehicle_id: int) -> str:
@@ -44,6 +54,7 @@ class GameClientLike(Protocol):
     async def fetch_vehicles(self, cap: int = 0) -> list: ...
     async def fetch_buildings(self) -> list: ...
     async def dispatch(self, mission_id: int, vehicle_id: int) -> bool: ...
+    async def dispatch_many(self, mission_id: int, vehicle_ids: list[int]) -> bool: ...
     async def transport_targets(self, vehicle_id: int) -> list[str]: ...
     async def send_transport(self, action_url: str) -> bool: ...
     async def share_mission(self, mission_id: int) -> bool: ...
@@ -234,7 +245,7 @@ class DispatchRunner:
         report = CycleReport(plan=plan)
 
         # Show why missions were (or weren't) actionable — the key diagnostic.
-        reasons = Counter(reason for _mid, reason in plan.skipped)
+        reasons = Counter(_summary_key(reason) for _mid, reason in plan.skipped)
         if reasons:
             breakdown = "; ".join(f"{n}x {r}" for r, n in reasons.most_common(6))
             self._log(f"plan: {len(plan.planned)} actionable, {len(plan.skipped)} skipped ({breakdown})")
@@ -277,28 +288,38 @@ class DispatchRunner:
         veh_by_id = {v.id: v for v in vehicles}
 
         for mission_plan in plan.planned:
+            ids = list(mission_plan.vehicle_ids)
+            if not ids:
+                continue
+            mid, cap = mission_plan.mission_id, mission_plan.caption
             sent = 0
-            for vehicle_id in mission_plan.vehicle_ids:
-                name = _vehicle_name(veh_by_id.get(vehicle_id), vehicle_id)
-                ok = await self._client.dispatch(mission_plan.mission_id, vehicle_id)
-                if ok:
-                    report.dispatched += 1
-                    sent += 1
-                    self._log(
-                        f"dispatched {name} → #{mission_plan.mission_id} {mission_plan.caption!r}"
-                    )
-                else:
-                    report.failed += 1
-                    self._log(
-                        f"FAILED {name} → #{mission_plan.mission_id} {mission_plan.caption!r} (no crew?)"
-                    )
-                    self._record_dispatch_failure(veh_by_id.get(vehicle_id), vehicle_id, now, report)
+            # One alarm POST for the whole mission (the game's multi-select form).
+            if await self._client.dispatch_many(mid, ids):
+                sent = len(ids)
+                report.dispatched += sent
+                names = ", ".join(_vehicle_name(veh_by_id.get(v), v) for v in ids)
+                self._log(f"dispatched {sent} → #{mid} {cap!r}: {names}")
                 await self._timing.sleep(self._timing.dispatch_gap())
+            else:
+                # Batch failed — retry one-by-one so we can isolate and strike the
+                # vehicle that actually won't go (e.g. a crewless truck).
+                self._log(f"batch dispatch failed for #{mid} {cap!r} — retrying individually")
+                for vehicle_id in ids:
+                    name = _vehicle_name(veh_by_id.get(vehicle_id), vehicle_id)
+                    if await self._client.dispatch(mid, vehicle_id):
+                        report.dispatched += 1
+                        sent += 1
+                        self._log(f"dispatched {name} → #{mid} {cap!r}")
+                    else:
+                        report.failed += 1
+                        self._log(f"FAILED {name} → #{mid} {cap!r} (no crew?)")
+                        self._record_dispatch_failure(veh_by_id.get(vehicle_id), vehicle_id, now, report)
+                    await self._timing.sleep(self._timing.dispatch_gap())
             if not mission_plan.satisfied:
-                self._log(f"#{mission_plan.mission_id} still MISSING {mission_plan.shortfall}")
+                self._log(f"#{mid} still MISSING {mission_plan.shortfall}")
             # Estimate earned credits: a fully-crewed mission we actually sent to.
             if sent and mission_plan.satisfied:
-                mm = by_id.get(mission_plan.mission_id)
+                mm = by_id.get(mid)
                 report.credits_est += int(getattr(mm, "average_credits", 0) or 0)
             # Tick the counters per mission, not only at cycle end.
             if self._on_stat is not None and sent:

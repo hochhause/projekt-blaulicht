@@ -162,13 +162,16 @@ class GameClient:
         return _as_list(payload)
 
     # -- actions -----------------------------------------------------------
-    async def dispatch(self, mission_id: int, vehicle_id: int) -> bool:
-        """Dispatch a single vehicle to a mission.
+    async def dispatch_many(self, mission_id: int, vehicle_ids) -> bool:
+        """Dispatch one or more vehicles to a mission in a SINGLE alarm POST —
+        the same multi-select form the browser submits (repeated ``vehicle_ids[]``).
 
-        Loads the mission page to obtain a fresh authenticity token, then POSTs
-        the alarm form with exactly one ``vehicle_ids[]`` — the only shape
-        confirmed to work.
+        Loads the mission page once for a fresh authenticity token, then posts the
+        whole batch. One token + one request for the whole mission.
         """
+        ids = [int(v) for v in vehicle_ids]
+        if not ids:
+            return False
         page = await self._s.get_text(f"/missions/{mission_id}?{_CTX}")
         token = self._s.extract_form_token(page) or self._s.csrf_token
         if not token:
@@ -188,13 +191,19 @@ class GameClient:
                     "alliance_mission_publish": "0",
                     "sk": "ac",
                     "sd": "d",
-                    "vehicle_ids[]": str(vehicle_id),
+                    # httpx encodes a list value as repeated keys -> vehicle_ids[]=..&vehicle_ids[]=..
+                    "vehicle_ids[]": [str(v) for v in ids],
                 },
             )
         except Exception:  # noqa: BLE001 — caller decides how to react
-            logger.exception("dispatch %s <- vehicle %s failed", mission_id, vehicle_id)
+            logger.exception("dispatch %s <- vehicles %s failed", mission_id, ids)
             return False
         return True
+
+    async def dispatch(self, mission_id: int, vehicle_id: int) -> bool:
+        """Dispatch a single vehicle (a one-element :meth:`dispatch_many`) — used
+        as the isolation fallback when a batch dispatch fails."""
+        return await self.dispatch_many(mission_id, [vehicle_id])
 
     async def transport_targets(self, vehicle_id: int) -> list[str]:
         """Hospitals/cells this vehicle can currently unload to, as action URLs.

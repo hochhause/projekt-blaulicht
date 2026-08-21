@@ -41,6 +41,11 @@ class FakeClient:
         self.dispatched.append((mission_id, vehicle_id))
         return True
 
+    async def dispatch_many(self, mission_id, vehicle_ids):
+        for vid in vehicle_ids:
+            self.dispatched.append((mission_id, vid))
+        return True
+
     async def transport_targets(self, vehicle_id):
         # one hospital offered per vehicle
         return [f"/vehicles/{vehicle_id}/patient/900{vehicle_id}"]
@@ -141,13 +146,36 @@ class RunnerTests(unittest.TestCase):
     def test_failed_dispatch_counted(self):
         client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
 
-        async def fail(mission_id, vehicle_id):
+        async def fail(*args):
             return False
 
         client.dispatch = fail
+        client.dispatch_many = fail  # batch fails -> falls back to single, also fails
         report = asyncio.run(self._runner(client).run_cycle())
         self.assertEqual(report.failed, 1)
         self.assertEqual(report.dispatched, 0)
+
+    def test_bulk_dispatch_one_post_for_multi_vehicle_mission(self):
+        # type 3 needs firetrucks + police; both go in ONE dispatch_many call.
+        calls = {"many": 0, "single": 0}
+        client = FakeClient([m(1, 3)], [v(100, 0), v(101, 32)], [b()])  # LF + FuStW
+        orig_many = client.dispatch_many
+
+        async def counting_many(mission_id, ids):
+            calls["many"] += 1
+            return await orig_many(mission_id, ids)
+
+        async def counting_single(mission_id, vid):
+            calls["single"] += 1
+            return True
+
+        client.dispatch_many = counting_many
+        client.dispatch = counting_single
+        report = asyncio.run(self._runner(client).run_cycle())
+        self.assertEqual(report.dispatched, 2)
+        self.assertEqual(calls["many"], 1)     # one POST for both vehicles
+        self.assertEqual(calls["single"], 0)   # no per-vehicle fallback needed
+        self.assertEqual(set(client.dispatched), {(1, 100), (1, 101)})
 
     def test_dispatch_failure_strikes_vehicle_and_excludes_it(self):
         # A vehicle that LOOKS free but fails to send (e.g. no crew) is struck
@@ -163,6 +191,7 @@ class RunnerTests(unittest.TestCase):
             return False
 
         client.dispatch = fail
+        client.dispatch_many = fail  # batch fails -> per-vehicle fallback isolates + strikes
         strikes = StrikeTracker(threshold=1)
         lines: list[str] = []
 
