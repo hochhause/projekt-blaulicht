@@ -471,6 +471,51 @@ class DispatchPlannerTests(unittest.TestCase):
         )
         self.assertEqual(plan.skipped, [(1, "out of range")])
 
+    # -- fire-personnel requirement (average_min_fire_personnel) --------------
+    def _fire_resolver(self, min_fire, base_reqs=None):
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=900, name="Fire personnel", average_credits=100,
+                         requirements=base_reqs or {}, min_fire_personnel=min_fire)
+        return MissionRequirementResolver(MissionCatalog({900: mt}), self.lib_for_engine)
+
+    def test_fire_personnel_only_mission_sends_one_lf(self):
+        # "3 Feuerwehrleute mind." with no vehicle class -> one LF (crew 9) covers it.
+        resolver = self._fire_resolver(3)
+        plan = plan_dispatches([mission(1, 900, NEAR)], [vehicle(100, LF)],
+                               [building()], resolver, DispatchPolicy(radius_km=40))
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].vehicle_ids, (100,))
+        self.assertTrue(plan.planned[0].satisfied)
+
+    def test_fire_personnel_needs_two_when_crew_short(self):
+        # 12 firefighters; one LF (9) is short, so a second is added.
+        resolver = self._fire_resolver(12)
+        plan = plan_dispatches([mission(1, 900, NEAR)], [vehicle(100, LF), vehicle(101, LF)],
+                               [building()], resolver, DispatchPolicy(radius_km=40))
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(set(plan.planned[0].vehicle_ids), {100, 101})
+        self.assertTrue(plan.planned[0].satisfied)
+
+    def test_fire_personnel_shortfall_when_no_fire_vehicle(self):
+        # Only a police car -> no firefighter crew -> shortfall on "firefighters".
+        resolver = self._fire_resolver(3)
+        plan = plan_dispatches([mission(1, 900, NEAR)], [vehicle(100, FUSTW)],
+                               [building()], resolver, DispatchPolicy(radius_km=40))
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.shortfalls.get("firefighters"), 1)
+        self.assertTrue(plan.skipped[0][1].startswith("not enough vehicles"))
+
+    def test_fire_personnel_counts_en_route_crew(self):
+        # An LF (9) already en route already covers a 3-firefighter mission.
+        resolver = self._fire_resolver(3)
+        plan = plan_dispatches([mission(1, 900, NEAR)], [vehicle(100, LF)],
+                               [building()], resolver, DispatchPolicy(radius_km=40),
+                               assigned={1: [LF]})
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "already covered")])
+
     def test_vehicle_position_derived_from_building(self):
         # Vehicles carry no coordinates (real API); distance uses their building.
         near_b = SimpleNamespace(id=1, position=NEAR)

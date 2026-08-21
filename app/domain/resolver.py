@@ -197,3 +197,8 @@ class MissionRequirementResolver:
     def catalog(self) -> MissionCatalog:
         """The underlying mission catalogue (for credits, names, etc.)."""
         return self._catalog
+
+    @property
+    def library(self) -> AssetLibrary:
+        """The vehicle asset library (type → crew, class map, …)."""
+        return self._library

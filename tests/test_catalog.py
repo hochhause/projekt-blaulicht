@@ -39,6 +39,15 @@ class CatalogTests(unittest.TestCase):
         self.assertIsNone(self.catalog.get(4242))
         self.assertEqual(self.catalog.requirements(4242), {})
 
+    def test_min_fire_personnel_parsed(self):
+        # additional.average_min_fire_personnel -> MissionType.min_fire_personnel.
+        cat = MissionCatalog.from_payload([
+            {"id": "159", "name": "Äste auf Fahrbahn", "requirements": {},
+             "additional": {"average_min_fire_personnel": 3}},
+        ])
+        self.assertEqual(cat.get(159).min_fire_personnel, 3)
+        self.assertEqual(self.catalog.get(1).min_fire_personnel, 0)  # absent -> 0
+
     def test_accepts_id_keyed_object(self):
         obj = {"1": {"id": "1", "name": "X", "average_credits": 10, "requirements": {"firetrucks": 1}}}
         cat = MissionCatalog.from_payload(obj)

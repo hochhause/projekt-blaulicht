@@ -43,6 +43,11 @@ class MissionType:
     chances: dict[str, int] = field(default_factory=dict)
     possible_patient: int = 0
     possible_prisoner: int = 0
+    # Minimum firefighters the mission needs (additional.average_min_fire_personnel).
+    # Some missions state their need ONLY as personnel (no vehicle class) — e.g.
+    # "3 Feuerwehrleute mind. benötigt" — satisfied by fire vehicles whose combined
+    # crew reaches this (one HLF ≈ 9).
+    min_fire_personnel: int = 0
     categories: tuple[str, ...] = ()
     expansion_ids: tuple[int, ...] = ()
 
@@ -65,6 +70,7 @@ class MissionType:
             chances=_int_map(d.get("chances")),
             possible_patient=int(additional.get("possible_patient") or 0),
             possible_prisoner=int(additional.get("possible_prisoner") or 0),
+            min_fire_personnel=int(additional.get("average_min_fire_personnel") or 0),
             categories=tuple(d.get("mission_categories") or ()),
             expansion_ids=tuple(int(x) for x in expansions),
         )

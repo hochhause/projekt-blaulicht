@@ -452,6 +452,54 @@ def _note_shortfall(shortfalls, classes) -> None:
         shortfalls[cls] = shortfalls.get(cls, 0) + 1
 
 
+def _fire_crew(resolver, type_ids) -> int:
+    """Total firefighter crew carried by these vehicle TYPE ids (firetruck class)."""
+    lib = resolver.library
+    fire = lib.class_map.by_class.get("firetrucks", ())
+    fire = set(fire)
+    total = 0
+    for tid in type_ids:
+        if tid in fire:
+            vt = lib.types.get(tid)
+            total += vt.personnel if vt is not None else 0
+    return total
+
+
+def _fire_personnel_topup(chosen_ids, pool, resolver, need, mission_pos, building_pos):
+    """Add nearest firetruck-class vehicles until their crew reaches *need*.
+
+    Crew already provided by *chosen_ids* (fire vehicles picked for the class
+    requirements) counts first. Returns ``(extra_ids, still_short)``.
+    """
+    lib = resolver.library
+    fire = set(lib.class_map.by_class.get("firetrucks", ()))
+
+    def crew(tid: int) -> int:
+        vt = lib.types.get(tid)
+        return vt.personnel if vt is not None else 0
+
+    by_id = {v.id: v for v in pool}
+    have = sum(
+        crew(by_id[i].type_id)
+        for i in chosen_ids
+        if i in by_id and by_id[i].type_id in fire
+    )
+    if have >= need:
+        return [], 0
+    chosen_set = set(chosen_ids)
+    dist = _distance_fn(mission_pos, building_pos)
+    # Nearest first; among equals prefer more crew so we send fewer vehicles.
+    cands = [v for v in pool if v.id not in chosen_set and v.type_id in fire and crew(v.type_id) > 0]
+    cands.sort(key=lambda v: (dist(v), -crew(v.type_id)))
+    extra: list[int] = []
+    for v in cands:
+        if have >= need:
+            break
+        extra.append(v.id)
+        have += crew(v.type_id)
+    return extra, max(0, need - have)
+
+
 def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
               text_engine=None, allow_partial=False, patient_only=False, shortfalls=None):
     """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string.
@@ -462,59 +510,87 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
     the mission's governing mode. *shortfalls* (a dict) tallies classes that leave
     a mission short for the dashboard.
 
+    Besides vehicle-class requirements, a mission may state a **minimum
+    firefighter count** (``average_min_fire_personnel``); that's met by fire
+    vehicles whose combined crew reaches it (one HLF ≈ 9), counting crew already
+    en route.
+
     Note: a class we simply don't have is only ever a shortfall here (skipped,
     tallied) — never a strike. Strikes are for vehicles that looked dispatchable
     but FAILED to send, and are recorded by the runner (see ``struck out``).
     """
     building_pos = building_pos or {}
+    assigned = assigned or {}
 
-    requirements = _derive_requirements(mission, resolver, text_engine, patient_only) or None
-    if not requirements:
+    requirements = _derive_requirements(mission, resolver, text_engine, patient_only)
+    # Personnel requirement (min firefighters) — not applicable in patient-only mode.
+    mtype = None if patient_only else resolver.catalog.get(getattr(mission, "mission_type_id", None))
+    min_fire = int(getattr(mtype, "min_fire_personnel", 0) or 0) if mtype is not None else 0
+
+    if not requirements and min_fire <= 0:
         # In patient-only mode an empty derivation just means "no patients here"
         # (incl. Hitzschlag-style end-patients) — a quiet skip, not a catalogue gap.
         return "no patients on site" if patient_only else "no requirements found"
 
     # Credit gating already happened during candidate collection.
     requirements = _apply_delta(requirements, assigned, mission.id)
-    if not requirements:
+    # Firefighters already en route count toward the personnel minimum.
+    fire_needed = max(0, min_fire - _fire_crew(resolver, assigned.get(mission.id, []))) if min_fire else 0
+
+    if not requirements and fire_needed <= 0:
         return "already covered"
 
-    coverage = select_coverage(requirements, pool, distance_of=_distance_fn(mission.position, building_pos))
+    if requirements:
+        coverage = select_coverage(requirements, pool, distance_of=_distance_fn(mission.position, building_pos))
+        chosen = list(coverage.vehicle_ids)
+        satisfied = coverage.satisfied
+        shortfall = dict(coverage.shortfall)
+    else:
+        chosen, satisfied, shortfall = [], True, {}
+
+    # Personnel top-up: add fire vehicles until their crew reaches the minimum.
+    if fire_needed > 0:
+        extra, still_short = _fire_personnel_topup(
+            chosen, pool, resolver, fire_needed, mission.position, building_pos
+        )
+        chosen = chosen + extra
+        if still_short > 0:
+            satisfied = False
+            shortfall["firefighters"] = still_short
 
     # Only dispatch missions we can FULLY crew — a partial send just ties up
     # vehicles on a job that won't complete. The classes we're short of are
     # tallied (dashboard) but NOT struck: we merely don't have them right now.
-    if not coverage.satisfied:
-        _note_shortfall(shortfalls, coverage.shortfall.keys())
+    if not satisfied:
+        _note_shortfall(shortfalls, shortfall.keys())
         if allow_partial:
-            # Top-up: send the useful vehicles we do have, report the shortfall.
-            if not coverage.vehicle_ids:
+            if not chosen:
                 return "nothing useful to add"
             plan = MissionPlan(
-                mission_id=mission.id,
-                caption=getattr(mission, "caption", ""),
-                vehicle_ids=tuple(coverage.vehicle_ids),
-                satisfied=False,
-                shortfall=dict(coverage.shortfall),
+                mission_id=mission.id, caption=getattr(mission, "caption", ""),
+                vehicle_ids=tuple(chosen), satisfied=False, shortfall=dict(shortfall),
             )
-            return plan, coverage.vehicle_ids
-        needed = ", ".join(f"{cls} x{n}" for cls, n in coverage.shortfall.items())
+            return plan, chosen
+        needed = ", ".join(f"{cls} x{n}" for cls, n in shortfall.items())
         return f"not enough vehicles: short {needed}"
+
+    if not chosen:
+        return "already covered"
 
     if (
         policy.max_vehicles_per_mission is not None
-        and len(coverage.vehicle_ids) > policy.max_vehicles_per_mission
+        and len(chosen) > policy.max_vehicles_per_mission
     ):
-        return f"needs {len(coverage.vehicle_ids)} > cap {policy.max_vehicles_per_mission}"
+        return f"needs {len(chosen)} > cap {policy.max_vehicles_per_mission}"
 
     mission_plan = MissionPlan(
         mission_id=mission.id,
         caption=getattr(mission, "caption", ""),
-        vehicle_ids=tuple(coverage.vehicle_ids),
+        vehicle_ids=tuple(chosen),
         satisfied=True,
         shortfall={},
     )
-    return mission_plan, coverage.vehicle_ids
+    return mission_plan, chosen
 
 
 def _apply_delta(requirements, assigned, mission_id):
