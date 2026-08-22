@@ -166,6 +166,74 @@ class Orchestrator:
         return {aid: worker.status for aid, (worker, _t, _s) in self._tasks.items()}
 
 
+def build_account_runner(store, secret_box, settings, library, account_id, log_store=None):
+    """Construct a session-backed :class:`AccountRunner` for one account from its
+    stored config + sealed credentials. Shared by the worker factory and the
+    one-shot cleanup action."""
+    from .account_config import AccountConfig
+    from .account_runner import AccountRunner
+
+    account = store.get_account(account_id)
+    config = AccountConfig.from_dict(_load_config(store, account_id))
+
+    def password_provider() -> str:
+        # Decrypt lazily at connect time. A changed BOT_SECRET_KEY (or a missing
+        # secret) becomes a clear per-account error instead of a startup crash.
+        token = store.get_secret(account_id)
+        if token is None:
+            raise RuntimeError("no stored password — re-enter it on the Configure page")
+        try:
+            return secret_box.open(token)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                "cannot decrypt stored password (BOT_SECRET_KEY changed?) - "
+                "re-enter it on the Configure page"
+            ) from exc
+
+    def log(message: str) -> None:
+        if log_store is not None:
+            log_store.append(account_id, message)
+
+    def stat(dispatched: int, missions: int) -> None:
+        if dispatched or missions:
+            store.add_stat(account_id, dispatched=dispatched, missions=missions)
+
+    runner = AccountRunner(
+        base_url=settings.base_url(account.server),
+        user_agent=settings.user_agent,
+        email=account.email,
+        password_provider=password_provider,
+        library=library,
+        policy=config.dispatch_policy(),
+        on_log=log,
+        on_stat=stat,
+        vehicle_cap=config.max_vehicles,
+        transport_enabled=config.transport_enabled,
+        transport_only=config.transport_only,
+    )
+    return runner, config
+
+
+def make_cleanup(store, secret_box, settings, log_store=None):
+    """Return an async ``cleanup(account_id) -> int`` for the panel's button.
+
+    Builds a fresh, isolated session (works whether or not the account is
+    running), recalls surplus vehicles, and closes. Returns how many were pulled.
+    """
+    from ..domain.assets import AssetLibrary
+
+    library = AssetLibrary.load(settings.vehicles_dir)
+
+    async def cleanup(account_id: int) -> int:
+        runner, _config = build_account_runner(store, secret_box, settings, library, account_id, log_store)
+        try:
+            return await runner.cleanup()
+        finally:
+            await runner.aclose()
+
+    return cleanup
+
+
 def default_worker_factory(store, secret_box, settings, log_store=None) -> Callable[[int], AccountWorker]:
     """Build a factory that constructs real, session-backed workers.
 
@@ -175,57 +243,15 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
     given, each cycle's activity is logged and stats are persisted.
     """
     from ..domain.assets import AssetLibrary
-    from .account_config import AccountConfig
-    from .account_runner import AccountRunner
 
     # Shared, static reference data — loaded once for all accounts.
     library = AssetLibrary.load(settings.vehicles_dir)
 
     def factory(account_id: int) -> AccountWorker:
-        account = store.get_account(account_id)
-        config = AccountConfig.from_dict(_load_config(store, account_id))
         # A (re)start begins a fresh run: reset the per-run "struggling to field"
-        # tally, mirroring the fresh StrikeTracker created below.
+        # tally, mirroring the fresh StrikeTracker inside the runner.
         store.clear_shortfalls(account_id)
-
-        def password_provider() -> str:
-            # Decrypt lazily at connect time. A changed BOT_SECRET_KEY (or a
-            # missing secret) becomes a clear per-account error instead of a
-            # server-wide startup crash.
-            token = store.get_secret(account_id)
-            if token is None:
-                raise RuntimeError("no stored password — re-enter it on the Configure page")
-            try:
-                return secret_box.open(token)
-            except Exception as exc:  # noqa: BLE001
-                raise RuntimeError(
-                    "cannot decrypt stored password (BOT_SECRET_KEY changed?) - "
-                    "re-enter it on the Configure page"
-                ) from exc
-
-        def log(message: str) -> None:
-            if log_store is not None:
-                log_store.append(account_id, message)
-
-        def stat(dispatched: int, missions: int) -> None:
-            if dispatched or missions:
-                store.add_stat(account_id, dispatched=dispatched, missions=missions)
-
-        # One persistent session for this account — connects once, reuses across
-        # cycles, reconnects only on failure/expiry.
-        runner = AccountRunner(
-            base_url=settings.base_url(account.server),
-            user_agent=settings.user_agent,
-            email=account.email,
-            password_provider=password_provider,
-            library=library,
-            policy=config.dispatch_policy(),
-            on_log=log,
-            on_stat=stat,
-            vehicle_cap=config.max_vehicles,
-            transport_enabled=config.transport_enabled,
-            transport_only=config.transport_only,
-        )
+        runner, config = build_account_runner(store, secret_box, settings, library, account_id, log_store)
         timing = WorkerTiming(poll_seconds=config.poll_seconds, jitter_seconds=config.jitter_seconds)
 
         def on_state(aid: int, status: str, error: str | None) -> None:

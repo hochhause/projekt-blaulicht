@@ -110,6 +110,17 @@ class AccountRunner:
             await self.aclose()  # force a fresh connect next cycle (handles expiry)
             raise
 
+    async def cleanup(self) -> int:
+        """Connect if needed, run one surplus-recall pass, return how many were
+        recalled. Used by the panel's 'Cleanup' button (one-shot)."""
+        if self._session is None:
+            await self._connect()
+        try:
+            return await self._dispatch.cleanup()
+        except Exception:
+            await self.aclose()  # drop a broken session so a later action reconnects
+            raise
+
     async def aclose(self) -> None:
         if self._session is not None:
             try:

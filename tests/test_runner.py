@@ -273,6 +273,25 @@ class RunnerTests(unittest.TestCase):
         asyncio.run(runner.run_cycle())
         self.assertEqual(client.recalled, [])
 
+    def test_cleanup_recalls_surplus_via_runner(self):
+        # Two LFs assigned to a mission that needs one -> cleanup recalls the extra.
+        async def no_sleep(_):
+            return None
+
+        m1 = m(1, 1)  # firetrucks:1
+        v100 = SimpleNamespace(id=100, type_id=0, is_available=False, position=BUILDING,
+                               building_id=1, fms=4, target_type="mission", target_id=1)
+        v101 = SimpleNamespace(id=101, type_id=0, is_available=False, position=BUILDING,
+                               building_id=1, fms=4, target_type="mission", target_id=1)
+        client = FakeClient([m1], [v100, v101], [b()])
+        runner = DispatchRunner(
+            client, self.resolver, DispatchPolicy(radius_km=40),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        recalled = asyncio.run(runner.cleanup())
+        self.assertEqual(recalled, 1)
+        self.assertEqual(len(client.recalled), 1)
+
     def test_no_recall_without_patient_only(self):
         mission = SimpleNamespace(id=5, caption="RD", mission_type_id=1, position=NEAR,
                                   patients_count=0, vehicle_state=1)

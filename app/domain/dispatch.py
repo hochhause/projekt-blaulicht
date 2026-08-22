@@ -307,6 +307,61 @@ def plan_dispatches(
     return plan
 
 
+def plan_cleanup(missions, vehicles, buildings, resolver, text_engine=None):
+    """Find OUR vehicles that are surplus to a mission's needs — for the manual
+    'cleanup' button.
+
+    For every mission we have vehicles on (en route or on scene), keep the minimal
+    subset of *our* vehicles that meets its requirement (vehicle classes + fire
+    personnel), and mark the rest for recall. A vehicle transporting a patient
+    (FMS 5) is always kept. Missions whose requirement we can't resolve at all are
+    left untouched (we won't pull vehicles off something we can't judge).
+
+    Returns a list of ``(vehicle_id, mission_id)`` to recall.
+    """
+    building_pos = {
+        b.id: b.position
+        for b in buildings
+        if getattr(b, "position", None) and getattr(b, "id", None) is not None
+    }
+    by_mid = {m.id: m for m in missions}
+    ours: dict[int, list] = {}
+    for v in vehicles:
+        if getattr(v, "target_type", None) != "mission":
+            continue
+        mid = getattr(v, "target_id", None)
+        if mid is not None:
+            ours.setdefault(int(mid), []).append(v)
+
+    recalls: list[tuple[int, int]] = []
+    for mid, assigned_vehicles in ours.items():
+        mission = by_mid.get(mid)
+        if mission is None:
+            continue  # not in the feed (likely done) — leave it to the game
+        reqs = _derive_requirements(mission, resolver, text_engine)
+        mtype = resolver.catalog.get(getattr(mission, "mission_type_id", None))
+        min_fire = int(getattr(mtype, "min_fire_personnel", 0) or 0) if mtype is not None else 0
+        if not reqs and min_fire <= 0:
+            continue  # requirement unknown -> don't touch this mission
+        pos = getattr(mission, "position", None)
+        needed: set[int] = set()
+        if reqs:
+            cov = select_coverage(reqs, assigned_vehicles, distance_of=_distance_fn(pos, building_pos))
+            needed |= set(cov.vehicle_ids)
+        if min_fire > 0:
+            extra, _short = _fire_personnel_topup(
+                list(needed), assigned_vehicles, resolver, min_fire, pos, building_pos
+            )
+            needed |= set(extra)
+        for v in assigned_vehicles:
+            if v.id in needed:
+                continue
+            if getattr(v, "fms", None) == 5:
+                continue  # carrying a patient — let it deliver
+            recalls.append((v.id, mid))
+    return recalls
+
+
 def _age_seconds(mission, now: float | None) -> float | None:
     """Seconds since a mission was shared (or created), or ``None`` if unknown."""
     if now is None:

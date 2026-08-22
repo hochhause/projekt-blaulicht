@@ -516,6 +516,54 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(plan.planned, [])
         self.assertEqual(plan.skipped, [(1, "already covered")])
 
+    # -- cleanup: recall surplus vehicles ------------------------------------
+    def _assigned(self, vid, type_id, mid, fms=4):
+        return SimpleNamespace(id=vid, type_id=type_id, target_type="mission",
+                               target_id=mid, fms=fms, is_available=False,
+                               position=BUILDING, building_id=1)
+
+    def test_cleanup_recalls_surplus(self):
+        from app.domain.dispatch import plan_cleanup
+        m = mission(1, 1, NEAR)  # needs firetrucks:1
+        vehs = [self._assigned(100, LF, 1), self._assigned(101, LF, 1)]  # 2 LFs, 1 needed
+        recalls = plan_cleanup([m], vehs, [building()], self.resolver)
+        self.assertEqual(len(recalls), 1)
+        self.assertIn(recalls[0][0], {100, 101})
+
+    def test_cleanup_keeps_needed(self):
+        from app.domain.dispatch import plan_cleanup
+        m = mission(1, 1, NEAR)
+        recalls = plan_cleanup([m], [self._assigned(100, LF, 1)], [building()], self.resolver)
+        self.assertEqual(recalls, [])
+
+    def test_cleanup_skips_unknown_requirement(self):
+        from app.domain.dispatch import plan_cleanup
+        m = mission(1, 4242, NEAR)  # not in catalogue -> can't judge -> leave alone
+        recalls = plan_cleanup([m], [self._assigned(100, LF, 1)], [building()], self.resolver)
+        self.assertEqual(recalls, [])
+
+    def test_cleanup_keeps_transporting_vehicle(self):
+        from app.domain.dispatch import plan_cleanup
+        m = mission(1, 1, NEAR)  # needs 1 firetruck; the RTW is extra but transporting
+        vehs = [self._assigned(100, LF, 1, fms=4), self._assigned(101, 28, 1, fms=5)]
+        recalls = plan_cleanup([m], vehs, [building()], self.resolver)
+        self.assertEqual(recalls, [])
+
+    def test_cleanup_recalls_idle_extra(self):
+        from app.domain.dispatch import plan_cleanup
+        m = mission(1, 1, NEAR)
+        vehs = [self._assigned(100, LF, 1, fms=4), self._assigned(101, 28, 1, fms=4)]
+        recalls = plan_cleanup([m], vehs, [building()], self.resolver)
+        self.assertEqual([r[0] for r in recalls], [101])  # idle RTW not needed
+
+    def test_cleanup_fire_personnel_keeps_minimum(self):
+        from app.domain.dispatch import plan_cleanup
+        resolver = self._fire_resolver(3)  # 3 firefighters -> one LF suffices
+        m = mission(1, 900, NEAR)
+        vehs = [self._assigned(100, LF, 1), self._assigned(101, LF, 1)]
+        recalls = plan_cleanup([m], vehs, [building()], resolver)
+        self.assertEqual(len(recalls), 1)
+
     def test_vehicle_position_derived_from_building(self):
         # Vehicles carry no coordinates (real API); distance uses their building.
         near_b = SimpleNamespace(id=1, position=NEAR)

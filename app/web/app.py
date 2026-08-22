@@ -52,7 +52,7 @@ def _opt_int(value: str | None) -> int | None:
     return int(value) if value else None
 
 
-def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_store=None) -> FastAPI:
+def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_store=None, cleanup=None) -> FastAPI:
     app = FastAPI(title="Projekt Blaulicht")
 
     def require_auth(request: Request) -> None:
@@ -312,6 +312,16 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
     async def enable(account_id: int, _=Depends(require_auth)):
         store.set_enabled(account_id, True)
         await orchestrator.start(account_id)
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/accounts/{account_id}/cleanup")
+    async def cleanup_account(account_id: int, _=Depends(require_auth)):
+        if cleanup is not None:
+            try:
+                await cleanup(account_id)
+            except Exception as exc:  # noqa: BLE001 — surface via the account log
+                if log_store is not None:
+                    log_store.append(account_id, f"cleanup failed: {exc}")
         return RedirectResponse("/", status_code=303)
 
     @app.post("/accounts/{account_id}/disable")

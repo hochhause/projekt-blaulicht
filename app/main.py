@@ -28,7 +28,7 @@ except ImportError:
 
 from .config import get_settings
 from .core.logbuffer import LogStore
-from .core.orchestrator import Orchestrator, default_worker_factory
+from .core.orchestrator import Orchestrator, default_worker_factory, make_cleanup
 from .core.secrets import SecretBox
 from .store import Store
 from .web.app import create_app
@@ -58,7 +58,8 @@ def build_app():
     secret_box = SecretBox(settings.secret_key)
     log_store = LogStore()
     orchestrator = Orchestrator(default_worker_factory(store, secret_box, settings, log_store))
-    app = create_app(store, orchestrator, secret_box, settings, auth, log_store)
+    cleanup = make_cleanup(store, secret_box, settings, log_store)
+    app = create_app(store, orchestrator, secret_box, settings, auth, log_store, cleanup=cleanup)
 
     @app.on_event("startup")
     async def _resume_enabled() -> None:

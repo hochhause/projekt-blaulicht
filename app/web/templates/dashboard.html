@@ -69,6 +69,8 @@
         {% else %}
           <form method="post" action="/accounts/{{ r.account.id }}/enable"><button class="primary">Start</button></form>
         {% endif %}
+        <form method="post" action="/accounts/{{ r.account.id }}/cleanup"
+              onsubmit="return confirm('Recall surplus vehicles from {{ r.account.label }}\'s missions?')"><button title="Recall vehicles not needed by their mission">Cleanup</button></form>
         <form method="post" action="/accounts/{{ r.account.id }}/delete"
               onsubmit="return confirm('Delete {{ r.account.label }}?')"><button class="danger">Del</button></form>
       </td>

@@ -24,6 +24,7 @@ from ..domain.dispatch import (
     DispatchPolicy,
     MissionRequirementResolver,
     assigned_from_vehicles,
+    plan_cleanup,
     plan_dispatches,
 )
 
@@ -334,6 +335,30 @@ class DispatchRunner:
 
         self._log(f"cycle done: {report.summary()}")
         return report
+
+    async def cleanup(self) -> int:
+        """One-shot: recall OUR vehicles that are surplus to what each mission
+        needs (over-dispatch, from manual play or earlier cycles). See
+        :func:`plan_cleanup`."""
+        vehicles = await self._client.fetch_vehicles(self._vehicle_cap)
+        missions = await self._client.fetch_missions()
+        buildings = await self._buildings_for_cycle()
+        recalls = plan_cleanup(missions, vehicles, buildings, self._resolver, self._text_engine)
+        veh_by_id = {v.id: v for v in vehicles}
+        cap_by_id = {m.id: getattr(m, "caption", "") for m in missions}
+        if not recalls:
+            self._log("cleanup: nothing surplus — every assigned vehicle is needed")
+            return 0
+        self._log(f"cleanup: recalling {len(recalls)} surplus vehicle(s)")
+        done = 0
+        for vehicle_id, mid in recalls:
+            name = _vehicle_name(veh_by_id.get(vehicle_id), vehicle_id)
+            if await self._client.recall(vehicle_id):
+                done += 1
+                self._log(f"recalled {name}: surplus at #{mid} {cap_by_id.get(mid, '')!r}")
+            await self._timing.sleep(self._timing.dispatch_gap())
+        self._log(f"cleanup done: recalled {done} vehicle(s)")
+        return done
 
     async def _recall_cleared_patient_missions(self, missions, vehicles) -> None:
         """Patient-only cleanup: recall units we no longer need at a mission whose
