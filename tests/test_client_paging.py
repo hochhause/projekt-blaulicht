@@ -59,5 +59,35 @@ class VehiclePagingTests(unittest.TestCase):
         self.assertEqual([v.id for v in vehicles], [1])
 
 
+@unittest.skipUnless(HAVE_HTTPX, "httpx not installed")
+class TransportTargetsTests(unittest.TestCase):
+    def test_parses_single_quoted_approach_links(self):
+        # The game renders these with SINGLE quotes (real snippet from the user).
+        page = (
+            "<a class='btn btn-success' href='/vehicles/82999211/patient/20001217' "
+            "id='btn_approach_20001217'>Anfahren</a>"
+            "<a class='btn' href='/vehicles/82999211/gefangener/555?foo=1'>x</a>"
+        )
+
+        class PageSession:
+            async def get_text(self, path):
+                return page
+
+        from app.game.client import GameClient
+        targets = asyncio.run(GameClient(PageSession()).transport_targets(82999211))
+        self.assertEqual(
+            targets,
+            ["/vehicles/82999211/patient/20001217", "/vehicles/82999211/gefangener/555?foo=1"],
+        )
+
+    def test_no_targets_when_page_has_none(self):
+        class EmptySession:
+            async def get_text(self, path):
+                return "<div>no beds free</div>"
+
+        from app.game.client import GameClient
+        self.assertEqual(asyncio.run(GameClient(EmptySession()).transport_targets(1)), [])
+
+
 if __name__ == "__main__":
     unittest.main()

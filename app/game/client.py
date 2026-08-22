@@ -31,7 +31,11 @@ from .session import GameSession
 # The "Anfahren" buttons on a vehicle's page — one per hospital/cell that still
 # has capacity (the game pre-filters by beds, range, price, own/alliance per the
 # vehicle's in-game transport settings). We just pick from what it offers.
-_APPROACH = re.compile(r'href="(/vehicles/\d+/(?:patient|gefangener)/\d+)"')
+# NB: the game renders the href with SINGLE quotes (href='...'), and may append a
+# query string — accept either quote and trailing params up to the closing quote.
+_APPROACH = re.compile(
+    r"""href=["'](/vehicles/\d+/(?:patient|gefangener)/\d+[^"']*)["']"""
+)
 
 logger = logging.getLogger(__name__)
 
