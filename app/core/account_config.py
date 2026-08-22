@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from ..domain.dispatch import DispatchOrder, DispatchPolicy, MissionSource, ModeScope
+from ..domain.group import GroupPolicy, RadiusBasis
 from ..domain.transport import TransportPolicy
 
 
@@ -121,3 +122,64 @@ class AccountConfig:
 
 
 DEFAULT_CONFIG = AccountConfig()
+
+
+@dataclass(frozen=True)
+class GroupConfig:
+    """Config for group ("symbiotic") mode — one shared profile, persisted so a
+    restart is quick. ``member_ids`` remembers the last account selection."""
+
+    radius_km: float = 40.0
+    credit_min: int = 0
+    credit_max: int = 0
+    order: str = DispatchOrder.NEAREST.value
+    batch_size: int | None = 20
+    allowed_categories: tuple[str, ...] = ()
+    poll_seconds: float = 45.0
+    jitter_seconds: float = 10.0
+    # transport is handled per account inside the coordinator
+    transport_enabled: bool = True
+    # symbiotic-only
+    participation: bool = True
+    radius_basis: str = RadiusBasis.ANY.value
+    max_token_per_account: int | None = None
+    member_ids: tuple[int, ...] = ()
+
+    def group_policy(self) -> GroupPolicy:
+        try:
+            order = DispatchOrder(self.order)
+        except ValueError:
+            order = DispatchOrder.NEAREST
+        try:
+            basis = RadiusBasis(self.radius_basis)
+        except ValueError:
+            basis = RadiusBasis.ANY
+        return GroupPolicy(
+            radius_km=self.radius_km,
+            credit_min=self.credit_min,
+            credit_max=self.credit_max,
+            order=order,
+            batch_size=self.batch_size,
+            allowed_categories=frozenset(self.allowed_categories),
+            participation=self.participation,
+            radius_basis=basis,
+            max_token_per_account=self.max_token_per_account,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> "GroupConfig":
+        if not d:
+            return cls()
+        known = {f for f in cls.__dataclass_fields__}
+        values = {k: v for k, v in d.items() if k in known}
+        if "allowed_categories" in values:
+            values["allowed_categories"] = tuple(values["allowed_categories"])
+        if "member_ids" in values:
+            values["member_ids"] = tuple(int(x) for x in values["member_ids"])
+        return cls(**values)
+
+
+DEFAULT_GROUP_CONFIG = GroupConfig()

@@ -251,6 +251,13 @@ class Store:
         row = self._one("SELECT value FROM app_setting WHERE key = ?", (key,))
         return row["value"] if row else None
 
+    # -- group (symbiotic) config ------------------------------------------
+    def set_group_config(self, json_text: str) -> None:
+        self.set_setting("group_config", json_text)
+
+    def get_group_config(self) -> str | None:
+        return self.get_setting("group_config")
+
 
 def _to_account(row: sqlite3.Row) -> Account:
     return Account(

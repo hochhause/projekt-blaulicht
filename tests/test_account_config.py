@@ -1,6 +1,6 @@
 import unittest
 
-from app.core.account_config import DEFAULT_CONFIG, AccountConfig
+from app.core.account_config import DEFAULT_CONFIG, AccountConfig, GroupConfig
 
 
 class AccountConfigTests(unittest.TestCase):
@@ -58,6 +58,29 @@ class AccountConfigTests(unittest.TestCase):
         self.assertEqual((tp.max_distance_km, tp.max_tax), (50, 10))
         self.assertFalse(tp.prefer_own)
         self.assertFalse(tp.allow_alliance)
+
+
+class GroupConfigTests(unittest.TestCase):
+    def test_defaults_map_to_group_policy(self):
+        gp = GroupConfig().group_policy()
+        self.assertEqual(gp.radius_km, 40.0)
+        self.assertTrue(gp.participation)
+        self.assertEqual(gp.radius_basis.value, "any")
+
+    def test_roundtrip_with_members(self):
+        cfg = GroupConfig(radius_km=25, credit_max=5000, participation=False,
+                          radius_basis="all", max_token_per_account=1, member_ids=(3, 7))
+        again = GroupConfig.from_dict(cfg.to_dict())
+        self.assertEqual(again, cfg)
+        gp = again.group_policy()
+        self.assertEqual(gp.credit_max, 5000)
+        self.assertFalse(gp.participation)
+        self.assertEqual(gp.radius_basis.value, "all")
+        self.assertEqual(gp.max_token_per_account, 1)
+
+    def test_member_ids_coerced_to_int_tuple(self):
+        cfg = GroupConfig.from_dict({"member_ids": ["3", "7"]})
+        self.assertEqual(cfg.member_ids, (3, 7))
 
 
 if __name__ == "__main__":
