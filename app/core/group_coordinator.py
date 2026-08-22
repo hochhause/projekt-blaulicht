@@ -18,6 +18,7 @@ the orchestrator supervises it with the same back-off machinery.
 from __future__ import annotations
 
 import logging
+import random
 import time
 
 from ..domain.group import GroupPolicy, plan_group_dispatches
@@ -29,7 +30,7 @@ class GroupCoordinator:
     """Drives a set of member :class:`AccountRunner`s as one symbiotic group."""
 
     def __init__(self, members, policy: GroupPolicy, *, on_log=None, on_stat=None,
-                 dispatch_gap=1.2, share_enabled=True):
+                 dispatch_gap=1.2, share_enabled=True, share_cap=15):
         # members: dict[int, AccountRunner]
         self._members = members
         self._policy = policy
@@ -37,10 +38,15 @@ class GroupCoordinator:
         self._on_stat = on_stat
         self._gap = dispatch_gap
         self._share_enabled = share_enabled
+        self._share_cap = share_cap  # own missions shared per account per cycle
         self._buildings: dict[int, list] = {}
         self._shared: set[tuple[int, int]] = set()  # (account_id, mission_id) already shared
         import asyncio
         self._sleep = asyncio.sleep
+
+    def _jittered_gap(self) -> float:
+        """A human-ish gap: the base gap plus up to 100% jitter."""
+        return random.uniform(self._gap, self._gap * 2.0)
 
     def _log(self, message: str) -> None:
         logger.info(message)
@@ -67,19 +73,19 @@ class GroupCoordinator:
         if not live:
             raise RuntimeError("no group member could connect")
 
-        # Read + share.
+        # Read (no sharing yet — sharing is bounded and runs at the end so a big
+        # backlog of own missions can't make the cycle look dead).
         vehicles_by_account: dict[int, list] = {}
         buildings_by_account: dict[int, list] = {}
+        missions_by_account: dict[int, list] = {}
         missions_by_id: dict[int, object] = {}
         for aid, member in live.items():
-            vehicles = await member.client.fetch_vehicles(member.vehicle_cap)
-            vehicles_by_account[aid] = vehicles
+            vehicles_by_account[aid] = await member.client.fetch_vehicles(member.vehicle_cap)
             buildings_by_account[aid] = await self._buildings_for(aid, member)
             missions = await member.client.fetch_missions()
+            missions_by_account[aid] = missions
             for m in missions:
                 missions_by_id.setdefault(m.id, m)  # union / dedup
-            if self._share_enabled:
-                await self._share_own(aid, member, missions)
 
         missions = list(missions_by_id.values())
         resolver = live[next(iter(live))].resolver
@@ -91,26 +97,29 @@ class GroupCoordinator:
             self._policy, now=time.time(),
         )
 
-        # Dispatch each account's share (one bulk POST per mission).
+        # Dispatch MISSION BY MISSION in sort order, so each mission is fully
+        # staffed by every participant before we move on (an interruption then
+        # leaves completed missions, not half-joined ones). Within a mission the
+        # account order is shuffled and gaps jittered so it's less robotic.
+        veh_by_id = {v.id: v for vs in vehicles_by_account.values() for v in vs}
         dispatched = 0
-        for aid, mission_plans in plan.by_account.items():
-            member = live.get(aid)
-            if member is None:
-                continue
-            veh_by_id = {v.id: v for v in vehicles_by_account.get(aid, [])}
-            for mp in mission_plans:
-                ids = list(mp.vehicle_ids)
-                if not ids:
+        for gmp in plan.missions:
+            senders = [(aid, ids) for aid, ids in gmp.by_account.items() if ids]
+            random.shuffle(senders)
+            for aid, ids in senders:
+                member = live.get(aid)
+                if member is None:
                     continue
-                if await member.client.dispatch_many(mp.mission_id, ids):
+                ids = list(ids)
+                if await member.client.dispatch_many(gmp.mission_id, ids):
                     dispatched += len(ids)
                     names = ", ".join(_name(veh_by_id.get(v), v) for v in ids)
-                    self._log(f"[#{aid}] → #{mp.mission_id} {mp.caption!r}: {names}")
+                    self._log(f"[#{aid}] → #{gmp.mission_id} {gmp.caption!r}: {names}")
                     if self._on_stat is not None:
                         self._on_stat(aid, len(ids), 1)
                 else:
-                    self._log(f"[#{aid}] batch failed → #{mp.mission_id} {mp.caption!r}")
-                await self._sleep(self._gap)
+                    self._log(f"[#{aid}] batch failed → #{gmp.mission_id} {gmp.caption!r}")
+                await self._sleep(self._jittered_gap())
 
         # Transport phase per member (FMS-5 -> hospital/cell).
         for aid, member in live.items():
@@ -120,6 +129,12 @@ class GroupCoordinator:
                 except Exception:  # noqa: BLE001
                     logger.exception("group transport for %s failed", aid)
 
+        # Share each member's own missions so others can join them next cycle —
+        # bounded per cycle so a backlog trickles instead of stalling the loop.
+        if self._share_enabled:
+            for aid, member in live.items():
+                await self._share_own(aid, member, missions_by_account.get(aid, []))
+
         self._log(
             f"group cycle done: {plan.missions_actioned} mission(s), {dispatched} vehicle(s), "
             f"{len(plan.skipped)} skipped"
@@ -127,17 +142,20 @@ class GroupCoordinator:
         return plan
 
     async def _share_own(self, aid, member, missions) -> None:
-        """Share this member's OWN (not-yet-shared) missions to the alliance."""
-        for m in missions:
-            if getattr(m, "is_alliance", False):
-                continue
-            key = (aid, m.id)
-            if key in self._shared:
-                continue
+        """Share this member's OWN (not-yet-shared) missions to the alliance,
+        capped per cycle so a big backlog doesn't block the loop."""
+        own = [
+            m for m in missions
+            if not getattr(m, "is_alliance", False) and (aid, m.id) not in self._shared
+        ]
+        if not own:
+            return
+        batch = own[: self._share_cap]
+        self._log(f"[#{aid}] sharing {len(batch)} of {len(own)} own mission(s) to the alliance")
+        for m in batch:
             if await member.client.share_mission(m.id):
-                self._shared.add(key)
-                self._log(f"[#{aid}] shared #{m.id} {getattr(m, 'caption', '')!r} to the alliance")
-            await self._sleep(self._gap)
+                self._shared.add((aid, m.id))
+            await self._sleep(self._jittered_gap())
 
     async def aclose(self) -> None:
         for member in self._members.values():

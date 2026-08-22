@@ -354,7 +354,14 @@ def default_group_factory(store, secret_box, settings, log_store=None):
 
         coordinator = GroupCoordinator(members, gcfg.group_policy(), on_log=log, on_stat=stat)
         timing = WorkerTiming(poll_seconds=gcfg.poll_seconds, jitter_seconds=gcfg.jitter_seconds)
-        return AccountWorker(GROUP_KEY, coordinator, timing)
+
+        def on_state(_aid: int, status: str, error: str | None) -> None:
+            # Surface a group cycle failure to the Group log (otherwise it only
+            # hits Python logging and the panel looks silent).
+            if error and log_store is not None:
+                log_store.append(GROUP_KEY, f"group error: {error}")
+
+        return AccountWorker(GROUP_KEY, coordinator, timing, on_state=on_state)
 
     return factory
 

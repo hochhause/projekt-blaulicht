@@ -26,7 +26,6 @@ from enum import Enum
 from .coverage import select_coverage
 from .dispatch import (
     DispatchOrder,
-    MissionPlan,
     _apply_delta,
     _derive_requirements,
     _distance_fn,
@@ -64,20 +63,31 @@ class GroupPolicy:
 
 
 @dataclass
+class GroupMissionPlan:
+    """One mission's group plan: which vehicles each account sends to it."""
+
+    mission_id: int
+    caption: str
+    by_account: dict[int, tuple[int, ...]]  # account_id -> vehicle ids for THIS mission
+    satisfied: bool
+    shortfall: dict[str, int]
+
+
+@dataclass
 class GroupPlan:
-    # account_id -> list of MissionPlan (that account's sends this cycle)
-    by_account: dict[int, list[MissionPlan]] = field(default_factory=dict)
+    # Missions in dispatch order — the coordinator sends them one at a time so
+    # each is fully staffed by all participants before moving on.
+    missions: list[GroupMissionPlan] = field(default_factory=list)
     skipped: list[tuple[int, str]] = field(default_factory=list)
-    # class -> how many missions were left short (dashboard tally)
-    shortfalls: dict[str, int] = field(default_factory=dict)
+    shortfalls: dict[str, int] = field(default_factory=dict)  # class -> #missions short
 
     @property
     def total_dispatches(self) -> int:
-        return sum(len(mp.vehicle_ids) for plans in self.by_account.values() for mp in plans)
+        return sum(len(ids) for gmp in self.missions for ids in gmp.by_account.values())
 
     @property
     def missions_actioned(self) -> int:
-        return len({mp.mission_id for plans in self.by_account.values() for mp in plans})
+        return len(self.missions)
 
 
 def _note(shortfalls, classes) -> None:
@@ -193,12 +203,14 @@ def plan_group_dispatches(
             plan.skipped.append((mid, "no requirements found"))
             continue
 
-        # Combined coverage — minimal set from the whole group to crew it.
+        # Combined coverage — minimal set from the whole group to crew it. Among
+        # equally-covering candidates, take from the account with the MOST spare of
+        # that type (balances fleets), then nearest.
         chosen: list[int] = []
         satisfied = True
         shortfall: dict[str, int] = {}
         if reqs:
-            cov = select_coverage(reqs, pool, distance_of=_distance_fn(pos, building_pos))
+            cov = select_coverage(reqs, pool, distance_of=_balanced_distance(pos, building_pos, pool, owner_of))
             chosen = list(cov.vehicle_ids)
             satisfied = cov.satisfied
             shortfall = dict(cov.shortfall)
@@ -232,20 +244,37 @@ def plan_group_dispatches(
             plan.skipped.append((mid, "already covered"))
             continue
 
-        # Consume from the pool and split the sends by owner.
+        # Consume from the pool and split this mission's sends by owner.
         chosen_set = set(chosen)
         pool = [v for v in pool if v.id not in chosen_set]
-        caption = getattr(mission, "caption", "")
         per_owner: dict[int, list[int]] = {}
         for vid in chosen:
             per_owner.setdefault(owner_of[vid], []).append(vid)
-        for aid, ids in per_owner.items():
-            plan.by_account.setdefault(aid, []).append(
-                MissionPlan(mid, caption, tuple(ids), satisfied, dict(shortfall))
-            )
+        plan.missions.append(GroupMissionPlan(
+            mission_id=mid,
+            caption=getattr(mission, "caption", ""),
+            by_account={aid: tuple(ids) for aid, ids in per_owner.items()},
+            satisfied=satisfied,
+            shortfall=dict(shortfall),
+        ))
         actioned += 1
 
     return plan
+
+
+def _balanced_distance(mission_pos, building_pos, pool, owner_of):
+    """Coverage ranking key for group mode: prefer the account holding the MOST
+    spare of a vehicle's type (to level fleets), then the nearest vehicle."""
+    dist = _distance_fn(mission_pos, building_pos)
+    spare: dict[tuple[int, int], int] = {}
+    for v in pool:
+        spare[(owner_of.get(v.id), v.type_id)] = spare.get((owner_of.get(v.id), v.type_id), 0) + 1
+
+    def key(vehicle):
+        n = spare.get((owner_of.get(vehicle.id), vehicle.type_id), 0)
+        return (-n, dist(vehicle))  # most-spare first, then nearest
+
+    return key
 
 
 def _nearest_spare(pool, account_id, owner_of, chosen_set, mission_pos, building_pos):

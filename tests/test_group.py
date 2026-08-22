@@ -6,6 +6,15 @@ from types import SimpleNamespace
 from app.domain.assets import AssetLibrary
 from app.domain.catalog import MissionCatalog
 from app.domain.group import GroupPolicy, RadiusBasis, plan_group_dispatches
+
+
+def _by_account(plan):
+    """{account_id: {mission_id: vehicle_ids}} view of a GroupPlan."""
+    out: dict = {}
+    for gmp in plan.missions:
+        for aid, ids in gmp.by_account.items():
+            out.setdefault(aid, {})[gmp.mission_id] = ids
+    return out
 from app.domain.resolver import MissionRequirementResolver
 
 BASE = Path(__file__).resolve().parent
@@ -60,11 +69,9 @@ class GroupPlannerTests(unittest.TestCase):
             [mission(1, 1)],
             {10: [vehicle(100, LF)], 20: [vehicle(200, LF)]},
         )
-        self.assertIn(10, plan.by_account)
-        self.assertIn(20, plan.by_account)
-        sent = {aid: plan.by_account[aid][0].vehicle_ids for aid in (10, 20)}
-        self.assertEqual(sent[10], (100,))
-        self.assertEqual(sent[20], (200,))  # B's participation token
+        ba = _by_account(plan)
+        self.assertEqual(ba.get(10, {}).get(1), (100,))
+        self.assertEqual(ba.get(20, {}).get(1), (200,))  # B's participation token
 
     def test_no_over_send_global_delta(self):
         # A already has a firetruck en route to mission 1 -> requirement met by the
@@ -76,8 +83,9 @@ class GroupPlannerTests(unittest.TestCase):
                 20: [vehicle(200, LF)],
             },
         )
-        self.assertNotIn(10, plan.by_account)          # A not re-dispatched
-        self.assertEqual(plan.by_account[20][0].vehicle_ids, (200,))  # B tags along
+        ba = _by_account(plan)
+        self.assertNotIn(10, ba)                 # A not re-dispatched
+        self.assertEqual(ba[20][1], (200,))      # B tags along
 
     def test_combined_pool_crews_mission_across_accounts(self):
         # type 3 needs firetrucks:1 + police_cars:1; A has only the LF, B only the
@@ -86,9 +94,9 @@ class GroupPlannerTests(unittest.TestCase):
             [mission(1, 3)],
             {10: [vehicle(100, LF)], 20: [vehicle(200, FUSTW)]},
         )
-        got = {aid: set(plan.by_account[aid][0].vehicle_ids) for aid in plan.by_account}
-        self.assertEqual(got.get(10), {100})
-        self.assertEqual(got.get(20), {200})
+        ba = _by_account(plan)
+        self.assertEqual(set(ba.get(10, {}).get(1, ())), {100})
+        self.assertEqual(set(ba.get(20, {}).get(1, ())), {200})
 
     def test_participation_off_only_solver_sends(self):
         plan = self.plan(
@@ -96,8 +104,20 @@ class GroupPlannerTests(unittest.TestCase):
             {10: [vehicle(100, LF)], 20: [vehicle(200, LF)]},
             policy=GroupPolicy(radius_km=40, participation=False),
         )
-        self.assertIn(10, plan.by_account)
-        self.assertNotIn(20, plan.by_account)  # no token when participation off
+        ba = _by_account(plan)
+        self.assertIn(10, ba)
+        self.assertNotIn(20, ba)  # no token when participation off
+
+    def test_takes_from_account_with_most_spare(self):
+        # Needs one firetruck; A holds 3 LFs, B holds 1 -> take from A (balance).
+        plan = self.plan(
+            [mission(1, 1)],
+            {10: [vehicle(100, LF), vehicle(101, LF), vehicle(102, LF)], 20: [vehicle(200, LF)]},
+            policy=GroupPolicy(radius_km=40, participation=False),
+        )
+        ba = _by_account(plan)
+        self.assertIn(10, ba)       # solver drawn from the account with the most spare
+        self.assertNotIn(20, ba)
 
     def test_out_of_range_all_basis(self):
         # ANY-basis: in range if any account is near. ALL-basis needs both near.
@@ -107,10 +127,10 @@ class GroupPlannerTests(unittest.TestCase):
         vehicles = {10: [vehicle(100, LF, building_id=10)], 20: [vehicle(200, LF, building_id=20)]}
         any_plan = plan_group_dispatches([mission(1, 1)], vehicles, buildings, self.resolver,
                                          GroupPolicy(radius_km=40, radius_basis=RadiusBasis.ANY))
-        self.assertTrue(any_plan.by_account)  # A is near -> worked
+        self.assertTrue(any_plan.missions)  # A is near -> worked
         all_plan = plan_group_dispatches([mission(1, 1)], vehicles, buildings, self.resolver,
                                          GroupPolicy(radius_km=40, radius_basis=RadiusBasis.ALL))
-        self.assertEqual(all_plan.by_account, {})  # B far -> not worked
+        self.assertEqual(all_plan.missions, [])  # B far -> not worked
         self.assertEqual(all_plan.skipped, [(1, "out of range")])
 
     def test_token_cap_limits_participation(self):
@@ -121,8 +141,8 @@ class GroupPlannerTests(unittest.TestCase):
              20: [vehicle(200, LF), vehicle(201, LF)]},
             policy=GroupPolicy(radius_km=40, max_token_per_account=1),
         )
-        b_missions = {mp.mission_id for mp in plan.by_account.get(20, [])}
-        self.assertEqual(len(b_missions), 1)  # capped at one token
+        ba = _by_account(plan)
+        self.assertEqual(len(ba.get(20, {})), 1)  # capped at one token
 
 
 class FakeGroupClient:
