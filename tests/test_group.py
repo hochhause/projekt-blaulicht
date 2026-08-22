@@ -125,5 +125,108 @@ class GroupPlannerTests(unittest.TestCase):
         self.assertEqual(len(b_missions), 1)  # capped at one token
 
 
+class FakeGroupClient:
+    def __init__(self, missions, vehicles, buildings):
+        self._m, self._v, self._b = missions, vehicles, buildings
+        self.dispatched: list = []
+        self.shared: list = []
+
+    async def fetch_vehicles(self, cap=0):
+        return self._v
+
+    async def fetch_missions(self):
+        return self._m
+
+    async def fetch_buildings(self):
+        return self._b
+
+    async def dispatch_many(self, mid, ids):
+        self.dispatched.append((mid, tuple(ids)))
+        return True
+
+    async def share_mission(self, mid):
+        self.shared.append(mid)
+        return True
+
+
+class FakeMember:
+    def __init__(self, client, resolver, vehicle_cap=0, transport_enabled=False):
+        self.client = client
+        self.resolver = resolver
+        self.vehicle_cap = vehicle_cap
+        self.transport_enabled = transport_enabled
+        self.closed = False
+
+    async def connect(self):
+        return None
+
+    async def handle_transports(self, vehicles):
+        return 0
+
+    async def aclose(self):
+        self.closed = True
+
+
+class GroupCoordinatorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        library = AssetLibrary.load(VEHICLES_DIR)
+        catalog = MissionCatalog.from_payload(json.loads(FIXTURE.read_text(encoding="utf-8")))
+        cls.resolver = MissionRequirementResolver(catalog, library)
+
+    def _run(self, coord):
+        import asyncio
+
+        async def no_sleep(_):
+            return None
+
+        coord._sleep = no_sleep
+        return asyncio.run(coord.run_cycle())
+
+    def test_both_members_dispatch_to_shared_mission(self):
+        from app.core.group_coordinator import GroupCoordinator
+        from app.domain.group import GroupPolicy
+
+        m1 = mission(1, 1, is_alliance=True)  # shared, both see it
+        ca = FakeGroupClient([m1], [vehicle(100, LF, building_id=10)], [building(10)])
+        cb = FakeGroupClient([m1], [vehicle(200, LF, building_id=20)], [building(20)])
+        coord = GroupCoordinator(
+            {10: FakeMember(ca, self.resolver), 20: FakeMember(cb, self.resolver)},
+            GroupPolicy(radius_km=40),
+        )
+        self._run(coord)
+        self.assertEqual(ca.dispatched[0][0], 1)
+        self.assertEqual(cb.dispatched[0][0], 1)  # participation token
+
+    def test_shares_own_missions(self):
+        from app.core.group_coordinator import GroupCoordinator
+        from app.domain.group import GroupPolicy
+
+        m1 = mission(1, 1, is_alliance=False)  # own -> should be shared
+        ca = FakeGroupClient([m1], [vehicle(100, LF, building_id=10)], [building(10)])
+        coord = GroupCoordinator(
+            {10: FakeMember(ca, self.resolver)},
+            GroupPolicy(radius_km=40, participation=False),
+        )
+        self._run(coord)
+        self.assertIn(1, ca.shared)
+
+    def test_no_double_send_when_already_en_route(self):
+        from app.core.group_coordinator import GroupCoordinator
+        from app.domain.group import GroupPolicy
+
+        m1 = mission(1, 1, is_alliance=True)
+        # A already en route (delta covers it); B participates.
+        ca = FakeGroupClient([m1], [vehicle(101, LF, building_id=10, target_type="mission", target_id=1)], [building(10)])
+        cb = FakeGroupClient([m1], [vehicle(200, LF, building_id=20)], [building(20)])
+        coord = GroupCoordinator(
+            {10: FakeMember(ca, self.resolver), 20: FakeMember(cb, self.resolver)},
+            GroupPolicy(radius_km=40),
+        )
+        self._run(coord)
+        self.assertEqual(ca.dispatched, [])          # A not re-sent
+        self.assertEqual(cb.dispatched[0][0], 1)     # B tags along
+
+
 if __name__ == "__main__":
     unittest.main()

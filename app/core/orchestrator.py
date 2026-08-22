@@ -116,21 +116,68 @@ class AccountWorker:
                     logger.exception("closing runner for account %s failed", self.account_id)
 
 
+GROUP_KEY = 0  # reserved worker/log id for the running group
+
+
 class Orchestrator:
     """Supervises account workers as isolated asyncio tasks."""
 
-    def __init__(self, worker_factory: Callable[[int], AccountWorker]) -> None:
+    def __init__(self, worker_factory: Callable[[int], AccountWorker], group_factory=None) -> None:
         self._factory = worker_factory
+        self._group_factory = group_factory
         self._tasks: dict[int, tuple[AccountWorker, asyncio.Task, asyncio.Event]] = {}
+        # (worker, task, stop_event, member_ids) while a group runs; else None.
+        self._group: tuple[AccountWorker, asyncio.Task, asyncio.Event, set[int]] | None = None
 
     async def start(self, account_id: int) -> None:
         if account_id in self._tasks:
             return
+        if self._group is not None and account_id in self._group[3]:
+            raise RuntimeError("account is in the running group — stop the group to run it solo")
         worker = self._factory(account_id)
         stop = asyncio.Event()
         task = asyncio.create_task(worker.run_forever(stop))
         self._tasks[account_id] = (worker, task, stop)
         logger.info("started account %s", account_id)
+
+    # -- group (symbiotic) mode -------------------------------------------
+    async def start_group(self, member_ids: list[int]) -> None:
+        if self._group is not None:
+            return
+        if self._group_factory is None:
+            raise RuntimeError("no group factory configured")
+        # A group member can't also run solo — stop any individual workers first.
+        for account_id in member_ids:
+            await self.stop(account_id)
+        worker = self._group_factory(list(member_ids))
+        stop = asyncio.Event()
+        task = asyncio.create_task(worker.run_forever(stop))
+        self._group = (worker, task, stop, set(member_ids))
+        logger.info("started group %s", member_ids)
+
+    async def stop_group(self) -> None:
+        if self._group is None:
+            return
+        _worker, task, stop, _members = self._group
+        self._group = None
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:  # pragma: no cover
+            pass
+        logger.info("stopped group")
+
+    @property
+    def group_members(self) -> set[int]:
+        return set(self._group[3]) if self._group is not None else set()
+
+    @property
+    def group_running(self) -> bool:
+        return self._group is not None
+
+    def group_status(self) -> str | None:
+        return self._group[0].status if self._group is not None else None
 
     async def stop(self, account_id: int) -> None:
         entry = self._tasks.pop(account_id, None)
@@ -146,6 +193,7 @@ class Orchestrator:
         logger.info("stopped account %s", account_id)
 
     async def stop_all(self) -> None:
+        await self.stop_group()
         for account_id in list(self._tasks):
             await self.stop(account_id)
 
@@ -271,6 +319,42 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
                 store.add_stat(aid, 0, 0, credits=credits)
 
         return AccountWorker(account_id, runner, timing, on_state=on_state, on_cycle=on_cycle)
+
+    return factory
+
+
+def default_group_factory(store, secret_box, settings, log_store=None):
+    """Factory that builds the supervised group worker from the stored group
+    config + the given member ids. Wrapped as an :class:`AccountWorker` so the
+    orchestrator supervises it with the same back-off loop."""
+    import json
+
+    from ..domain.assets import AssetLibrary
+    from .account_config import GroupConfig
+    from .group_coordinator import GroupCoordinator
+
+    library = AssetLibrary.load(settings.vehicles_dir)
+
+    def factory(member_ids: list[int]) -> AccountWorker:
+        raw = store.get_group_config()
+        gcfg = GroupConfig.from_dict(json.loads(raw) if raw else {})
+        members = {}
+        for account_id in member_ids:
+            store.clear_shortfalls(account_id)
+            runner, _cfg = build_account_runner(store, secret_box, settings, library, account_id, log_store)
+            members[account_id] = runner
+
+        def log(message: str) -> None:
+            if log_store is not None:
+                log_store.append(GROUP_KEY, message)
+
+        def stat(aid: int, dispatched: int, missions: int) -> None:
+            if dispatched or missions:
+                store.add_stat(aid, dispatched=dispatched, missions=missions)
+
+        coordinator = GroupCoordinator(members, gcfg.group_policy(), on_log=log, on_stat=stat)
+        timing = WorkerTiming(poll_seconds=gcfg.poll_seconds, jitter_seconds=gcfg.jitter_seconds)
+        return AccountWorker(GROUP_KEY, coordinator, timing)
 
     return factory
 

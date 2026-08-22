@@ -65,6 +65,8 @@ class AccountRunner:
         self._timing = timing
         self._session: GameSession | None = None
         self._dispatch: DispatchRunner | None = None
+        self._client = None
+        self._resolver = None
         # Strikes are keyed by VEHICLE id now: a vehicle that repeatedly fails to
         # dispatch (looked free but wouldn't send — usually no crew) is struck out
         # and dropped from the pool. The runner logs the exclusion (it has the
@@ -91,6 +93,8 @@ class AccountRunner:
         # Regex fallback for missions the structured catalogue doesn't cover.
         text_engine = RequirementEngine(self._library)
         self._session = session
+        self._client = client
+        self._resolver = resolver
         self._dispatch = DispatchRunner(
             client, resolver, self._policy,
             on_log=self._on_log, on_stat=self._on_stat, timing=self._timing,
@@ -98,6 +102,36 @@ class AccountRunner:
             transport_enabled=self._transport_enabled, transport_only=self._transport_only,
         )
         self._log(f"connected — {len(resolver.catalog)} mission types loaded")
+
+    async def connect(self) -> None:
+        """Ensure the session is up (used by the group coordinator)."""
+        if self._session is None:
+            await self._connect()
+
+    @property
+    def client(self):
+        """The authenticated GameClient (after connect)."""
+        return self._client
+
+    @property
+    def resolver(self):
+        """The mission resolver (after connect) — the catalogue is public, so any
+        member's resolver serves the whole group."""
+        return self._resolver
+
+    @property
+    def transport_enabled(self) -> bool:
+        return self._transport_enabled
+
+    @property
+    def vehicle_cap(self) -> int:
+        return self._vehicle_cap
+
+    async def handle_transports(self, vehicles) -> int:
+        """Run the FMS-5 transport phase over an already-fetched fleet."""
+        if self._dispatch is None:
+            return 0
+        return await self._dispatch._handle_transports(vehicles)
 
     async def run_cycle(self):
         """Run one cycle, connecting first if needed. Drops the session on any
@@ -129,3 +163,5 @@ class AccountRunner:
                 logger.exception("closing session failed")
         self._session = None
         self._dispatch = None
+        self._client = None
+        self._resolver = None

@@ -85,6 +85,45 @@ class OrchestratorTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_group_start_stop_and_guard(self):
+        async def scenario():
+            orch = Orchestrator(lambda aid: FakeWorker(aid),
+                                group_factory=lambda ids: FakeWorker(0))
+            await orch.start_group([1, 2])
+            await asyncio.sleep(0)
+            self.assertTrue(orch.group_running)
+            self.assertEqual(orch.group_members, {1, 2})
+            # a group member cannot be started solo
+            with self.assertRaises(RuntimeError):
+                await orch.start(1)
+            # a non-member still can
+            await orch.start(3)
+            await asyncio.sleep(0)
+            self.assertEqual(orch.running, [3])
+
+            await orch.stop_group()
+            self.assertFalse(orch.group_running)
+            self.assertEqual(orch.group_members, set())
+            # now the former member can run solo
+            await orch.start(1)
+            await orch.stop_all()
+
+        asyncio.run(scenario())
+
+    def test_group_start_stops_individual_members_first(self):
+        async def scenario():
+            orch = Orchestrator(lambda aid: FakeWorker(aid),
+                                group_factory=lambda ids: FakeWorker(0))
+            await orch.start(1)
+            await asyncio.sleep(0)
+            await orch.start_group([1, 2])  # 1 was running solo -> stopped, folded in
+            await asyncio.sleep(0)
+            self.assertEqual(orch.running, [])  # no solo workers
+            self.assertEqual(orch.group_members, {1, 2})
+            await orch.stop_all()
+
+        asyncio.run(scenario())
+
 
 if __name__ == "__main__":
     unittest.main()
