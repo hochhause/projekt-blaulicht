@@ -38,6 +38,7 @@
 </style>
 {% endblock %}
 {% block nav %}
+  <a href="/group" class="btn" style="text-decoration:none">Group start</a>
   <a href="/settings" class="btn" style="text-decoration:none">Settings</a>
   <form method="post" action="/stop-all" class="inline"><button class="danger">Stop all</button></form>
   <form method="post" action="/logout" class="inline"><button>Log out</button></form>
@@ -45,6 +46,16 @@
 {% block content %}
 <h1>Accounts</h1>
 <p class="muted" style="margin-top:0">Manage the game accounts this instance runs. All local; nothing is shared.</p>
+
+{% if group and group.running %}
+<div class="card" style="border-color:var(--blau);display:flex;align-items:center;gap:14px">
+  <span class="pill running">group {{ group.status or 'running' }}</span>
+  <span>Symbiotic <b>group mode</b> running — {{ group.members | length }} account(s) working together
+    (id {{ group.members | join(', ') }}). Members can't be started individually while it runs.</span>
+  <span class="spacer" style="flex:1"></span>
+  <form method="post" action="/group/stop" class="inline"><button class="danger">Stop group</button></form>
+</div>
+{% endif %}
 
 <table>
   <thead>
@@ -64,7 +75,9 @@
       <td class="muted" style="font-size:12px">{{ r.last_cycle or "—" }}</td>
       <td class="actions">
         <a href="/accounts/{{ r.account.id }}/details" class="btn" style="text-decoration:none">Details</a>
-        {% if r.account.enabled %}
+        {% if group and r.account.id in group.members %}
+          <span class="pill running">in group</span>
+        {% elif r.account.enabled %}
           <form method="post" action="/accounts/{{ r.account.id }}/disable"><button>Stop</button></form>
         {% else %}
           <form method="post" action="/accounts/{{ r.account.id }}/enable"><button class="primary">Start</button></form>

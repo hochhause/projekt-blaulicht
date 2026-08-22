@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from ..core.account_config import DEFAULT_CONFIG, AccountConfig
+from ..core.account_config import DEFAULT_CONFIG, AccountConfig, GroupConfig
 from .auth import AdminAuth
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -119,7 +119,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
                     {
                         "seq": entry.seq,
                         "ts": entry.ts,
-                        "label": label_by_id.get(aid, f"#{aid}"),
+                        "label": label_by_id.get(aid) or ("Group" if aid == 0 else f"#{aid}"),
                         "color": color_by_id.get(aid, "#8697ad"),
                         "cls": classify_log(entry.message),
                         "message": entry.message,
@@ -147,11 +147,72 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
         # RIGHT panel: headline stats + a 24h dispatch chart.
         stats = _dashboard_stats(store, accounts, color_by_id)
 
+        group = {
+            "running": orchestrator.group_running,
+            "members": orchestrator.group_members,
+            "status": orchestrator.group_status(),
+        }
         return _TEMPLATES.TemplateResponse(
             request,
             "dashboard.html",
-            {"rows": rows, "compound": compound, "strike_panels": strike_panels, "stats": stats},
+            {"rows": rows, "compound": compound, "strike_panels": strike_panels,
+             "stats": stats, "group": group},
         )
+
+    # -- group (symbiotic) mode -------------------------------------------
+    @app.get("/group", response_class=HTMLResponse)
+    async def group_page(request: Request, _=Depends(require_auth)):
+        raw = store.get_group_config()
+        cfg = GroupConfig.from_dict(json.loads(raw) if raw else {})
+        return _TEMPLATES.TemplateResponse(
+            request, "group.html",
+            {"cfg": cfg, "accounts": store.list_accounts(),
+             "running": orchestrator.group_running, "members": orchestrator.group_members},
+        )
+
+    @app.post("/group")
+    async def group_save(
+        _=Depends(require_auth),
+        action: str = Form("save"),
+        radius_km: float = Form(40.0),
+        credit_min: int = Form(0),
+        credit_max: int = Form(0),
+        order: str = Form("nearest"),
+        batch_size: str = Form(""),
+        allowed_categories: str = Form(""),
+        poll_seconds: float = Form(45.0),
+        jitter_seconds: float = Form(10.0),
+        transport_enabled: str = Form(""),
+        participation: str = Form(""),
+        radius_basis: str = Form("any"),
+        max_token_per_account: str = Form(""),
+        members: list[int] = Form(default=[]),
+    ):
+        cfg = GroupConfig(
+            radius_km=radius_km,
+            credit_min=credit_min,
+            credit_max=credit_max,
+            order=order,
+            batch_size=_opt_int(batch_size),
+            allowed_categories=tuple(c.strip() for c in allowed_categories.split(",") if c.strip()),
+            poll_seconds=poll_seconds,
+            jitter_seconds=jitter_seconds,
+            transport_enabled=bool(transport_enabled),
+            participation=bool(participation),
+            radius_basis=radius_basis,
+            max_token_per_account=_opt_int(max_token_per_account),
+            member_ids=tuple(members),
+        )
+        store.set_group_config(json.dumps(cfg.to_dict()))
+        if action == "start" and members:
+            await orchestrator.start_group(list(members))
+            return RedirectResponse("/", status_code=303)
+        return RedirectResponse("/group", status_code=303)
+
+    @app.post("/group/stop")
+    async def group_stop(_=Depends(require_auth)):
+        await orchestrator.stop_group()
+        return RedirectResponse("/", status_code=303)
 
     # -- per-account details / log ----------------------------------------
     @app.get("/accounts/{account_id}/details", response_class=HTMLResponse)
@@ -310,6 +371,9 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
     # -- lifecycle actions -------------------------------------------------
     @app.post("/accounts/{account_id}/enable")
     async def enable(account_id: int, _=Depends(require_auth)):
+        if account_id in orchestrator.group_members:
+            # In group mode this account is driven by the group — no solo start.
+            return RedirectResponse("/", status_code=303)
         store.set_enabled(account_id, True)
         await orchestrator.start(account_id)
         return RedirectResponse("/", status_code=303)
