@@ -414,18 +414,6 @@ def _order(candidates, order: DispatchOrder):
     return sorted(candidates, key=lambda t: (t[0], t[2].id))  # NEAREST
 
 
-def _derive_requirements(mission, resolver, text_engine, patient_only=False):
-    """Base (pre-delta) requirements from the structured catalogue.
-
-    In *patient_only* mode only the patient-clearing units are required (RTW/NEF/
-    RTH + LNA/OrgL by patient count). The live ``missing_text`` is folded in
-    separately (post-delta) by :func:`_outstanding`.
-    """
-    if patient_only:
-        return list(resolver.resolve_patient_only(mission).requirements)
-    return list(resolver.resolve_mission(mission).requirements)
-
-
 def _missing_text_vehicles(mission) -> str:
     """The still-missing vehicle list the live feed reveals, as a caption string.
 
@@ -448,41 +436,33 @@ def _missing_text_vehicles(mission) -> str:
     return raw
 
 
-def _missing_text_requirements(mission, resolver, text_engine):
-    """Requirements parsed from the mission's revealed ``missing_text`` vehicles —
-    the game's own "still needed" list (already net of what's en route). ``None``
-    if nothing revealed or no text engine. Catches late-revealed needs (a DGL, a
-    vehicle whose requirement only became clear on scene)."""
-    if text_engine is None:
-        return None
-    veh = _missing_text_vehicles(mission)
-    if not veh:
-        return None
-    parsed = text_engine.resolve(re.split(r"[,;\n/]+", veh))
-    return list(parsed.requirements) or None
+def _derive_requirements(mission, resolver, text_engine, patient_only=False):
+    """Base (pre-delta) requirements.
 
-
-def _merge_max(base, extra):
-    """Merge two Requirement lists, taking the higher count per class. *extra*
-    can add classes *base* missed (e.g. a DGL) without double-counting shared ones."""
-    by = {r.source: r for r in base}
-    for r in extra:
-        cur = by.get(r.source)
-        if cur is None or r.count > cur.count:
-            by[r.source] = r
-    return list(by.values())
+    Primary = the structured catalogue (patient-only picks just the medical units).
+    When the catalogue has NO requirement for a mission, fall back to parsing the
+    live ``missing_text`` vehicles — the game's own "still needed" list — so a
+    mission the catalogue doesn't cover is still handled. (We only fall back on an
+    EMPTY catalogue result to avoid double-counting: the text engine keys
+    requirements by raw caption, not class, so merging it with catalogue classes
+    would over-count shared needs.)
+    """
+    if patient_only:
+        return list(resolver.resolve_patient_only(mission).requirements)
+    reqs = list(resolver.resolve_mission(mission).requirements)
+    if not reqs and text_engine is not None:
+        veh = _missing_text_vehicles(mission)
+        if veh:
+            parsed = text_engine.resolve(re.split(r"[,;\n/]+", veh))
+            reqs = list(parsed.requirements)
+    return reqs
 
 
 def _outstanding(mission, resolver, text_engine, assigned, patient_only=False):
-    """Post-delta requirements to still send: catalogue total minus en-route,
-    merged with the live ``missing_text`` (the game's revealed truth)."""
-    out = _apply_delta(_derive_requirements(mission, resolver, text_engine, patient_only),
-                       assigned, mission.id)
-    if not patient_only:
-        revealed = _missing_text_requirements(mission, resolver, text_engine)
-        if revealed:
-            out = _merge_max(out, revealed)
-    return out
+    """Post-delta requirements still to send (catalogue/revealed minus en-route)."""
+    return _apply_delta(
+        _derive_requirements(mission, resolver, text_engine, patient_only), assigned, mission.id
+    )
 
 
 def _distance_fn(mission_pos, building_pos):
@@ -628,20 +608,17 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
     assigned = assigned or {}
 
     base = _derive_requirements(mission, resolver, text_engine, patient_only)
-    revealed = None if patient_only else _missing_text_requirements(mission, resolver, text_engine)
     # Personnel requirement (min firefighters) — not applicable in patient-only mode.
     mtype = None if patient_only else resolver.catalog.get(getattr(mission, "mission_type_id", None))
     min_fire = int(getattr(mtype, "min_fire_personnel", 0) or 0) if mtype is not None else 0
 
-    if not base and not revealed and min_fire <= 0:
+    if not base and min_fire <= 0:
         # No known requirement at all. In patient-only mode that just means "no
         # patients here" (incl. Hitzschlag end-patients) — a quiet skip.
         return "no patients on site" if patient_only else "no requirements found"
 
     # Credit gating already happened during candidate collection.
     requirements = _apply_delta(base, assigned, mission.id)
-    if revealed:  # fold in the game's live "still missing" list (post-delta truth)
-        requirements = _merge_max(requirements, revealed)
     # Firefighters already en route count toward the personnel minimum.
     fire_needed = max(0, min_fire - _fire_crew(resolver, assigned.get(mission.id, []))) if min_fire else 0
 

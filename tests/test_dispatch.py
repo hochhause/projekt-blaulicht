@@ -126,27 +126,30 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].vehicle_ids, (100,))  # RTW (type 28)
 
-    def test_missing_text_reveals_extra_vehicle(self):
-        # einsaetze type 1 = firetrucks:1; the live missing_text also reveals an
-        # RTW is still needed -> both get dispatched.
+    def test_missing_text_json_fallback_when_catalogue_empty(self):
+        # Unknown mission type (no catalogue requirement) but the live missing_text
+        # JSON reveals an RTW -> parsed from the JSON blob and dispatched.
         from app.domain.requirements import RequirementEngine
         engine = RequirementEngine(self.lib_for_engine)
-        m = mission(1, 1, NEAR)
+        m = mission(1, 999, NEAR)  # 999 not in catalogue
         m.missing_text = '{"vehicles":"1 RTW","personnel":"","other":""}'
-        plan = plan_dispatches([m], [vehicle(100, LF), vehicle(101, 28)], [building()],
-                               self.resolver, DispatchPolicy(radius_km=40), text_engine=engine)
+        plan = plan_dispatches([m], [SimpleNamespace(id=100, type_id=28, is_available=True,
+                                                     position=BUILDING, building_id=1)],
+                               [building()], self.resolver, DispatchPolicy(radius_km=40),
+                               text_engine=engine)
         self.assertEqual(len(plan.planned), 1)
-        self.assertEqual(set(plan.planned[0].vehicle_ids), {100, 101})  # LF + RTW
+        self.assertEqual(plan.planned[0].vehicle_ids, (100,))  # RTW (type 28)
 
-    def test_missing_text_not_double_counted(self):
-        # missing_text repeats a requirement einsaetze already has -> not doubled.
+    def test_catalogue_requirement_not_overridden_by_missing_text(self):
+        # When the catalogue HAS a requirement we use it (no caption-vs-class
+        # double counting) — missing_text is a fallback only.
         from app.domain.requirements import RequirementEngine
         engine = RequirementEngine(self.lib_for_engine)
         m = mission(1, 1, NEAR)  # firetrucks:1
-        m.missing_text = '{"vehicles":"1 LF","personnel":"","other":""}'
-        plan = plan_dispatches([m], [vehicle(100, LF), vehicle(101, LF)], [building()],
+        m.missing_text = '{"vehicles":"1 RTW","personnel":"","other":""}'
+        plan = plan_dispatches([m], [vehicle(100, LF), vehicle(101, 28)], [building()],
                                self.resolver, DispatchPolicy(radius_km=40), text_engine=engine)
-        self.assertEqual(len(plan.planned[0].vehicle_ids), 1)  # one LF, not two
+        self.assertEqual(plan.planned[0].vehicle_ids, (100,))  # just the LF, no phantom RTW
 
     def test_pool_consumed_across_missions(self):
         # Two firetruck missions, only one LF -> nearest gets it, other short.
