@@ -289,6 +289,21 @@ class GroupCoordinatorTests(unittest.TestCase):
         self._run(coord)
         self.assertIn(1, ca.shared)
 
+    def test_share_min_credits_filters_which_own_missions_share(self):
+        from app.core.group_coordinator import GroupCoordinator
+        from app.domain.group import GroupPolicy
+
+        cheap = mission(1, 1, is_alliance=False, average_credits=120)
+        rich = mission(2, 1, is_alliance=False, average_credits=800)
+        ca = FakeGroupClient([cheap, rich], [vehicle(100, LF, building_id=10)], [building(10)])
+        coord = GroupCoordinator(
+            {10: FakeMember(ca, self.resolver)},
+            GroupPolicy(radius_km=40, participation=False, share_min_credits=500),
+        )
+        self._run(coord)
+        self.assertIn(2, ca.shared)       # rich mission shared
+        self.assertNotIn(1, ca.shared)    # cheap one left unshared
+
     def test_no_double_send_when_already_en_route(self):
         from app.core.group_coordinator import GroupCoordinator
         from app.domain.group import GroupPolicy

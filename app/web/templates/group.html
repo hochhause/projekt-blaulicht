@@ -56,6 +56,8 @@
         <input name="max_token_per_account" type="number" step="1" value="{{ cfg.max_token_per_account if cfg.max_token_per_account is not none else '' }}"></div>
       <div class="field"><label>Partial starts (begin fresh missions early with what's free, if we own the rest)</label>
         <select name="partial_starts"><option value="1" {{ 'selected' if cfg.partial_starts else '' }}>on</option><option value="" {{ '' if cfg.partial_starts else 'selected' }}>off</option></select></div>
+      <div class="field"><label>Only share own missions worth ≥ this many credits (0 = share all)</label>
+        <input name="share_min_credits" type="number" step="1" value="{{ cfg.share_min_credits }}"></div>
     </div>
   </div>
 

@@ -143,10 +143,14 @@ class GroupCoordinator:
 
     async def _share_own(self, aid, member, missions) -> None:
         """Share this member's OWN (not-yet-shared) missions to the alliance,
-        capped per cycle so a big backlog doesn't block the loop."""
+        capped per cycle so a big backlog doesn't block the loop. Missions below
+        the policy's share_min_credits are left unshared."""
+        floor = getattr(self._policy, "share_min_credits", 0) or 0
         own = [
             m for m in missions
-            if not getattr(m, "is_alliance", False) and (aid, m.id) not in self._shared
+            if not getattr(m, "is_alliance", False)
+            and (aid, m.id) not in self._shared
+            and (floor <= 0 or int(getattr(m, "average_credits", 0) or 0) >= floor)
         ]
         if not own:
             return

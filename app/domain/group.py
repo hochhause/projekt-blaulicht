@@ -64,6 +64,9 @@ class GroupPolicy:
     # follow over later cycles as they free up) — but only if we own the missing
     # types somewhere in the fleet, so we never start what we can't finish.
     partial_starts: bool = False
+    # Only share own missions worth at least this many credits to the alliance
+    # (0 = share all). Keeps the low-value clutter unshared.
+    share_min_credits: int = 0
 
 
 @dataclass

@@ -144,6 +144,7 @@ class GroupConfig:
     radius_basis: str = RadiusBasis.ANY.value
     max_token_per_account: int | None = None
     partial_starts: bool = False
+    share_min_credits: int = 0
     member_ids: tuple[int, ...] = ()
 
     def group_policy(self) -> GroupPolicy:
@@ -166,6 +167,7 @@ class GroupConfig:
             radius_basis=basis,
             max_token_per_account=self.max_token_per_account,
             partial_starts=self.partial_starts,
+            share_min_credits=self.share_min_credits,
         )
 
     def to_dict(self) -> dict[str, Any]:

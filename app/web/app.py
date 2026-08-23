@@ -187,6 +187,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
         radius_basis: str = Form("any"),
         max_token_per_account: str = Form(""),
         partial_starts: str = Form(""),
+        share_min_credits: int = Form(0),
         members: list[int] = Form(default=[]),
     ):
         cfg = GroupConfig(
@@ -203,6 +204,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
             radius_basis=radius_basis,
             max_token_per_account=_opt_int(max_token_per_account),
             partial_starts=bool(partial_starts),
+            share_min_credits=share_min_credits,
             member_ids=tuple(members),
         )
         store.set_group_config(json.dumps(cfg.to_dict()))
