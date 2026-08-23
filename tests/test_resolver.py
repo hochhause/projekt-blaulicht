@@ -132,6 +132,37 @@ class ResolverTests(unittest.TestCase):
                             prisoners_count=0, possible_prisoners_count=0, vehicle_state=0)
         self.assertEqual(self.resolver.resolve_patient_only(m).requirements, [])
 
+    def test_nef_comes_from_patient_need_not_chance(self):
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=901, name="Med", average_credits=100, requirements={}, chances={"nef": 50})
+        resolver = MissionRequirementResolver(MissionCatalog({901: mt}), self.resolver._library)
+
+        # A nef chance alone must NOT pre-send a NEF (that drains the fleet).
+        m0 = SimpleNamespace(mission_type_id=901, patients_count=0, possible_patients_count=0,
+                             prisoners_count=0, possible_prisoners_count=0, patient_missing=())
+        self.assertNotIn("nef", {r.source for r in resolver.resolve_mission(m0).requirements})
+
+        # A patient on scene asking for one -> exactly one NEF.
+        m1 = SimpleNamespace(mission_type_id=901, patients_count=1, possible_patients_count=1,
+                             prisoners_count=0, possible_prisoners_count=0,
+                             patient_missing=("Wir benötigen: NEF",))
+        by = {r.source: r.count for r in resolver.resolve_mission(m1).requirements}
+        self.assertEqual(by.get("nef"), 1)
+
+    def test_two_patients_two_nefs(self):
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=902, name="Med", average_credits=100, requirements={}, chances={})
+        resolver = MissionRequirementResolver(MissionCatalog({902: mt}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=902, patients_count=2, possible_patients_count=2,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            patient_missing=("Wir benötigen: NEF", "Wir benötigen: NEF"))
+        by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("nef"), 2)
+
     def test_lna_added_in_normal_mode_above_five_patients(self):
         # Point: the LNA/OrgL rule works in EVERY mode, not just patient-only.
         m = SimpleNamespace(mission_type_id=1, patients_count=6, possible_patients_count=6,

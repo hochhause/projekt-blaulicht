@@ -68,6 +68,20 @@ class MissionParsingTests(unittest.TestCase):
         m = Mission.from_json({"id": 1, "mtid": "6/ab", "latitude": 47, "longitude": 7})
         self.assertIsNone(m.mission_type_id)  # variant id -> no int base, no crash
 
+    def test_parses_patient_missing_and_missing_text(self):
+        from app.game.models import Mission
+
+        m = Mission.from_json({
+            "id": 1, "mtid": 6, "latitude": 47, "longitude": 7,
+            "missing_text": '{"vehicles":"1 ELW 1","personnel":"","other":""}',
+            "patients_prisoners": {"patients": [
+                {"missing_text": "Wir benötigen: NEF", "name": "Marc E."},
+                {"name": "no-need"},  # patient with no missing_text -> ignored
+            ]},
+        })
+        self.assertEqual(m.patient_missing, ("Wir benötigen: NEF",))
+        self.assertIn("ELW 1", m.missing_text)
+
 
 @unittest.skipUnless(HAVE_HTTPX, "httpx not installed")
 class AsListTests(unittest.TestCase):

@@ -415,22 +415,74 @@ def _order(candidates, order: DispatchOrder):
 
 
 def _derive_requirements(mission, resolver, text_engine, patient_only=False):
-    """Requirements for a mission: structured derivation, else missing_text.
+    """Base (pre-delta) requirements from the structured catalogue.
 
     In *patient_only* mode only the patient-clearing units are required (RTW/NEF/
-    RTH + LNA/OrgL by patient count); the text fallback is skipped (patient counts
-    come from the structured fields).
+    RTH + LNA/OrgL by patient count). The live ``missing_text`` is folded in
+    separately (post-delta) by :func:`_outstanding`.
     """
     if patient_only:
         return list(resolver.resolve_patient_only(mission).requirements)
-    reqs = resolver.resolve_mission(mission).requirements or None
-    if not reqs and text_engine is not None:
-        text = getattr(mission, "missing_text", "") or ""
-        if text.strip():
-            parsed = text_engine.resolve(re.split(r"[,;\n/]+", text))
-            if parsed.requirements:
-                reqs = parsed.requirements
-    return list(reqs) if reqs else []
+    return list(resolver.resolve_mission(mission).requirements)
+
+
+def _missing_text_vehicles(mission) -> str:
+    """The still-missing vehicle list the live feed reveals, as a caption string.
+
+    ``missing_text`` is a JSON blob once units are on scene, e.g.
+    ``{"vehicles":"1 ELW 1","personnel":"","other":""}`` — we take ``vehicles``
+    (personnel = firefighters, handled via the fire-personnel path). Older/plain
+    strings are returned as-is.
+    """
+    raw = (getattr(mission, "missing_text", "") or "").strip()
+    if not raw:
+        return ""
+    if raw[0] == "{":
+        try:
+            import json
+
+            data = json.loads(raw)
+            return str(data.get("vehicles", "") or "")
+        except (ValueError, TypeError):
+            return ""
+    return raw
+
+
+def _missing_text_requirements(mission, resolver, text_engine):
+    """Requirements parsed from the mission's revealed ``missing_text`` vehicles —
+    the game's own "still needed" list (already net of what's en route). ``None``
+    if nothing revealed or no text engine. Catches late-revealed needs (a DGL, a
+    vehicle whose requirement only became clear on scene)."""
+    if text_engine is None:
+        return None
+    veh = _missing_text_vehicles(mission)
+    if not veh:
+        return None
+    parsed = text_engine.resolve(re.split(r"[,;\n/]+", veh))
+    return list(parsed.requirements) or None
+
+
+def _merge_max(base, extra):
+    """Merge two Requirement lists, taking the higher count per class. *extra*
+    can add classes *base* missed (e.g. a DGL) without double-counting shared ones."""
+    by = {r.source: r for r in base}
+    for r in extra:
+        cur = by.get(r.source)
+        if cur is None or r.count > cur.count:
+            by[r.source] = r
+    return list(by.values())
+
+
+def _outstanding(mission, resolver, text_engine, assigned, patient_only=False):
+    """Post-delta requirements to still send: catalogue total minus en-route,
+    merged with the live ``missing_text`` (the game's revealed truth)."""
+    out = _apply_delta(_derive_requirements(mission, resolver, text_engine, patient_only),
+                       assigned, mission.id)
+    if not patient_only:
+        revealed = _missing_text_requirements(mission, resolver, text_engine)
+        if revealed:
+            out = _merge_max(out, revealed)
+    return out
 
 
 def _distance_fn(mission_pos, building_pos):
@@ -473,9 +525,7 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
 
         pos = getattr(mission, "position", None)
         patient_here = _scope_covers(policy.patient_scope, is_alliance)
-        reqs = _apply_delta(
-            _derive_requirements(mission, resolver, text_engine, patient_here), assigned, mid
-        )
+        reqs = _outstanding(mission, resolver, text_engine, assigned, patient_here)
         chosen: list[int] = []
         if reqs and pos is not None:
             cov = select_coverage(reqs, pool, distance_of=_distance_fn(pos, building_pos))
@@ -577,18 +627,21 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
     building_pos = building_pos or {}
     assigned = assigned or {}
 
-    requirements = _derive_requirements(mission, resolver, text_engine, patient_only)
+    base = _derive_requirements(mission, resolver, text_engine, patient_only)
+    revealed = None if patient_only else _missing_text_requirements(mission, resolver, text_engine)
     # Personnel requirement (min firefighters) — not applicable in patient-only mode.
     mtype = None if patient_only else resolver.catalog.get(getattr(mission, "mission_type_id", None))
     min_fire = int(getattr(mtype, "min_fire_personnel", 0) or 0) if mtype is not None else 0
 
-    if not requirements and min_fire <= 0:
-        # In patient-only mode an empty derivation just means "no patients here"
-        # (incl. Hitzschlag-style end-patients) — a quiet skip, not a catalogue gap.
+    if not base and not revealed and min_fire <= 0:
+        # No known requirement at all. In patient-only mode that just means "no
+        # patients here" (incl. Hitzschlag end-patients) — a quiet skip.
         return "no patients on site" if patient_only else "no requirements found"
 
     # Credit gating already happened during candidate collection.
-    requirements = _apply_delta(requirements, assigned, mission.id)
+    requirements = _apply_delta(base, assigned, mission.id)
+    if revealed:  # fold in the game's live "still missing" list (post-delta truth)
+        requirements = _merge_max(requirements, revealed)
     # Firefighters already en route count toward the personnel minimum.
     fire_needed = max(0, min_fire - _fire_crew(resolver, assigned.get(mission.id, []))) if min_fire else 0
 

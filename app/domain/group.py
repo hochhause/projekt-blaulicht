@@ -26,12 +26,11 @@ from enum import Enum
 from .coverage import select_coverage
 from .dispatch import (
     DispatchOrder,
-    _apply_delta,
-    _derive_requirements,
     _distance_fn,
     _fire_crew,
     _fire_personnel_topup,
     _order,
+    _outstanding,
 )
 from .geo import nearest_km
 
@@ -171,7 +170,7 @@ def plan_group_dispatches(
         nonlocal pool
         mid = mission.id
         pos = getattr(mission, "position", None)
-        reqs = _apply_delta(_derive_requirements(mission, resolver, text_engine), global_assigned, mid)
+        reqs = _outstanding(mission, resolver, text_engine, global_assigned)
         mtype = (
             resolver.catalog.get(mission.mission_type_id)
             if getattr(mission, "mission_type_id", None) is not None else None

@@ -98,8 +98,22 @@ class MissionRequirementResolver:
         for cls, n in mtype.requirements.items():
             counts[cls] = counts.get(cls, 0) + int(n)
         for cls in mtype.chances:
+            # NEF (Notarzt) is a per-patient CHANCE — auto-sending one to every
+            # mission that might need one drains the NEF fleet. Instead we add a
+            # NEF only when a patient on scene actually asks for it (below).
+            if cls == "nef":
+                continue
             if cls in self._library.class_map.by_class:
                 counts[cls] = counts.get(cls, 0) + 1
+
+        # Notärzte revealed per patient (patients_prisoners[].missing_text =
+        # "Wir benötigen: NEF") — the accurate, just-in-time NEF demand.
+        nef_needed = sum(
+            1 for pm in getattr(mission, "patient_missing", ())
+            if "nef" in pm.lower() or "notarzt" in pm.lower()
+        )
+        if nef_needed:
+            counts["nef"] = counts.get("nef", 0) + nef_needed
 
         # A unit already on the mission means its casualty counts are revealed,
         # so a 0 is real (patients/prisoners already dealt with) rather than hidden.

@@ -59,11 +59,23 @@ class Mission:
     possible_prisoners_count: int = 0
     average_credits: int = 0
     created_at: str | None = None  # ISO-ish timestamp, for oldest/newest ordering
-    missing_text: str = ""         # (legacy; live missions have no such field)
+    # Revealed "still missing" list from the live feed. A JSON blob like
+    # {"vehicles":"1 ELW 1","personnel":"","other":""} once units are on scene.
+    missing_text: str = ""
+    # Per-patient revealed needs, e.g. ["Wir benötigen: NEF"] — a Notarzt is only
+    # requested once the patient is on scene (from patients_prisoners.patients[]).
+    patient_missing: tuple[str, ...] = ()
     vehicle_state: int = 0         # 0 = no responders yet, >=1 = someone is on it
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> "Mission":
+        pp = d.get("patients_prisoners") or {}
+        patients = pp.get("patients") if isinstance(pp, dict) else None
+        patient_missing = tuple(
+            str(p.get("missing_text"))
+            for p in (patients or [])
+            if isinstance(p, dict) and p.get("missing_text")
+        )
         return cls(
             id=int(d["id"]),
             lat=_as_float(_first(d, "lat", "latitude")),
@@ -79,6 +91,7 @@ class Mission:
             average_credits=_as_int(_first(d, "average_credits")) or 0,
             created_at=_first(d, "created_at"),
             missing_text=str(_first(d, "missing_text", default="") or ""),
+            patient_missing=patient_missing,
             vehicle_state=_as_int(_first(d, "vehicle_state")) or 0,
         )
 

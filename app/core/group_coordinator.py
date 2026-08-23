@@ -44,6 +44,13 @@ class GroupCoordinator:
         import asyncio
         self._sleep = asyncio.sleep
 
+    def _text_engine(self, resolver):
+        """Regex requirement engine (for parsing missing_text), built once."""
+        if getattr(self, "_engine", None) is None:
+            from ..domain.requirements import RequirementEngine
+            self._engine = RequirementEngine(resolver.library)
+        return self._engine
+
     def _jittered_gap(self) -> float:
         """A human-ish gap: the base gap plus up to 100% jitter."""
         return random.uniform(self._gap, self._gap * 2.0)
@@ -102,7 +109,7 @@ class GroupCoordinator:
 
         plan = plan_group_dispatches(
             missions, vehicles_by_account, buildings_by_account, resolver,
-            self._policy, now=time.time(),
+            self._policy, now=time.time(), text_engine=self._text_engine(resolver),
         )
 
         # Dispatch MISSION BY MISSION in sort order, so each mission is fully
