@@ -186,6 +186,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
         participation: str = Form(""),
         radius_basis: str = Form("any"),
         max_token_per_account: str = Form(""),
+        partial_starts: str = Form(""),
         members: list[int] = Form(default=[]),
     ):
         cfg = GroupConfig(
@@ -201,6 +202,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
             participation=bool(participation),
             radius_basis=radius_basis,
             max_token_per_account=_opt_int(max_token_per_account),
+            partial_starts=bool(partial_starts),
             member_ids=tuple(members),
         )
         store.set_group_config(json.dumps(cfg.to_dict()))

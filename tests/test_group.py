@@ -119,6 +119,64 @@ class GroupPlannerTests(unittest.TestCase):
         self.assertIn(10, ba)       # solver drawn from the account with the most spare
         self.assertNotIn(20, ba)
 
+    def test_begun_mission_topped_up_before_fresh_bypassing_batch(self):
+        # m1 begun (a police car of ours en route) still needs a firetruck; m2 is
+        # fresh. With batch_size 0 (no fresh allowed) the begun mission is still
+        # finished — needed types aren't left for new missions.
+        m1 = mission(1, 3, is_alliance=True)  # firetrucks:1 + police_cars:1
+        m2 = mission(2, 1, is_alliance=True)  # fresh firetruck mission
+        enroute = vehicle(101, FUSTW, building_id=10, fms=3, target_type="mission", target_id=1)
+        free_lf = vehicle(100, LF, building_id=10)
+        plan = plan_group_dispatches(
+            [m1, m2], {10: [enroute, free_lf]}, {10: [building(10)]}, self.resolver,
+            GroupPolicy(radius_km=40, participation=False, batch_size=0),
+        )
+        mids = [gmp.mission_id for gmp in plan.missions]
+        self.assertIn(1, mids)       # begun mission finished despite batch 0
+        self.assertNotIn(2, mids)    # fresh mission blocked by batch
+
+    def test_begun_partial_fill_sends_what_it_can(self):
+        m1 = mission(1, 2, is_alliance=True)  # firetrucks:2 + platform + battalion_chief
+        bc = vehicle(101, 3, building_id=10, fms=3, target_type="mission", target_id=1)
+        free_lf = vehicle(100, LF, building_id=10)
+        plan = plan_group_dispatches(
+            [m1], {10: [bc, free_lf]}, {10: [building(10)]}, self.resolver,
+            GroupPolicy(radius_km=40, participation=False),
+        )
+        self.assertEqual(len(plan.missions), 1)
+        self.assertEqual(plan.missions[0].by_account[10], (100,))  # the one free LF
+        self.assertFalse(plan.missions[0].satisfied)               # still incomplete
+
+    def test_fresh_not_partial_started_by_default(self):
+        m1 = mission(1, 2, is_alliance=True)  # needs a full crew we don't have
+        plan = plan_group_dispatches(
+            [m1], {10: [vehicle(100, LF, building_id=10)]}, {10: [building(10)]}, self.resolver,
+            GroupPolicy(radius_km=40, participation=False),
+        )
+        self.assertEqual(plan.missions, [])  # not fully crewable -> not started
+
+    def test_partial_start_when_enabled_and_missing_types_owned(self):
+        m1 = mission(1, 2, is_alliance=True)  # firetrucks:2 + platform(2) + bc(3)
+        fleet = [
+            vehicle(100, LF, building_id=10),                                        # free
+            vehicle(101, 2, building_id=10, fms=3, target_type="mission", target_id=9),  # platform, busy
+            vehicle(102, 3, building_id=10, fms=3, target_type="mission", target_id=9),  # bc, busy
+        ]
+        plan = plan_group_dispatches(
+            [m1], {10: fleet}, {10: [building(10)]}, self.resolver,
+            GroupPolicy(radius_km=40, participation=False, partial_starts=True),
+        )
+        self.assertEqual(len(plan.missions), 1)                    # started early
+        self.assertEqual(plan.missions[0].by_account[10], (100,))  # with the free LF
+
+    def test_no_partial_start_when_a_missing_type_is_not_owned(self):
+        m1 = mission(1, 3, is_alliance=True)  # firetrucks:1 + police_cars:1
+        plan = plan_group_dispatches(
+            [m1], {10: [vehicle(100, LF, building_id=10)]}, {10: [building(10)]}, self.resolver,
+            GroupPolicy(radius_km=40, participation=False, partial_starts=True),
+        )
+        self.assertEqual(plan.missions, [])  # we own no police car -> never startable
+
     def test_out_of_range_all_basis(self):
         # ANY-basis: in range if any account is near. ALL-basis needs both near.
         near = {10: [building(10, BUILDING)]}

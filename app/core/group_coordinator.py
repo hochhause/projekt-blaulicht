@@ -92,6 +92,14 @@ class GroupCoordinator:
         idle = sum(1 for vs in vehicles_by_account.values() for v in vs if getattr(v, "is_available", False))
         self._log(f"group: {len(live)} account(s), {len(missions)} mission(s), {idle} idle vehicle(s)")
 
+        # PRIO 1 — transport (Sprechwünsche) first, per member.
+        for aid, member in live.items():
+            if member.transport_enabled:
+                try:
+                    await member.handle_transports(vehicles_by_account.get(aid, []))
+                except Exception:  # noqa: BLE001
+                    logger.exception("group transport for %s failed", aid)
+
         plan = plan_group_dispatches(
             missions, vehicles_by_account, buildings_by_account, resolver,
             self._policy, now=time.time(),
@@ -120,14 +128,6 @@ class GroupCoordinator:
                 else:
                     self._log(f"[#{aid}] batch failed → #{gmp.mission_id} {gmp.caption!r}")
                 await self._sleep(self._jittered_gap())
-
-        # Transport phase per member (FMS-5 -> hospital/cell).
-        for aid, member in live.items():
-            if member.transport_enabled:
-                try:
-                    await member.handle_transports(vehicles_by_account.get(aid, []))
-                except Exception:  # noqa: BLE001
-                    logger.exception("group transport for %s failed", aid)
 
         # Share each member's own missions so others can join them next cycle —
         # bounded per cycle so a backlog trickles instead of stalling the loop.

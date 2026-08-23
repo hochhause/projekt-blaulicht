@@ -54,6 +54,8 @@
         <select name="participation"><option value="1" {{ 'selected' if cfg.participation else '' }}>on</option><option value="" {{ '' if cfg.participation else 'selected' }}>off</option></select></div>
       <div class="field"><label>Max token sends / account / cycle (blank = no cap)</label>
         <input name="max_token_per_account" type="number" step="1" value="{{ cfg.max_token_per_account if cfg.max_token_per_account is not none else '' }}"></div>
+      <div class="field"><label>Partial starts (begin fresh missions early with what's free, if we own the rest)</label>
+        <select name="partial_starts"><option value="1" {{ 'selected' if cfg.partial_starts else '' }}>on</option><option value="" {{ '' if cfg.partial_starts else 'selected' }}>off</option></select></div>
     </div>
   </div>
 

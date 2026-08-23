@@ -60,6 +60,10 @@ class GroupPolicy:
     # Cap participation-token sends per account per cycle (footprint control; None
     # = no cap). Does not limit the crew that actually completes a mission.
     max_token_per_account: int | None = None
+    # Allow starting a FRESH mission with only some of its vehicles (the rest
+    # follow over later cycles as they free up) — but only if we own the missing
+    # types somewhere in the fleet, so we never start what we can't finish.
+    partial_starts: bool = False
 
 
 @dataclass
@@ -145,51 +149,25 @@ def plan_group_dispatches(
                 global_assigned.setdefault(mid, []).append(int(tid))
             participating.setdefault(mid, set()).add(aid)
 
-    # Candidate missions: in range (per basis), category- and cash-allowed.
-    candidates: list[tuple[float, int, object]] = []
-    for mission in missions:
-        pos = getattr(mission, "position", None)
-        if pos is None:
-            plan.skipped.append((mission.id, "no position"))
-            continue
-        dists = [d for aid in member_ids if origins.get(aid)
-                 for d in (nearest_km(pos, origins[aid]),) if d is not None]
-        if not dists:
-            plan.skipped.append((mission.id, "out of range"))
-            continue
-        reach = min(dists) if policy.radius_basis is RadiusBasis.ANY else max(dists)
-        if reach > policy.radius_km:
-            plan.skipped.append((mission.id, "out of range"))
-            continue
-        mtype = (
-            resolver.catalog.get(mission.mission_type_id)
-            if getattr(mission, "mission_type_id", None) is not None else None
-        )
-        if policy.allowed_categories:
-            cats = set(mtype.categories) if mtype else set()
-            if not (cats & policy.allowed_categories):
-                plan.skipped.append((mission.id, "category filtered"))
-                continue
-        credits = getattr(mission, "average_credits", 0) or (mtype.average_credits if mtype else 0)
-        if policy.credit_min and credits < policy.credit_min:
-            plan.skipped.append((mission.id, f"below credit floor ({credits})"))
-            continue
-        if policy.credit_max and credits > policy.credit_max:
-            plan.skipped.append((mission.id, f"above credit ceiling ({credits})"))
-            continue
-        candidates.append((min(dists), credits, mission))
+    # Types we own ANYWHERE (any state) — a mission is only partial-startable if
+    # every missing type is owned somewhere, so we never begin what we can't finish.
+    owned_type_ids = {
+        getattr(v, "type_id", None) for vs in vehicles_by_account.values() for v in vs
+    }
 
-    candidates = _order(candidates, policy.order)
+    def _class_owned(cls: str) -> bool:
+        key = "firetrucks" if cls == "firefighters" else cls
+        return any(t in owned_type_ids for t in resolver.library.class_map.by_class.get(key, ()))
 
     token_used: dict[int, int] = {aid: 0 for aid in member_ids}
-    actioned = 0
-    for _dist, _credits, mission in candidates:
-        if policy.batch_size is not None and actioned >= policy.batch_size:
-            plan.skipped.append((mission.id, "beyond batch size"))
-            continue
-        mid = mission.id
-        pos = mission.position
 
+    def action(mission, *, is_begun: bool) -> str | None:
+        """Plan one mission; return a skip reason or None if actioned. Consumes
+        from *pool*. Begun (already-started) missions partial-fill; fresh ones
+        need a full crew unless partial_starts is on and we own the missing types."""
+        nonlocal pool
+        mid = mission.id
+        pos = getattr(mission, "position", None)
         reqs = _apply_delta(_derive_requirements(mission, resolver, text_engine), global_assigned, mid)
         mtype = (
             resolver.catalog.get(mission.mission_type_id)
@@ -200,26 +178,30 @@ def plan_group_dispatches(
 
         others_on = bool(participating.get(mid))
         if not reqs and fire_needed <= 0 and not others_on:
-            plan.skipped.append((mid, "no requirements found"))
-            continue
+            return "no requirements found"
 
-        # Combined coverage — minimal set from the whole group to crew it. Among
-        # equally-covering candidates, take from the account with the MOST spare of
-        # that type (balances fleets), then nearest.
         chosen: list[int] = []
         satisfied = True
         shortfall: dict[str, int] = {}
-        if reqs:
+        if reqs and pos is not None:
             cov = select_coverage(reqs, pool, distance_of=_balanced_distance(pos, building_pos, pool, owner_of))
             chosen = list(cov.vehicle_ids)
             satisfied = cov.satisfied
             shortfall = dict(cov.shortfall)
-        if fire_needed > 0:
+        if fire_needed > 0 and pos is not None:
             extra, short = _fire_personnel_topup(chosen, pool, resolver, fire_needed, pos, building_pos)
             chosen += extra
             if short > 0:
                 satisfied = False
                 shortfall["firefighters"] = short
+
+        # A FRESH mission that we can't fully crew: only start it if partial-starts
+        # is enabled AND we own the missing types (so it can be finished later).
+        # (A begun mission always gets whatever we can add toward completing it.)
+        if not is_begun and not satisfied and not others_on:
+            if not (policy.partial_starts and shortfall and all(_class_owned(c) for c in shortfall)):
+                _note(plan.shortfalls, shortfall.keys())
+                return "not enough vehicles"
         if not satisfied:
             _note(plan.shortfalls, shortfall.keys())
 
@@ -240,11 +222,8 @@ def plan_group_dispatches(
                     token_used[aid] += 1
 
         if not chosen:
-            # Nothing we can add (already covered by others and no free spares).
-            plan.skipped.append((mid, "already covered"))
-            continue
+            return "already covered"
 
-        # Consume from the pool and split this mission's sends by owner.
         chosen_set = set(chosen)
         pool = [v for v in pool if v.id not in chosen_set]
         per_owner: dict[int, list[int]] = {}
@@ -257,7 +236,69 @@ def plan_group_dispatches(
             satisfied=satisfied,
             shortfall=dict(shortfall),
         ))
-        actioned += 1
+        return None
+
+    # PASS 1 — FINISH WHAT'S STARTED. Missions the group already has vehicles on
+    # get first claim on the free pool (so their needed types aren't spent on new
+    # missions), bypassing radius/cash/category/batch. Ordered by the sort order.
+    begun = [m for m in missions if m.id in global_assigned]
+    begun_c = []
+    for mission in begun:
+        pos = getattr(mission, "position", None)
+        dists = [nearest_km(pos, origins[aid]) for aid in member_ids
+                 if origins.get(aid) and pos is not None]
+        dists = [d for d in dists if d is not None]
+        mtype = resolver.catalog.get(getattr(mission, "mission_type_id", None))
+        credits = getattr(mission, "average_credits", 0) or (mtype.average_credits if mtype else 0)
+        begun_c.append((min(dists) if dists else 0.0, credits, mission))
+    for _d, _c, mission in _order(begun_c, policy.order):
+        reason = action(mission, is_begun=True)
+        if reason:
+            plan.skipped.append((mission.id, reason))
+
+    # PASS 2 — FRESH missions in range, filtered, ordered and batched.
+    fresh_c = []
+    for mission in missions:
+        if mission.id in global_assigned:
+            continue  # handled in pass 1
+        pos = getattr(mission, "position", None)
+        if pos is None:
+            plan.skipped.append((mission.id, "no position"))
+            continue
+        dists = [d for aid in member_ids if origins.get(aid)
+                 for d in (nearest_km(pos, origins[aid]),) if d is not None]
+        if not dists:
+            plan.skipped.append((mission.id, "out of range"))
+            continue
+        reach = min(dists) if policy.radius_basis is RadiusBasis.ANY else max(dists)
+        if reach > policy.radius_km:
+            plan.skipped.append((mission.id, "out of range"))
+            continue
+        mtype = resolver.catalog.get(getattr(mission, "mission_type_id", None))
+        if policy.allowed_categories:
+            cats = set(mtype.categories) if mtype else set()
+            if not (cats & policy.allowed_categories):
+                plan.skipped.append((mission.id, "category filtered"))
+                continue
+        credits = getattr(mission, "average_credits", 0) or (mtype.average_credits if mtype else 0)
+        if policy.credit_min and credits < policy.credit_min:
+            plan.skipped.append((mission.id, f"below credit floor ({credits})"))
+            continue
+        if policy.credit_max and credits > policy.credit_max:
+            plan.skipped.append((mission.id, f"above credit ceiling ({credits})"))
+            continue
+        fresh_c.append((min(dists), credits, mission))
+
+    actioned = 0
+    for _d, _c, mission in _order(fresh_c, policy.order):
+        if policy.batch_size is not None and actioned >= policy.batch_size:
+            plan.skipped.append((mission.id, "beyond batch size"))
+            continue
+        reason = action(mission, is_begun=False)
+        if reason:
+            plan.skipped.append((mission.id, reason))
+        else:
+            actioned += 1
 
     return plan
 
