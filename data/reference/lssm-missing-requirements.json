@@ -1,0 +1,1179 @@
+{
+ "vehiclesByRequirement": [
+  {
+   "texts": [
+    "Anhänger Drucklufterzeugung"
+   ],
+   "vehicles": [
+    44
+   ]
+  },
+  {
+   "texts": [
+    "Außenlastbehälter",
+    "Außenlastbehälter (allgemein)"
+   ],
+   "vehicles": [
+    96
+   ]
+  },
+  {
+   "texts": [
+    "Betreuungs- und Verpflegungsausstattung",
+    "Betreuungs- und Verpflegungsausstattungen"
+   ],
+   "vehicles": [
+    130,
+    132,
+    139,
+    141,
+    178
+   ]
+  },
+  {
+   "texts": [
+    "Boot",
+    "Boote"
+   ],
+   "vehicles": [
+    66,
+    67,
+    68,
+    70,
+    71
+   ]
+  },
+  {
+   "texts": [
+    "Bt-Kombi",
+    "Bt-Kombis"
+   ],
+   "vehicles": [
+    131
+   ]
+  },
+  {
+   "texts": [
+    "DHuFüKW"
+   ],
+   "vehicles": [
+    94
+   ]
+  },
+  {
+   "equipment": [
+    "decon"
+   ],
+   "texts": [
+    "Dekon-P"
+   ],
+   "vehicles": [
+    53,
+    54
+   ]
+  },
+  {
+   "texts": [
+    "Drehleiter (DLK 23)",
+    "Drehleitern (DLK 23)"
+   ],
+   "vehicles": [
+    2,
+    85
+   ]
+  },
+  {
+   "texts": [
+    "ELW 1 (SEG)"
+   ],
+   "vehicles": [
+    59
+   ]
+  },
+  {
+   "texts": [
+    "ELW 1"
+   ],
+   "vehicles": [
+    3,
+    34,
+    78,
+    128,
+    129
+   ]
+  },
+  {
+   "texts": [
+    "ELW 2"
+   ],
+   "vehicles": [
+    34,
+    78,
+    129
+   ]
+  },
+  {
+   "texts": [
+    "Fahrzeug des THW (MzKW oder GKW)"
+   ],
+   "vehicles": [
+    39,
+    41
+   ]
+  },
+  {
+   "texts": [
+    "Feuerlöschpumpe (z. B. LF)",
+    "Feuerlöschpumpen (z. B. LF)",
+    "Feuerlöschpumpe (z. B. LF)",
+    "Feuerlöschpumpen (z. B. LF)"
+   ],
+   "vehicles": [
+    0,
+    1,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    30,
+    37,
+    6,
+    7,
+    8,
+    87,
+    88,
+    89,
+    9,
+    90,
+    101,
+    102,
+    107,
+    119,
+    121,
+    163
+   ]
+  },
+  {
+   "conditionalVehicles": {
+    "allow_arff_instead_of_lf": [
+     0,
+     1,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     30,
+     37,
+     6,
+     7,
+     8,
+     87,
+     88,
+     89,
+     9,
+     90,
+     107,
+     163
+    ]
+   },
+   "texts": [
+    "Flugfeldlöschfahrzeug",
+    "Flugfeldlöschfahrzeuge"
+   ],
+   "vehicles": [
+    75
+   ]
+  },
+  {
+   "conditionalVehicles": {
+    "allow_police_motorcycle_instead_of_fustw": [
+     95
+    ]
+   },
+   "texts": [
+    "FuStW"
+   ],
+   "vehicles": [
+    32,
+    103
+   ]
+  },
+  {
+   "texts": [
+    "Funkstreifenwagen oder Polizeimotorrad",
+    "Funkstreifenwagen oder Polizeimotorräder"
+   ],
+   "vehicles": [
+    32,
+    95,
+    103
+   ]
+  },
+  {
+   "texts": [
+    "Funkstreifenwagen oder Zivilstreifenwagen oder Polizeimotorrad",
+    "Funkstreifenwagen oder Zivilstreifenwagen oder Polizeimotorräder"
+   ],
+   "vehicles": [
+    32,
+    95,
+    98,
+    103
+   ]
+  },
+  {
+   "texts": [
+    "Funkstreifenwagen oder Zivilstreifenwagen"
+   ],
+   "vehicles": [
+    32,
+    98,
+    103
+   ]
+  },
+  {
+   "texts": [
+    "Funkstreifenwagen (Dienstgruppenleitung)"
+   ],
+   "vehicles": [
+    103
+   ]
+  },
+  {
+   "texts": [
+    "FwK"
+   ],
+   "vehicles": [
+    57,
+    182
+   ]
+  },
+  {
+   "texts": [
+    "FüKW (Polizei)"
+   ],
+   "vehicles": [
+    51
+   ]
+  },
+  {
+   "equipment": [
+    "breathing_protection"
+   ],
+   "texts": [
+    "GW-Atemschutz"
+   ],
+   "vehicles": [
+    5,
+    48
+   ]
+  },
+  {
+   "equipment": [
+    "hazmat"
+   ],
+   "texts": [
+    "GW-Gefahrgut"
+   ],
+   "vehicles": [
+    27,
+    77
+   ]
+  },
+  {
+   "equipment": [
+    "hight_rescue"
+   ],
+   "texts": [
+    "GW-Höhenrettung"
+   ],
+   "vehicles": [
+    33,
+    155,
+    158
+   ]
+  },
+  {
+   "texts": [
+    "GW-Messtechnik"
+   ],
+   "vehicles": [
+    12
+   ]
+  },
+  {
+   "texts": [
+    "GW-San"
+   ],
+   "vehicles": [
+    60
+   ]
+  },
+  {
+   "equipment": [
+    "diver"
+   ],
+   "texts": [
+    "GW-Taucher"
+   ],
+   "vehicles": [
+    63,
+    69
+   ]
+  },
+  {
+   "texts": [
+    "GW-Werkfeuerwehr"
+   ],
+   "vehicles": [
+    83
+   ]
+  },
+  {
+   "equipment": [
+    "oil"
+   ],
+   "texts": [
+    "GW-Öl"
+   ],
+   "vehicles": [
+    10,
+    49
+   ]
+  },
+  {
+   "texts": [
+    "GefKw"
+   ],
+   "vehicles": [
+    52
+   ]
+  },
+  {
+   "texts": [
+    "Gerätekraftwagen (GKW)"
+   ],
+   "vehicles": [
+    39
+   ]
+  },
+  {
+   "texts": [
+    "GruKw"
+   ],
+   "vehicles": [
+    50
+   ]
+  },
+  {
+   "texts": [
+    "LKW Kipper (LKW K 9)"
+   ],
+   "vehicles": [
+    42
+   ]
+  },
+  {
+   "conditionalVehicles": {
+    "allow_rw_instead_of_lf": [
+     4,
+     39,
+     47
+    ]
+   },
+   "texts": [
+    "Löschfahrzeug (LF)",
+    "Löschfahrzeuge (LF)"
+   ],
+   "vehicles": [
+    0,
+    1,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    30,
+    37,
+    6,
+    7,
+    8,
+    87,
+    88,
+    89,
+    9,
+    90,
+    107,
+    119,
+    121,
+    163,
+    166,
+    167
+   ]
+  },
+  {
+   "equipment": [
+    "heavy_rescue",
+    "oil"
+   ],
+   "texts": [
+    "Löschfahrzeug, Rüstwagen oder Gerätewagen Öl"
+   ],
+   "vehicles": [
+    0,
+    1,
+    4,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    30,
+    37,
+    6,
+    7,
+    8,
+    87,
+    88,
+    89,
+    9,
+    90,
+    107,
+    119,
+    121,
+    162,
+    163,
+    47,
+    10,
+    49
+   ]
+  },
+  {
+   "equipment": [
+    "heavy_rescue"
+   ],
+   "texts": [
+    "Löschfahrzeug oder Rüstwagen"
+   ],
+   "vehicles": [
+    0,
+    1,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    30,
+    37,
+    6,
+    7,
+    8,
+    87,
+    88,
+    89,
+    9,
+    90,
+    107,
+    119,
+    121,
+    162,
+    163,
+    4,
+    47
+   ]
+  },
+  {
+   "texts": [
+    "MEK-Fahrzeug",
+    "MEK-Fahrzeuge"
+   ],
+   "vehicles": [
+    81,
+    82
+   ]
+  },
+  {
+   "texts": [
+    "Polizeihubschrauber"
+   ],
+   "vehicles": [
+    61,
+    156
+   ]
+  },
+  {
+   "texts": [
+    "Polizeimotorrad",
+    "Polizeimotorräder"
+   ],
+   "vehicles": [
+    95
+   ]
+  },
+  {
+   "factors": {
+    "134": 2,
+    "135": 4,
+    "136": 2
+   },
+   "texts": [
+    "Polizeipferd",
+    "Polizeipferde"
+   ],
+   "vehicles": [
+    134,
+    135,
+    136
+   ]
+  },
+  {
+   "texts": [
+    "RTW oder KTW oder KTW-B"
+   ],
+   "vehicles": [
+    28,
+    38,
+    58,
+    74,
+    97
+   ]
+  },
+  {
+   "texts": [
+    "RTW"
+   ],
+   "vehicles": [
+    28,
+    74,
+    97
+   ]
+  },
+  {
+   "texts": [
+    "Radlader (BRmG R)"
+   ],
+   "vehicles": [
+    43
+   ]
+  },
+  {
+   "texts": [
+    "Rettungshundestaffel",
+    "Rettungshundestaffeln"
+   ],
+   "vehicles": [
+    91,
+    92
+   ]
+  },
+  {
+   "texts": [
+    "Rettungstreppe",
+    "Rettungstreppen"
+   ],
+   "vehicles": [
+    76
+   ]
+  },
+  {
+   "equipment": [
+    "heavy_rescue"
+   ],
+   "texts": [
+    "Rüstwagen oder HLF"
+   ],
+   "vehicles": [
+    4,
+    30,
+    39,
+    47,
+    90,
+    162,
+    163
+   ]
+  },
+  {
+   "texts": [
+    "SEK-Fahrzeug",
+    "SEK-Fahrzeuge"
+   ],
+   "vehicles": [
+    79,
+    80
+   ]
+  },
+  {
+   "equipment": [
+    "hose_water",
+    "hose_water_2"
+   ],
+   "texts": [
+    "Schlauchwagen (GW-L2 Wasser, SW 1000, SW 2000 oder Ähnliches)",
+    "Schlauchwagen (GW-L2 Wasser oder SW)"
+   ],
+   "vehicles": [
+    11,
+    13,
+    14,
+    15,
+    16,
+    62,
+    101,
+    102,
+    143
+   ]
+  },
+  {
+   "texts": [
+    "Schmutzwasserpumpe",
+    "Schmutzwasserpumpen"
+   ],
+   "vehicles": [
+    101,
+    102
+   ]
+  },
+  {
+   "texts": [
+    "THW-Einsatzleitung (MTW-TZ)"
+   ],
+   "vehicles": [
+    40
+   ]
+  },
+  {
+   "texts": [
+    "MzGW (FGr N)"
+   ],
+   "vehicles": [
+    41
+   ]
+  },
+  {
+   "texts": [
+    "Teleskopmast",
+    "Teleskopmasten"
+   ],
+   "vehicles": [
+    85
+   ]
+  },
+  {
+   "texts": [
+    "Turbolöscher"
+   ],
+   "vehicles": [
+    86
+   ]
+  },
+  {
+   "texts": [
+    "ULF mit Löscharm"
+   ],
+   "vehicles": [
+    84
+   ]
+  },
+  {
+   "texts": [
+    "Wasserwerfer"
+   ],
+   "vehicles": [
+    72
+   ]
+  },
+  {
+   "texts": [
+    "Zivilstreifenwagen"
+   ],
+   "vehicles": [
+    98
+   ]
+  },
+  {
+   "texts": [
+    "leBefKw"
+   ],
+   "vehicles": [
+    35
+   ]
+  },
+  {
+   "texts": [
+    "NEA50"
+   ],
+   "vehicles": [
+    110,
+    111,
+    112,
+    113,
+    175,
+    179
+   ]
+  },
+  {
+   "texts": [
+    "NEA200"
+   ],
+   "vehicles": [
+    112,
+    113,
+    180
+   ]
+  },
+  {
+   "texts": [
+    "MzGW SB"
+   ],
+   "vehicles": [
+    109
+   ]
+  },
+  {
+   "texts": [
+    "FüKW (THW)"
+   ],
+   "vehicles": [
+    144
+   ]
+  },
+  {
+   "texts": [
+    "FüKomKW"
+   ],
+   "vehicles": [
+    145
+   ]
+  },
+  {
+   "texts": [
+    "Anh FüLa"
+   ],
+   "vehicles": [
+    146
+   ]
+  },
+  {
+   "texts": [
+    "FmKW"
+   ],
+   "vehicles": [
+    147
+   ]
+  },
+  {
+   "texts": [
+    "MTW FGr K"
+   ],
+   "vehicles": [
+    148
+   ]
+  },
+  {
+   "texts": [
+    "Lüfter"
+   ],
+   "vehicles": [
+    114,
+    115,
+    116
+   ]
+  },
+  {
+   "equipment": [
+    "drone",
+    "mountain_drone"
+   ],
+   "texts": [
+    "Drohneneinheit",
+    "Drohneneinheiten"
+   ],
+   "vehicles": [
+    125,
+    126,
+    127,
+    128,
+    129
+   ]
+  },
+  {
+   "texts": [
+    "ATV"
+   ],
+   "vehicles": [
+    152
+   ]
+  },
+  {
+   "texts": [
+    "ELW Bergrettung"
+   ],
+   "vehicles": [
+    151
+   ]
+  },
+  {
+   "texts": [
+    "GW-Bergrettung"
+   ],
+   "vehicles": [
+    149,
+    150
+   ]
+  },
+  {
+   "texts": [
+    "Höhenrettung (Bergrettung)"
+   ],
+   "vehicles": [
+    155,
+    158
+   ]
+  },
+  {
+   "equipment": [
+    "rescue_lift",
+    "police_lift"
+   ],
+   "texts": [
+    "Hubschrauber mit Winde"
+   ],
+   "vehicles": [
+    156,
+    157
+   ]
+  },
+  {
+   "texts": [
+    "Bergrettungsfahrzeug"
+   ],
+   "vehicles": [
+    149,
+    150,
+    151,
+    152,
+    158
+   ]
+  },
+  {
+   "texts": [
+    "Schneefahrzeug",
+    "Schneefahrzeuge"
+   ],
+   "vehicles": [
+    154
+   ]
+  },
+  {
+   "texts": [
+    "Seenotrettungsboot",
+    "Seenotrettungsboote"
+   ],
+   "vehicles": [
+    160
+   ]
+  },
+  {
+   "texts": [
+    "Seenotrettungskreuzer"
+   ],
+   "vehicles": [
+    159
+   ]
+  },
+  {
+   "texts": [
+    "Hubschrauber (Seenotrettung)"
+   ],
+   "vehicles": [
+    161
+   ]
+  },
+  {
+   "texts": [
+    "Seenotrettungsboot oder Seenotrettungskreuzer",
+    "Seenotrettungsboote oder Seenotrettungskreuzer"
+   ],
+   "vehicles": [
+    159,
+    160
+   ]
+  },
+  {
+   "equipment": [
+    "railway_fire"
+   ],
+   "texts": [
+    "Bahnrettungsfahrzeug",
+    "Bahnrettungsfahrzeuge"
+   ],
+   "vehicles": [
+    162,
+    163,
+    164
+   ]
+  },
+  {
+   "texts": [
+    "LauKw"
+   ],
+   "vehicles": [
+    165
+   ]
+  },
+  {
+   "texts": [
+    "MTW-TeSi"
+   ],
+   "vehicles": [
+    173
+   ]
+  },
+  {
+   "texts": [
+    "GW-TeSi"
+   ],
+   "vehicles": [
+    171
+   ]
+  },
+  {
+   "texts": [
+    "Anh TeSi"
+   ],
+   "vehicles": [
+    174
+   ]
+  },
+  {
+   "texts": [
+    "MzGW (FGr BrB)"
+   ],
+   "vehicles": [
+    181
+   ]
+  },
+  {
+   "texts": [
+    "Mobilkran",
+    "Mobilkräne"
+   ],
+   "vehicles": [
+    57,
+    182
+   ]
+  },
+  {
+   "texts": [
+    "Anh Plattform (FGr BrB)"
+   ],
+   "vehicles": [
+    183
+   ]
+  },
+  {
+   "texts": [
+    "FuStW (AP)"
+   ],
+   "vehicles": [
+    184
+   ]
+  },
+  {
+   "equipment": [
+    "animal_rescue"
+   ],
+   "texts": [
+    "GW-Tierrettung"
+   ],
+   "vehicles": [
+    185,
+    186
+   ]
+  }
+ ],
+ "staff": [
+  {
+   "texts": [
+    "Feuerwehrmann",
+    "Feuerwehrleute"
+   ],
+   "vehicles": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    30,
+    33,
+    34,
+    36,
+    37,
+    46,
+    53,
+    57,
+    75,
+    76,
+    83,
+    84,
+    85,
+    86,
+    87,
+    88,
+    89,
+    90,
+    104,
+    105,
+    106,
+    107,
+    114,
+    118,
+    120,
+    121,
+    126,
+    128,
+    129,
+    162,
+    163,
+    166,
+    167,
+    185
+   ]
+  },
+  {
+   "texts": [
+    "Polizisten"
+   ],
+   "vehicles": [
+    32,
+    35,
+    50,
+    51,
+    52,
+    61,
+    72,
+    79,
+    80,
+    81,
+    82,
+    94,
+    95,
+    98,
+    103,
+    156,
+    184
+   ]
+  },
+  {
+   "texts": [
+    "THW-Einsatzkräfte"
+   ],
+   "vehicles": [
+    39,
+    40,
+    41,
+    42,
+    45,
+    65,
+    69,
+    93,
+    100,
+    109,
+    122,
+    123,
+    124,
+    125,
+    144,
+    145,
+    147,
+    148,
+    176,
+    177,
+    181,
+    182
+   ]
+  },
+  {
+   "texts": [
+    "Rettungsdienstler"
+   ],
+   "vehicles": [
+    28,
+    29,
+    31,
+    38,
+    55,
+    56,
+    58,
+    59,
+    60,
+    73,
+    74,
+    91,
+    97,
+    127,
+    130,
+    131,
+    133,
+    149,
+    150,
+    151,
+    152,
+    153,
+    154,
+    157,
+    158
+   ]
+  }
+ ]
+}
