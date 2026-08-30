@@ -13,9 +13,7 @@ Ordered by priority. Nothing here is built unless noted.
   alliance-visible on first live run. (dispatch_many/HTTP-200 success detection: DROPPED — not worth
   the extra requests, per decision.)
 
-### 0.2 Bulk multi-vehicle POST not confirmed live  ← "the third one"
-- `vehicle_ids[]` batch POST is the browser's own form but never verified on the account. Watch the
-  first real multi-vehicle dispatch actually roll (not just log success).
+### 0.2 Bulk multi-vehicle POST — CONFIRMED working live. ✅
 
 ### 0.3 DGL (FuStW-DGL) confirmation
 - Likely fixed by the requirement-resolver rework (P1.1). Still run `probe_vehicle.py 81048893`
@@ -48,8 +46,13 @@ The live feed is the source of truth; our einsaetze-derivation guesses. Switch t
       (`mission_{water|foam|pump}_holder` with driving/missing/selected values) and the feed has
       `water_damage_pump_value` / `live_current_water_damage_pump_value` / `pumping_mission_value`.
       Satisfied by vehicles that supply the capacity (pumps/water tankers; an LF often counts).
-      LSSM reads the bars; we currently ignore it. Needs vehicle capacity data (`.mscv additional.base`)
-      + bar/field reading. **If the exact mechanic is unclear, ask the user.**
+      LSSM reads the bars; we currently ignore it.
+      DATA: water + pump capacity per type IS in the assets — extracted to
+      `data/reference/vehicle-water-pump.json` (22 firetruck types, e.g. LF water 2000/pump 2000).
+      GAPS: (a) dedicated water tankers (GTLF type 11 etc.) have NO capacity in the salvaged .mscv —
+      need another source (LSSM vehicles API / game) for those; (b) foam ("löschmittel") appears in
+      14 .mscv files but not as a flat numeric — needs deeper parsing. Mechanic (how much fills the
+      bar / when satisfied) still to confirm.
 
 ### When-to-open-detail rule (from live verification, `docs/live-data-model.md`)
 - `icon` suffix = status: `_rot` (missing) / `_gelb` (on the way) / `_gruen` (done, leaves feed).
