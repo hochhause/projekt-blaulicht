@@ -44,6 +44,8 @@ class AccountConfig:
     patient_scope: str = ModeScope.OFF.value
     # Hilferuf: share own missions we can't crew to the alliance.
     hilferuf: bool = False
+    # Partial dispatch: send what we have even if we can't fully crew a mission.
+    partial_starts: bool = False
     # transport
     transport_enabled: bool = True
     transport_only: bool = False
@@ -86,6 +88,7 @@ class AccountConfig:
             top_up_scope=_scope(self.top_up_scope),
             patient_scope=_scope(self.patient_scope),
             hilferuf=self.hilferuf,
+            partial_starts=self.partial_starts,
         )
 
     def transport_policy(self) -> TransportPolicy:

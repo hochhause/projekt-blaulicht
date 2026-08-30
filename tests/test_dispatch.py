@@ -333,6 +333,19 @@ class DispatchPlannerTests(unittest.TestCase):
         )
         self.assertEqual(strikes.struck_classes(1000.0), set())
 
+    def test_partial_starts_sends_what_it_has(self):
+        # type 3 needs fire + police; we only have an LF. With partial_starts on,
+        # send the LF now and report the police gap (instead of skipping).
+        begun = mission(1, 3, NEAR)
+        plan = plan_dispatches(
+            [begun], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, partial_starts=True),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].vehicle_ids, (100,))
+        self.assertFalse(plan.planned[0].satisfied)
+        self.assertIn("police_cars", plan.planned[0].shortfall)
+
     def test_normal_mode_still_requires_full_crew(self):
         # Sanity: with top-up OFF, the same begun mission we can't fully crew is
         # skipped (not partial-sent).

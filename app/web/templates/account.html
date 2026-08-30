@@ -79,6 +79,8 @@
     </div>
     <div class="field" style="margin-top:14px"><label>Hilferuf — add-on: share own missions we can't crew to the alliance (safe with any mode)</label>
       <select name="hilferuf"><option value="1" {{ 'selected' if cfg.hilferuf else '' }}>on</option><option value="" {{ '' if cfg.hilferuf else 'selected' }}>off</option></select></div>
+    <div class="field"><label>Partial dispatch — add-on: send what I have even if I can't fully crew a mission (reports the gap)</label>
+      <select name="partial_starts"><option value="1" {{ 'selected' if cfg.partial_starts else '' }}>on</option><option value="" {{ '' if cfg.partial_starts else 'selected' }}>off</option></select></div>
   </div>
 
   <div class="card">

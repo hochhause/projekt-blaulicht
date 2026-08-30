@@ -326,6 +326,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
         top_up_scope: str = Form("off"),
         patient_scope: str = Form("off"),
         hilferuf: str = Form(""),
+        partial_starts: str = Form(""),
         batch_size: str = Form(""),
         allowed_categories: str = Form(""),
         alliance_radius_km: str = Form(""),
@@ -357,6 +358,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
             top_up_scope=top_up_scope,
             patient_scope=patient_scope,
             hilferuf=bool(hilferuf),
+            partial_starts=bool(partial_starts),
             batch_size=_opt_int(batch_size),
             allowed_categories=tuple(
                 c.strip() for c in allowed_categories.split(",") if c.strip()

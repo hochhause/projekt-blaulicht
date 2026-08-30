@@ -124,6 +124,9 @@ class DispatchPolicy:
     # Hilferuf ("call for help"): when we can't crew one of our OWN missions,
     # share it to the alliance so members can help. Runner-level add-on.
     hilferuf: bool = False
+    # Partial dispatch: send whatever useful vehicles we have to a mission even if
+    # we can't fully crew it (instead of waiting for a full set). Reports the gap.
+    partial_starts: bool = False
 
 
 @dataclass(frozen=True)
@@ -292,8 +295,9 @@ def plan_dispatches(
         if policy.batch_size is not None and actioned >= policy.batch_size:
             plan.skipped.append((mission.id, "beyond batch size"))
             continue
+        allow_partial = (governing == "topup") or (governing == "normal" and policy.partial_starts)
         outcome = _plan_one(mission, pool, resolver, policy, assigned, building_pos,
-                            text_engine, allow_partial=(governing == "topup"),
+                            text_engine, allow_partial=allow_partial,
                             patient_only=(governing == "patient"), shortfalls=plan.shortfalls)
         if isinstance(outcome, str):
             plan.skipped.append((mission.id, outcome))
