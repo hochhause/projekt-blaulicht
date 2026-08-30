@@ -238,15 +238,14 @@ class GameClient:
         return True
 
     async def share_mission(self, mission_id: int) -> bool:
-        """Share an OWN mission with the alliance ("Hilferuf") so members can help.
-
-        Follows the in-game share link, ``GET /missions/{id}/alliance_share`` (the
-        "Im Verband alarmieren/teilen" button's href). This is a best-guess route
-        NOT yet re-verified against a live capture — if sharing doesn't take,
-        capture the real request and adjust here.
-        """
+        """Share an OWN mission with the alliance ("Im Verband freigeben") so
+        members can help. Follows the real share button's href
+        ``GET /missions/{id}/alliance?ifs=fi&ift=kt_al_ae&sd=a&sk=cr``
+        (id=mission_alliance_share_btn, captured from the game)."""
         try:
-            await self._s.get_text(f"/missions/{mission_id}/alliance_share?{_CTX}")
+            await self._s.get_text(
+                f"/missions/{mission_id}/alliance?ifs=fi&ift=kt_al_ae&sd=a&sk=cr"
+            )
         except Exception:  # noqa: BLE001
             logger.exception("sharing mission %s to alliance failed", mission_id)
             return False

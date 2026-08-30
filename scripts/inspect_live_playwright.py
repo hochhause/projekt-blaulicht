@@ -81,12 +81,22 @@ def main() -> int:
         for k, v in sorted(ct.items(), key=lambda x: str(x[0])):
             out(f"  {k}: {v}")
 
-        # one sample per color with the key fields
+        # samples: one per colour, PLUS participating-false missions (with and
+        # without missing_text) to pin down what `participating` means.
         samples: dict[str, dict] = {}
         for m in missions:
             c = _color(m.get("icon", ""))
             if c not in samples:
-                samples[c] = m
+                samples[f"color={c}"] = m
+        pf_missing = next((m for m in missions if not m.get("participating") and _has_missing(m)), None)
+        pf_clean = next((m for m in missions if not m.get("participating") and not _has_missing(m)), None)
+        pt_any = next((m for m in missions if m.get("participating")), None)
+        if pf_missing:
+            samples["participating=False + missing_text"] = pf_missing
+        if pf_clean:
+            samples["participating=False + no missing_text"] = pf_clean
+        if pt_any:
+            samples["participating=True"] = pt_any
         for c, m in samples.items():
             out(f"\n--- sample {c!r} mission {m.get('id')} {m.get('caption')!r} ---")
             out(f"  icon={m.get('icon')} participating={m.get('participating')} "
