@@ -177,6 +177,21 @@ class GroupPlannerTests(unittest.TestCase):
         )
         self.assertEqual(plan.missions, [])  # we own no police car -> never startable
 
+    def test_account_only_assigned_to_missions_it_can_see(self):
+        # Mission 1 is only in account 10's feed (its own, unshared). Account 20
+        # must NOT be assigned to it (would be a silent no-op), even if 20 is
+        # nearer/has more spare.
+        m1 = mission(1, 1, is_alliance=False)
+        plan = plan_group_dispatches(
+            [m1],
+            {10: [vehicle(100, LF, building_id=10)], 20: [vehicle(200, LF, building_id=20)]},
+            {10: [building(10)], 20: [building(20)]}, self.resolver,
+            GroupPolicy(radius_km=40), visible_to={1: {10}},  # only 10 sees it
+        )
+        ba = _by_account(plan)
+        self.assertIn(10, ba)          # owner dispatches
+        self.assertNotIn(20, ba)       # 20 can't see it -> no phantom send
+
     def test_out_of_range_all_basis(self):
         # ANY-basis: in range if any account is near. ALL-basis needs both near.
         near = {10: [building(10, BUILDING)]}

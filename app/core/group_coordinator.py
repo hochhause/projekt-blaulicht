@@ -95,6 +95,12 @@ class GroupCoordinator:
                 missions_by_id.setdefault(m.id, m)  # union / dedup
 
         missions = list(missions_by_id.values())
+        # Which accounts can currently SEE each mission (own + shared-to-them) — an
+        # account can only dispatch to a mission in its own feed.
+        visible_to: dict[int, set[int]] = {}
+        for aid, ms in missions_by_account.items():
+            for m in ms:
+                visible_to.setdefault(m.id, set()).add(aid)
         resolver = live[next(iter(live))].resolver
         idle = sum(1 for vs in vehicles_by_account.values() for v in vs if getattr(v, "is_available", False))
         self._log(f"group: {len(live)} account(s), {len(missions)} mission(s), {idle} idle vehicle(s)")
@@ -110,6 +116,7 @@ class GroupCoordinator:
         plan = plan_group_dispatches(
             missions, vehicles_by_account, buildings_by_account, resolver,
             self._policy, now=time.time(), text_engine=self._text_engine(resolver),
+            visible_to=visible_to,
         )
 
         # Dispatch MISSION BY MISSION in sort order, so each mission is fully

@@ -109,10 +109,20 @@ def plan_group_dispatches(
     policy: GroupPolicy,
     now: float | None = None,
     text_engine=None,
+    visible_to: dict[int, set[int]] | None = None,
 ) -> GroupPlan:
-    """Plan one cycle across all member accounts. Returns per-account sends."""
+    """Plan one cycle across all member accounts. Returns per-account sends.
+
+    *visible_to* maps mission id -> the accounts whose feed currently contains it.
+    An account can only be assigned to dispatch to a mission it can actually see
+    (its own + alliance-shared) — otherwise the POST is a silent no-op. ``None``
+    means every member sees every mission (used in tests)."""
     plan = GroupPlan()
     member_ids = list(vehicles_by_account.keys())
+    member_set = set(member_ids)
+
+    def _visible(mid: int) -> set[int]:
+        return member_set if visible_to is None else visible_to.get(mid, set())
 
     # Per-account radius origins, and one MERGED building_id->pos map (ids are
     # game-global, so a vehicle's building resolves regardless of owner).
@@ -170,6 +180,10 @@ def plan_group_dispatches(
         nonlocal pool
         mid = mission.id
         pos = getattr(mission, "position", None)
+        # Only accounts that can SEE this mission (own it, or it's shared to them)
+        # may be assigned to it — otherwise the dispatch POST is a silent no-op.
+        vis = _visible(mid)
+        elig = [v for v in pool if owner_of.get(v.id) in vis]
         reqs = _outstanding(mission, resolver, text_engine, global_assigned)
         mtype = (
             resolver.catalog.get(mission.mission_type_id)
@@ -186,12 +200,12 @@ def plan_group_dispatches(
         satisfied = True
         shortfall: dict[str, int] = {}
         if reqs and pos is not None:
-            cov = select_coverage(reqs, pool, distance_of=_balanced_distance(pos, building_pos, pool, owner_of))
+            cov = select_coverage(reqs, elig, distance_of=_balanced_distance(pos, building_pos, elig, owner_of))
             chosen = list(cov.vehicle_ids)
             satisfied = cov.satisfied
             shortfall = dict(cov.shortfall)
         if fire_needed > 0 and pos is not None:
-            extra, short = _fire_personnel_topup(chosen, pool, resolver, fire_needed, pos, building_pos)
+            extra, short = _fire_personnel_topup(chosen, elig, resolver, fire_needed, pos, building_pos)
             chosen += extra
             if short > 0:
                 satisfied = False
@@ -213,6 +227,8 @@ def plan_group_dispatches(
             already = participating.get(mid, set())
             chosen_set = set(chosen)
             for aid in member_ids:
+                if aid not in vis:  # can't send to a mission it can't see
+                    continue
                 if aid in covered_owners or aid in already:
                     continue
                 if policy.max_token_per_account is not None and token_used[aid] >= policy.max_token_per_account:
