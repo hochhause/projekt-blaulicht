@@ -140,16 +140,18 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].vehicle_ids, (100,))  # RTW (type 28)
 
-    def test_catalogue_requirement_not_overridden_by_missing_text(self):
-        # When the catalogue HAS a requirement we use it (no caption-vs-class
-        # double counting) — missing_text is a fallback only.
-        from app.domain.requirements import RequirementEngine
-        engine = RequirementEngine(self.lib_for_engine)
-        m = mission(1, 1, NEAR)  # firetrucks:1
+    def test_missing_text_overrides_catalogue_requirement(self):
+        # P1 rework: missing_text is the AUTHORITATIVE remaining need once
+        # revealed (docs/live-data-model.md) — it replaces the catalogue's
+        # class/chance estimate rather than only filling gaps. Mission type 1
+        # has a catalogue requirement of firetrucks:1, but once missing_text
+        # reveals "1 RTW" (the game's own current "still missing" list), that
+        # is what we send — not the stale catalogue guess.
+        m = mission(1, 1, NEAR)  # firetrucks:1 (catalogue estimate, now stale)
         m.missing_text = '{"vehicles":"1 RTW","personnel":"","other":""}'
         plan = plan_dispatches([m], [vehicle(100, LF), vehicle(101, 28)], [building()],
-                               self.resolver, DispatchPolicy(radius_km=40), text_engine=engine)
-        self.assertEqual(plan.planned[0].vehicle_ids, (100,))  # just the LF, no phantom RTW
+                               self.resolver, DispatchPolicy(radius_km=40))
+        self.assertEqual(plan.planned[0].vehicle_ids, (101,))  # the RTW, not the LF
 
     def test_pool_consumed_across_missions(self):
         # Two firetruck missions, only one LF -> nearest gets it, other short.

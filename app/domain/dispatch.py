@@ -29,6 +29,7 @@ from enum import Enum
 
 from .coverage import select_coverage
 from .geo import haversine_km, nearest_km
+from .missingtext import parse_missing_text
 from .resolver import MissionRequirementResolver
 
 
@@ -423,33 +424,35 @@ def _missing_text_vehicles(mission) -> str:
 
     ``missing_text`` is a JSON blob once units are on scene, e.g.
     ``{"vehicles":"1 ELW 1","personnel":"","other":""}`` — we take ``vehicles``
-    (personnel = firefighters, handled via the fire-personnel path). Older/plain
-    strings are returned as-is.
+    (personnel = firefighters, handled via the fire-personnel path), delegating
+    the blob parsing to :func:`app.domain.missingtext.parse_missing_text` (the
+    same parser :meth:`MissionRequirementResolver.resolve_mission` uses).
+    Older/plain (non-JSON) strings are passed through as-is, for the legacy
+    regex engine below.
     """
     raw = (getattr(mission, "missing_text", "") or "").strip()
     if not raw:
         return ""
     if raw[0] == "{":
-        try:
-            import json
-
-            data = json.loads(raw)
-            return str(data.get("vehicles", "") or "")
-        except (ValueError, TypeError):
-            return ""
+        return parse_missing_text(raw).vehicles
     return raw
 
 
 def _derive_requirements(mission, resolver, text_engine, patient_only=False):
     """Base (pre-delta) requirements.
 
-    Primary = the structured catalogue (patient-only picks just the medical units).
-    When the catalogue has NO requirement for a mission, fall back to parsing the
-    live ``missing_text`` vehicles — the game's own "still needed" list — so a
-    mission the catalogue doesn't cover is still handled. (We only fall back on an
-    EMPTY catalogue result to avoid double-counting: the text engine keys
-    requirements by raw caption, not class, so merging it with catalogue classes
-    would over-count shared needs.)
+    Primary = ``resolver.resolve_mission`` — the LSSM ``missing_text`` category
+    table once a mission has revealed it, else the structured catalogue
+    estimate (patient-only picks just the medical units either way; see
+    :mod:`app.domain.resolver`). *text_engine* (the legacy regex engine,
+    keyed on raw vehicle CAPTIONS rather than categories) is now only a
+    tertiary, last-resort fallback for a mission type the resolver returns
+    NOTHING for at all — e.g. one missing from the catalogue AND whose
+    missing_text categories don't match the LSSM table either — so a mission
+    is still handled instead of silently skipped. (Only on an EMPTY resolver
+    result, to avoid double-counting: the text engine keys requirements by raw
+    caption, not class/category, so merging it with resolver output would
+    over-count shared needs.)
     """
     if patient_only:
         return list(resolver.resolve_patient_only(mission).requirements)

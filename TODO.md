@@ -26,22 +26,31 @@ See `docs/lssm-requirement-mapping.md` + `docs/live-data-model.md`.
 
 The live feed is the source of truth; our einsaetze-derivation guesses. Switch to reading it.
 
-- [ ] Build a resolver from `data/reference/lssm-missing-requirements.json`
+- [x] Build a resolver from `data/reference/lssm-missing-requirements.json`
       (requirement CATEGORY text → type-id set, + `equipment`, + `conditionalVehicles`, + `staff`).
-- [ ] Parse `missing_text` (JSON blob: `vehicles` + `personnel` + `other`) against it. This is the
+      `app/domain/missingtext.py` (`MissingTextResolver`).
+- [x] Parse `missing_text` (JSON blob: `vehicles` + `personnel` + `other`) against it. This is the
       **authoritative remaining need** (category names like "Löschfahrzeug (LF)", "Polizeihubschrauber",
       compound "LF oder RW"). REPLACES the brittle regex engine (which mis-parsed counts + LF).
+      `vehicles`+`personnel` are resolved to vehicle demand in `MissionRequirementResolver.resolve_mission`;
+      `other` is parsed (`MissingTextGroups.other`) but not yet acted on — see the "other" item below.
 - [ ] En-route subtraction: `Noch benötigt = fehlend − Auf Anfahrt`. Our delta subtracts OUR
-      en-route; for SHARED missions, other players' en-route is only on the DETAIL page — open it
-      only for red / not-participating / has-missing_text missions (the "when to open" rule below).
-- [ ] When `missing_text` is empty (untouched red missions), fall back to the einsaetze estimate.
-- [ ] `equipment` (heavy_rescue/oil = GW/AB modules): only count a carrier if it has the module —
+      en-route (unchanged, already done); for SHARED missions, other players' en-route is only on the
+      DETAIL page — open it only for red / not-participating / has-missing_text missions (the
+      "when to open" rule below). BLOCKED — see WORKFLOW.md §2 (needs a live capture of the detail page).
+- [x] When `missing_text` is empty (untouched red missions), fall back to the einsaetze estimate.
+- [x] `equipment` (heavy_rescue/oil = GW/AB modules): only count a carrier if it has the module —
       needs `/api/equipments` or vehicle detail. Conservative fallback: assume ok, let a failed
-      dispatch strike it.
-- [ ] `conditionalVehicles` (allow_rw_instead_of_lf, …): off unless the game setting is detected.
-- [ ] Fix / retire the old regex `RequirementEngine` (bugs: ignores quantity prefix "2 FuStW"→1;
-      no LF captions) once missing_text-based resolution is primary.
-- [ ] Handle the `other` group — CAPACITY requirements, not vehicle counts. missing_text carries
+      dispatch strike it. (No per-vehicle equipment state tracked — every carrier counts, per fallback.)
+- [x] `conditionalVehicles` (allow_rw_instead_of_lf, …): off unless the game setting is detected.
+      (Never added — `MissingTextResolver` only reads each entry's `vehicles` list, ignoring
+      `conditionalVehicles` entirely.)
+- [x] Fix / retire the old regex `RequirementEngine` (bugs: ignores quantity prefix "2 FuStW"→1;
+      no LF captions) once missing_text-based resolution is primary. Retired to a tertiary,
+      last-resort fallback in `app/domain/dispatch.py::_derive_requirements` (only fires when the
+      resolver returns nothing at all); the class itself is untouched/still tested.
+- [ ] Handle the `other` group — CAPACITY requirements, not vehicle counts. BLOCKED — see
+      WORKFLOW.md §2 (fill mechanic + tanker/foam capacity data unconfirmed). missing_text carries
       e.g. `"other":"1 Feuerlöschpumpe (z. B. LF)"`; the mission page has progress bars
       (`mission_{water|foam|pump}_holder` with driving/missing/selected values) and the feed has
       `water_damage_pump_value` / `live_current_water_damage_pump_value` / `pumping_mission_value`.

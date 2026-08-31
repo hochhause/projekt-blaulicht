@@ -171,6 +171,74 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(by.get("kdow_lna"), 1)
         self.assertEqual(by.get("firetrucks"), 1)  # normal reqs still present
 
+    # -- P1: missing_text is the authoritative source once revealed ------------
+    def test_resolve_mission_falls_back_to_catalogue_when_missing_text_empty(self):
+        # Untouched mission (no missing_text yet) -> the einsaetze estimate.
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0, missing_text="")
+        by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
+        self.assertEqual(by["firetrucks"], 2)  # fixture type 2's catalogue requirement
+
+    def test_resolve_mission_prefers_missing_text_over_catalogue(self):
+        # Once revealed, missing_text REPLACES the catalogue's class/chance
+        # estimate for the vehicle-class demand (docs/live-data-model.md).
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"1 ELW 1","personnel":"","other":""}')
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertNotIn("firetrucks", by)   # catalogue estimate dropped
+        self.assertEqual(by.get("ELW 1"), 1)  # missing_text category instead
+
+    def test_resolve_mission_missing_text_personnel_group_converted_to_vehicles(self):
+        # "personnel" is a HEADCOUNT, not a vehicle count (unlike "vehicles") —
+        # 8 missing firefighters needs ceil(8/9) = 1 vehicle (max crew among
+        # Feuerwehrmann's eligible types is 9, e.g. an HLF), not 8 vehicles.
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"8 Feuerwehrmann","other":""}')
+        by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("Feuerwehrmann"), 1)
+
+    def test_resolve_mission_missing_text_large_personnel_headcount_scales_up(self):
+        # 20 missing firefighters -> ceil(20/9) = 3 vehicles, not 20.
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"20 Feuerwehrmann","other":""}')
+        by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("Feuerwehrmann"), 3)
+
+    def test_resolve_mission_revealed_and_fully_satisfied_is_not_stale_catalogue(self):
+        # Revealed blob with EMPTY vehicles/personnel means "nothing more
+        # needed" (authoritative) — must NOT fall back to the catalogue's
+        # stale firetrucks:1 estimate for fixture type 2.
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"","other":"1 Feuerlöschpumpe"}')
+        res = self.resolver.resolve_mission(m)
+        self.assertEqual(res.requirements, [])
+        self.assertEqual(res.unmatched, [])
+
+    def test_resolve_mission_casualty_extras_layered_on_missing_text(self):
+        # NEF/ambulances/incident-command are never in missing_text's own
+        # vehicles/personnel groups -> they still apply on top of it.
+        m = SimpleNamespace(mission_type_id=2, patients_count=3, possible_patients_count=3,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=1,
+                            patient_missing=("Wir benötigen: NEF",),
+                            missing_text='{"vehicles":"1 ELW 1","personnel":"","other":""}')
+        by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("ELW 1"), 1)
+        self.assertEqual(by.get("ambulances"), 3)
+        self.assertEqual(by.get("nef"), 1)
+
+    def test_resolve_mission_unmatched_missing_text_category_reported(self):
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"1 Marsrover","personnel":"","other":""}')
+        res = self.resolver.resolve_mission(m)
+        self.assertEqual(res.requirements, [])
+        self.assertIn("1 Marsrover", res.unmatched)
+
 
 if __name__ == "__main__":
     unittest.main()

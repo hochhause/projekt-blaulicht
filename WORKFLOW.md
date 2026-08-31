@@ -99,7 +99,10 @@ inline once Sasha answers.
 - [ ] <TODO item #> — <what's blocked and what's needed from Sasha>
 ```
 
-(Empty until the session hits its first blocker.)
+- [ ] P0.1 — "worth a glance that a shared mission actually becomes alliance-visible on first live run" needs a live share against a throwaway account. No `BLAULICHT_EMAIL`/`BLAULICHT_PASSWORD` set this session. Needs: run the share endpoint once on a throwaway account and confirm alliance visibility.
+- [ ] P0.3 — DGL (FuStW-DGL) confirmation needs `scripts/probe_vehicle.py 81048893` against a throwaway account to confirm the vehicle is type 103 and mapped. No credentials available this session.
+- [ ] P1 (en-route subtraction, other-players' half) — our OWN en-route was already subtracted before this session (`assigned_from_vehicles`/`_apply_delta` in `app/domain/dispatch.py`, unchanged). The remaining half — reading a SHARED mission's detail page for other players' "Auf Anfahrt" so `Noch benötigt = fehlend − Auf Anfahrt` is exact — needs a live capture of the `/missions/{id}` detail page's actual markup/JSON shape (no doc pins this down yet; `scripts/probe_mission_detail.py` exists to find it but hasn't been run). Needs: run that probe against a throwaway account, paste the output, so the parsing can be captured and coded without guessing field names.
+- [ ] P1 ("other" capacity group — water/foam/pump) — `missingtext.py`'s `parse_missing_text` now exposes the raw `other` string (e.g. `"1 Feuerlöschpumpe (z. B. LF)"`) but nothing acts on it yet. `docs/live-data-model.md` itself says the fill mechanic ("how much fills the bar / when satisfied") is unconfirmed, and two data gaps are open: dedicated water tankers (GTLF etc.) have no capacity in the salvaged `.mscv`, and foam isn't extracted as a flat numeric. Needs: a live capture of a mission's `mission_{water|foam|pump}_holder` progress-bar values (via a throwaway account) to confirm the satisfy-threshold formula, plus a data source for tanker/foam capacity, before this can be coded instead of guessed.
 
 ---
 

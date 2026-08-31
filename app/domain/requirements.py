@@ -1,12 +1,19 @@
 """Turn a mission's requirement *text* into concrete vehicle-type demands.
 
 .. note::
-   This regex engine is the **secondary** requirement path. Base requirements
-   now come from structured data via :class:`app.domain.resolver.
-   MissionRequirementResolver` (``einsaetze.json`` class→count joined with
-   ``Vehicle.mscv``) — no parsing needed. Use this engine only for per-instance
-   detail the static catalogue lacks: exact crew/water/pump scaling and
-   patient/prisoner cues read off the live mission page.
+   This regex engine is now a **tertiary, last-resort** fallback, retired from
+   being primary. Base requirements come from
+   :class:`app.domain.resolver.MissionRequirementResolver`, which prefers a
+   revealed mission's ``missing_text`` (resolved against the LSSM category
+   table, :mod:`app.domain.missingtext` — the authoritative remaining need,
+   see ``docs/live-data-model.md``) and falls back to the structured catalogue
+   (``einsaetze.json`` class→count joined with ``Vehicle.mscv``) for an
+   untouched mission. This engine only still fires when BOTH of those return
+   nothing at all for a mission (see ``app.domain.dispatch._derive_requirements``)
+   — it keys requirements by raw vehicle CAPTION rather than class/category,
+   which is why it can't simply be merged in (double-counting risk), and why
+   it mis-parses quantity prefixes / lacks LF captions the newer resolvers
+   don't have (TODO.md P1).
 
 The engine takes the list of requirement lines a mission advertises (one string
 per requirement, as read from the mission page) and, for each line, works out:
