@@ -164,6 +164,24 @@ of each module's history if it's revisited.
   genuinely untestable-without-more-scaffolding piece (`on_cycle`) already
   had zero coverage before this change touched it.
 
+## app/web/app.py + dashboard.html — reviewed 2026-08-31, TODO P3.2 (combined group stats)
+- Stability (1-5): 5 — `_combined_totals` reuses `Store.totals()` (already
+  int-typed, COALESCE-safe) with no new persistence; code-reviewer traced the
+  actual call sites (`group.running` can only be true when `start_group` was
+  called with a non-empty member list) to confirm the `{}`-for-empty-members
+  branch never coexists with the template's totals-display branch, so no
+  `Undefined`-attribute risk. APPROVE, 0 findings.
+- Expandability (1-5): 5 — a plain aggregation function; extending it (e.g.
+  a combined shortfalls view) would follow the same one-line-per-metric shape.
+- Maintainability (1-5): 5 — small, pure, directly tested.
+- Verdict: keep-as-is
+- Rationale: reuses existing data (no new table), small and low-risk. Noted
+  gap (accepted, not fixed): no test renders the true "group running with
+  totals" template branch end-to-end, since faking a live `Orchestrator`
+  group requires touching its private `_group` tuple — judged not worth the
+  fragility for this size of change, especially given the running-implies-
+  non-empty-totals invariant is verified statically.
+
 ## app/domain/requirements.py — reviewed 2026-08-31, TODO P1 (item 7, docstring only)
 - Stability (1-5): 5 — code unchanged (only the module docstring was
   rewritten to describe the engine's new tertiary role); its own 5-ish unit

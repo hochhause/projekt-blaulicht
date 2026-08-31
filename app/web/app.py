@@ -152,6 +152,11 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
             "running": orchestrator.group_running,
             "members": orchestrator.group_members,
             "status": orchestrator.group_status(),
+            # Combined totals across members while the group runs — sums the
+            # SAME per-account `stat` rows the normal dashboard already shows
+            # (group dispatches are recorded per-account, see
+            # default_group_factory's `stat` closure), no new persistence.
+            "totals": _combined_totals(store, orchestrator.group_members),
         }
         return _TEMPLATES.TemplateResponse(
             request,
@@ -419,6 +424,22 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
 def _load_config(store, account_id: int) -> dict:
     raw = store.get_config(account_id)
     return json.loads(raw) if raw else {}
+
+
+def _combined_totals(store, member_ids) -> dict:
+    """Sum dispatched/missions/credits across a set of accounts (group mode's
+    combined stats — TODO.md P3.2). Empty dict when there are no members, so
+    the template can treat "no group running" and "group with 0 activity" the
+    same way (both render nothing)."""
+    if not member_ids:
+        return {}
+    dispatched = missions = credits = 0
+    for aid in member_ids:
+        t = store.totals(aid)
+        dispatched += t.get("dispatched", 0)
+        missions += t.get("missions", 0)
+        credits += t.get("credits", 0)
+    return {"dispatched": dispatched, "missions": missions, "credits": credits}
 
 
 def _dashboard_stats(store, accounts, color_by_id) -> dict:

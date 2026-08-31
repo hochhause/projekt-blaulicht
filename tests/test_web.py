@@ -19,6 +19,35 @@ except ImportError:
 
 
 @unittest.skipUnless(HAVE_WEB, "web extra (fastapi/cryptography) not installed")
+class CombinedTotalsTests(unittest.TestCase):
+    """TODO.md P3.2: combined group stats — sums the same per-account `stat`
+    rows the normal dashboard already shows (group dispatches are recorded
+    per-account), no new persistence."""
+
+    def setUp(self):
+        from app.store import Store
+
+        self.store = Store(":memory:")
+
+    def test_sums_across_members(self):
+        from app.web.app import _combined_totals
+
+        a1 = self.store.add_account("a", "a@e.com")
+        a2 = self.store.add_account("b", "b@e.com")
+        self.store.add_stat(a1, dispatched=3, missions=2, credits=100)
+        self.store.add_stat(a2, dispatched=5, missions=1, credits=50)
+        self.assertEqual(
+            _combined_totals(self.store, {a1, a2}),
+            {"dispatched": 8, "missions": 3, "credits": 150},
+        )
+
+    def test_empty_members_is_empty_dict(self):
+        from app.web.app import _combined_totals
+
+        self.assertEqual(_combined_totals(self.store, set()), {})
+
+
+@unittest.skipUnless(HAVE_WEB, "web extra (fastapi/cryptography) not installed")
 class WebPanelTests(unittest.TestCase):
     def setUp(self):
         os.environ["BOT_SECRET_KEY"] = "test-master-key"

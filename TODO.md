@@ -76,6 +76,7 @@ See `docs/MODES-TODO.md` (full inventory + compatibility matrix).
 
 - [ ] Resolve conflicts, esp. **patient + parasite** (parasite throws a non-medical spare at a
       patient-only mission). Decide: parasite skips patient-governed missions, or block in UI.
+      BLOCKED on Sasha — see WORKFLOW.md §2.
 - [x] Confirm parasite + top-up don't double-send (delta should prevent it). CONFIRMED structurally
       (parasite is claimed in the priority pass before the main loop's top-up branch ever runs) — see
       `docs/MODES-TODO.md` §6 and `tests/test_dispatch.py::test_parasite_and_topup_scopes_dont_double_dispatch`.
@@ -84,6 +85,8 @@ See `docs/MODES-TODO.md` (full inventory + compatibility matrix).
 - [ ] UI regroup: **Scope & filters | one Primary-mode selector (normal/top-up/patient) | Add-ons
       (parasite, hilferuf, partial) | Transport**. Inline warnings + auto-disable incompatible combos.
       transport-only visually disables the dispatch sections. Mirror on the group page.
+      BLOCKED on the patient+parasite decision above — see WORKFLOW.md §2 (can't build
+      "auto-disable incompatible combos" without knowing which combos are incompatible).
 
 ---
 
@@ -95,14 +98,18 @@ See `docs/MODES-TODO.md` (full inventory + compatibility matrix).
       for planning; `visible_to` (built from the post-share re-fetch) is the safety net for the game
       not having propagated a share instantly. Tested with fakes in `tests/test_group_coordinator.py`
       (both the same-cycle-join case and the propagation-lag safety-net case).
-- [ ] Combined group stats on the dashboard while running (credits/dispatched).
+- [x] Combined group stats on the dashboard while running (credits/dispatched). `_combined_totals`
+      (`app/web/app.py`) sums the same per-account `stat` rows group dispatches already write (no new
+      persistence), shown in the group-running banner on the dashboard.
 - [ ] Decide: per-member modes inside a group vs the single group-wide policy (current = group-wide).
+      BLOCKED on Sasha — see WORKFLOW.md §2 (P3.3).
 
 ---
 
 ## P4 — smaller features / ideas not yet explored
 - [ ] Timed missions: already dispatched like normal (same feed, carry `tv`). Optional **expiry-aware
       priority** (sort by remaining time before the timer runs out) — confirm the timer field first.
+      BLOCKED — see WORKFLOW.md §2 (no doc confirms `tv`'s semantics; no credentials to probe it).
 - [x] Surface live `icon` status on the Mission model + dashboard. `Mission.icon` + `.status`
       property (`app/game/models.py`); `DispatchRunner.run_cycle` tallies a per-cycle snapshot
       (`CycleReport.mission_status_counts`); persisted via a new `mission_status` table

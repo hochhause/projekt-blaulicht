@@ -51,7 +51,14 @@
 <div class="card" style="border-color:var(--blau);display:flex;align-items:center;gap:14px">
   <span class="pill running">group {{ group.status or 'running' }}</span>
   <span>Symbiotic <b>group mode</b> running — {{ group.members | length }} account(s) working together
-    (id {{ group.members | join(', ') }}). Members can't be started individually while it runs.</span>
+    (id {{ group.members | join(', ') }}). Members can't be started individually while it runs.
+    {% if group.totals %}
+    <span class="muted" style="font-family:var(--mono);font-size:12px">
+      · combined: {{ group.totals.missions }} mission(s), {{ group.totals.dispatched }} dispatched,
+      ~{{ "{:,}".format(group.totals.credits) }} credits
+    </span>
+    {% endif %}
+  </span>
   <span class="spacer" style="flex:1"></span>
   <form method="post" action="/group/stop" class="inline"><button class="danger">Stop group</button></form>
 </div>
