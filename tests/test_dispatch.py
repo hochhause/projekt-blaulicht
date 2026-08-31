@@ -161,6 +161,20 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(plan.planned[0].mission_id, 2)  # nearest first
         self.assertEqual(plan.skipped, [(1, "not enough vehicles: short firetrucks x1")])
 
+    def test_parasite_and_topup_scopes_dont_double_dispatch(self):
+        # TODO.md P2: "confirm parasite + top-up don't double-send". Both
+        # scopes cover this alliance mission (begun, we're not on it yet) —
+        # it must be handled ONCE, by the priority pass's parasite branch
+        # (which runs first and claims the mission via `handled`), never
+        # ALSO by the main loop's top-up branch.
+        m = mission(1, 1, NEAR, is_alliance=True, vehicle_state=1)  # firetrucks:1, begun
+        policy = DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
+                                 top_up_scope=ModeScope.ALLIANCE)
+        plan = plan_dispatches([m], [vehicle(100, LF)], [building()], self.resolver, policy)
+        mission_plans = [mp for mp in plan.planned if mp.mission_id == 1]
+        self.assertEqual(len(mission_plans), 1)
+        self.assertEqual(mission_plans[0].vehicle_ids, (100,))
+
     def test_multi_role_hlf_used_across_requirements(self):
         # type 3 needs firetrucks:1 + police_cars:1. HLF covers firetrucks; a
         # FuStW covers police. Two vehicles, HLF is the firetruck.

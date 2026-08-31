@@ -60,10 +60,18 @@ Legend: ✅ combine cleanly · ⚠️ works but questionable · ❌ conflict / u
 - [ ] **patient + parasite**: parasite may throw a random spare at a mission patient-only is on →
       contradicts "only medical". Decide: parasite should skip missions governed by patient scope,
       OR block the combo in the UI.
-- [ ] **top-up vs partial_starts**: overlapping ("send what you have"). Keep both? partial_starts is
+- [x] **top-up vs partial_starts**: overlapping ("send what you have"). Keep both? partial_starts is
       the general one; top-up adds the begun-only restriction. Document that top-up ⊂ partial + begun.
-- [ ] **parasite + top-up** both act on begun/shared missions — confirm no double-send (the delta
-      should prevent it, but verify).
+      DOCUMENTED (2026-08-31, see §6) — keeping both as-is, they're not redundant: top_up_scope governs
+      WHICH missions get the partial-send treatment (only begun ones we're not yet on), independently
+      of whether `partial_starts` is even on; `partial_starts` extends the SAME "send what you have"
+      behavior to `normal`-governed missions regardless of begun-state.
+- [x] **parasite + top-up** both act on begun/shared missions — confirm no double-send (the delta
+      should prevent it, but verify). CONFIRMED (2026-08-31): a mission both scopes cover is handled
+      exactly once. Parasite runs in `dispatch.py`'s priority pass (`_priority_pass`), which fires
+      BEFORE the main candidate loop and adds the mission to `handled` — so top-up's main-loop branch
+      never sees it. No delta-dependent race; it's structural (mutually exclusive by construction),
+      confirmed by `tests/test_dispatch.py::test_parasite_and_topup_scopes_dont_double_dispatch`.
 - [ ] Should enabling **transport_only** grey out every dispatch mode in the UI?
 
 ---
@@ -88,9 +96,10 @@ plus Dispatch filters and a Transport card. Proposed cleanup:
 
 ## 5. Group-mode follow-ups (from discussion)
 
-- [ ] **Share-before-send**: instead of restricting to currently-visible missions, share all
+- [x] **Share-before-send**: instead of restricting to currently-visible missions, share all
       members' own missions FIRST, then RE-FETCH missions, then plan/dispatch — so everything is
       visible in the same cycle (user's suggested fix). Keep the visibility guard as a safety net.
+      Implemented in `app/core/group_coordinator.py::run_cycle` (2026-08-31).
 - [ ] Combined group stats on the dashboard while running (optional).
 - [ ] Decide which per-account modes (if any) should be selectable per member inside a group, vs a
       single group-wide policy (current = group-wide).
@@ -99,4 +108,20 @@ plus Dispatch filters and a Transport card. Proposed cleanup:
 
 ## 6. Decisions log
 (record final rulings here as we make them)
-- …
+- **2026-08-31 — top-up ⊂ partial + begun-only, keep both settings.** `top_up_scope`'s main-loop
+  branch always sets `allow_partial=True` (`app/domain/dispatch.py::plan_dispatches`,
+  `governing == "topup"`) and is gated to missions with `vehicle_state >= 1` (skipped otherwise as
+  "not begun (top-up)"). `partial_starts` independently sets `allow_partial=True` for
+  `normal`-governed missions with NO begun-state gate. So top-up's behavior is a strict subset of
+  "partial send" restricted to begun missions — not a duplicate setting. Decision: keep both;
+  top_up_scope answers "which missions get top-up treatment" (a governing-mode choice, mutually
+  exclusive with normal/patient per mission), `partial_starts` answers "should normal dispatch settle
+  for less than a full crew" (an add-on). No code change needed, only this clarification.
+- **2026-08-31 — parasite + top-up never double-send.** Confirmed structurally, not by luck: parasite
+  is entirely handled in `dispatch.py`'s priority pass (`_priority_pass`), which runs before the main
+  candidate loop and marks a handled mission id so the main loop (where top-up's branch lives) skips
+  it outright. See `tests/test_dispatch.py::test_parasite_and_topup_scopes_dont_double_dispatch`.
+- **2026-08-31 — Share-before-send implemented as specified.** `app/core/group_coordinator.py`'s
+  `run_cycle` now shares each member's own missions before the mission fetch used for planning, then
+  re-fetches so the same-cycle share is reflected; `visible_to` (from the re-fetch) remains the safety
+  net for the game not having propagated a share instantly. See `tests/test_group_coordinator.py`.

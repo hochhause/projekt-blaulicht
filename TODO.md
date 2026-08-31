@@ -76,8 +76,11 @@ See `docs/MODES-TODO.md` (full inventory + compatibility matrix).
 
 - [ ] Resolve conflicts, esp. **patient + parasite** (parasite throws a non-medical spare at a
       patient-only mission). Decide: parasite skips patient-governed missions, or block in UI.
-- [ ] Confirm parasite + top-up don't double-send (delta should prevent it).
-- [ ] Document top-up ⊂ partial + begun-only.
+- [x] Confirm parasite + top-up don't double-send (delta should prevent it). CONFIRMED structurally
+      (parasite is claimed in the priority pass before the main loop's top-up branch ever runs) — see
+      `docs/MODES-TODO.md` §6 and `tests/test_dispatch.py::test_parasite_and_topup_scopes_dont_double_dispatch`.
+- [x] Document top-up ⊂ partial + begun-only. See `docs/MODES-TODO.md` §6 (2026-08-31 entry) —
+      no code change needed, kept both settings (they answer different questions).
 - [ ] UI regroup: **Scope & filters | one Primary-mode selector (normal/top-up/patient) | Add-ons
       (parasite, hilferuf, partial) | Transport**. Inline warnings + auto-disable incompatible combos.
       transport-only visually disables the dispatch sections. Mirror on the group page.
@@ -85,9 +88,13 @@ See `docs/MODES-TODO.md` (full inventory + compatibility matrix).
 ---
 
 ## P3 — group mode follow-ups
-- [ ] **Share-before-send**: share all members' own missions FIRST, then **RE-FETCH** missions, then
+- [x] **Share-before-send**: share all members' own missions FIRST, then **RE-FETCH** missions, then
       plan/dispatch — so everything's visible in the same cycle (user's fix; supersedes the
       visibility-ramp). Keep the visibility guard as a safety net.
+      `app/core/group_coordinator.py::run_cycle` — share pass now runs before the mission fetch used
+      for planning; `visible_to` (built from the post-share re-fetch) is the safety net for the game
+      not having propagated a share instantly. Tested with fakes in `tests/test_group_coordinator.py`
+      (both the same-cycle-join case and the propagation-lag safety-net case).
 - [ ] Combined group stats on the dashboard while running (credits/dispatched).
 - [ ] Decide: per-member modes inside a group vs the single group-wide policy (current = group-wide).
 
