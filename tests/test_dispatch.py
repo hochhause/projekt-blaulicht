@@ -10,6 +10,7 @@ from app.domain.dispatch import (
     DispatchPolicy,
     MissionSource,
     ModeScope,
+    ParasiteAggressiveness,
     assigned_from_vehicles,
     plan_dispatches,
 )
@@ -278,6 +279,88 @@ class DispatchPlannerTests(unittest.TestCase):
         )
         # mission_source OWN filters it out; parasite didn't grab it (vehicle_state 0)
         self.assertEqual(plan.planned, [])
+
+    def test_parasite_on_patient_governed_mission_only_claims_participation(self):
+        # Decision (Sasha, 2026-08-31): parasite + patient-governed together
+        # must NEVER try a "useful" patient-only contribution — always just
+        # claim participation with a plain spare, even when a real patient
+        # need exists on the mission. patient_scope's own governance (for
+        # missions we're actually assigned to) is what actually cares for
+        # patients; a parasite leech isn't medically aware.
+        para = mission(1, 1, NEAR, is_alliance=True, vehicle_state=1)  # others on it, we're not
+        para.patients_count = 1  # a real medical need exists
+        rtw = vehicle(100, 28)          # ambulances — the "useful" pick under the old behavior
+        lfs = [vehicle(101, LF), vehicle(102, LF), vehicle(103, LF)]  # most-abundant type
+        plan = plan_dispatches(
+            [para], [rtw, *lfs], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
+                            patient_scope=ModeScope.ALLIANCE),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        sent = plan.planned[0]
+        self.assertEqual(len(sent.vehicle_ids), 1)
+        self.assertNotEqual(sent.vehicle_ids[0], 100)  # NOT the RTW
+        self.assertIn(sent.vehicle_ids[0], {101, 102, 103})  # a plain spare LF
+        self.assertFalse(sent.satisfied)  # a pure leech claim, not a real contribution
+
+    def test_parasite_mode_all_grabs_untouched_mission_too(self):
+        # ParasiteAggressiveness.ALL drops the "someone's already on it"
+        # requirement entirely (Sasha, 2026-08-31).
+        para = mission(1, 3, NEAR, is_alliance=True, vehicle_state=0)  # nobody on it yet
+        plan = plan_dispatches(
+            [para], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
+                            parasite_mode=ParasiteAggressiveness.ALL,
+                            mission_source=MissionSource.OWN),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].mission_id, 1)
+
+    def test_parasite_mode_all_preempts_missions_the_main_loop_would_have_filtered(self):
+        # ALL-mode's priority-pass claim bypasses cash/category/batch/order
+        # filters entirely -- same documented bypass parasite has always had
+        # for ACTIVE-mode leech targets, now also reachable on an untouched
+        # mission the main (filtered/ordered) loop would otherwise have
+        # skipped outright (here: below the own-credit floor).
+        cheap = mission(1, 1, NEAR, is_alliance=False, average_credits=10)  # firetrucks:1
+        policy = DispatchPolicy(radius_km=40, own_credit_min=1000,  # would filter it out normally
+                                 parasite_scope=ModeScope.BOTH,
+                                 parasite_mode=ParasiteAggressiveness.ALL)
+        # Sanity: without ALL-mode parasite, the credit floor filters it out.
+        plain = plan_dispatches([cheap], [vehicle(100, LF)], [building()], self.resolver,
+                                 DispatchPolicy(radius_km=40, own_credit_min=1000))
+        self.assertEqual(plain.planned, [])
+        self.assertEqual(plain.skipped, [(1, "below credit floor (10)")])
+
+        plan = plan_dispatches([cheap], [vehicle(100, LF)], [building()], self.resolver, policy)
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].mission_id, 1)
+
+    def test_parasite_mode_needed_skips_active_mission_with_nothing_missing(self):
+        # ParasiteAggressiveness.NEEDED adds "missing_text must be revealed"
+        # on top of "someone's already on it" — a mission others are on but
+        # that's already fully covered (empty missing_text) is skipped.
+        covered = mission(1, 3, NEAR, is_alliance=True, vehicle_state=1)
+        covered.missing_text = ""
+        plan = plan_dispatches(
+            [covered], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
+                            parasite_mode=ParasiteAggressiveness.NEEDED,
+                            mission_source=MissionSource.OWN),
+        )
+        self.assertEqual(plan.planned, [])
+
+    def test_parasite_mode_needed_grabs_active_mission_with_missing_text(self):
+        needy = mission(1, 3, NEAR, is_alliance=True, vehicle_state=1)
+        needy.missing_text = '{"vehicles":"1 ELW 1","personnel":"","other":""}'
+        plan = plan_dispatches(
+            [needy], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
+                            parasite_mode=ParasiteAggressiveness.NEEDED,
+                            mission_source=MissionSource.OWN),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].mission_id, 1)
 
     # -- per-mode scoping -----------------------------------------------------
     def test_mode_scope_lets_normal_own_and_patient_alliance_coexist(self):

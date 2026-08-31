@@ -285,6 +285,29 @@ class RunnerTests(unittest.TestCase):
         asyncio.run(runner.run_cycle())
         self.assertEqual(client.recalled, [])
 
+    def test_patient_only_recall_never_touches_non_governed_vehicle_types(self):
+        # Confirmed bug, fixed 2026-08-31 (Sasha): patient-only's recall must
+        # ONLY ever touch vehicle types it itself would send (ambulances/NEF/
+        # rescue_helicopter/incident-command). A fire truck someone manually
+        # sent to the SAME now-cleared mission (unrelated reason) must be left
+        # alone -- patient-only never governs it, so it never recalls it.
+        async def no_sleep(_):
+            return None
+
+        mission = SimpleNamespace(id=5, caption="RD", mission_type_id=1, position=NEAR,
+                                  patients_count=0, vehicle_state=1)
+        nef = SimpleNamespace(id=10, type_id=29, is_available=False, position=BUILDING,
+                              fms=4, target_type="mission", target_id=5)
+        manual_lf = SimpleNamespace(id=13, type_id=0, is_available=False, position=BUILDING,
+                                    fms=4, target_type="mission", target_id=5)
+        client = FakeClient([mission], [nef, manual_lf], [b()])
+        runner = DispatchRunner(
+            client, self.resolver, DispatchPolicy(radius_km=40, patient_scope=ModeScope.BOTH),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.recalled, [10])  # NEF recalled; LF untouched
+
     def test_cleanup_recalls_surplus_via_runner(self):
         # Two LFs assigned to a mission that needs one -> cleanup recalls the extra.
         async def no_sleep(_):

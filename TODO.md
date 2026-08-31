@@ -77,9 +77,19 @@ The live feed is the source of truth; our einsaetze-derivation guesses. Switch t
 ## P2 — modes & UI cleanup
 See `docs/MODES-TODO.md` (full inventory + compatibility matrix).
 
-- [ ] Resolve conflicts, esp. **patient + parasite** (parasite throws a non-medical spare at a
-      patient-only mission). Decide: parasite skips patient-governed missions, or block in UI.
-      BLOCKED on Sasha — see WORKFLOW.md §2.
+- [x] Resolve conflicts, esp. **patient + parasite** (parasite throws a non-medical spare at a
+      patient-only mission). DECIDED 2026-08-31 (Sasha): "simple solution, if both are active,
+      patients are removed AND one vehicle is sent to stay for claiming the cash" — parasite on a
+      patient-governed mission we're not on never computes a "useful" patient-only pick, always just
+      claims participation with a plain spare (`app/domain/dispatch.py::_priority_pass`,
+      `skip_patient_contribution`). Top-up (missions we're actually assigned to) keeps its existing
+      patient-aware behavior unchanged. See `tests/test_dispatch.py::test_parasite_on_patient_governed_mission_only_claims_participation`.
+      Also added (Sasha, same message) a new **parasite aggressiveness** setting — active (default) /
+      all / needed — see `docs/MODES-TODO.md` §1 for the new inventory entry.
+      Also fixed a related real bug Sasha found: patient-only's recall (`_recall_cleared_patient_missions`
+      in `app/core/runner.py`) previously recalled ANY vehicle on a cleared mission, not just the
+      classes patient-only itself sends (RTW/NEF/rescue_helicopter/LNA/OrgL) — a manually-sent fire
+      truck or police car on the same mission would get wrongly recalled. Now filtered by vehicle type.
 - [x] Confirm parasite + top-up don't double-send (delta should prevent it). CONFIRMED structurally
       (parasite is claimed in the priority pass before the main loop's top-up branch ever runs) — see
       `docs/MODES-TODO.md` §6 and `tests/test_dispatch.py::test_parasite_and_topup_scopes_dont_double_dispatch`.
@@ -88,8 +98,10 @@ See `docs/MODES-TODO.md` (full inventory + compatibility matrix).
 - [ ] UI regroup: **Scope & filters | one Primary-mode selector (normal/top-up/patient) | Add-ons
       (parasite, hilferuf, partial) | Transport**. Inline warnings + auto-disable incompatible combos.
       transport-only visually disables the dispatch sections. Mirror on the group page.
-      BLOCKED on the patient+parasite decision above — see WORKFLOW.md §2 (can't build
-      "auto-disable incompatible combos" without knowing which combos are incompatible).
+      UNBLOCKED 2026-08-31 (the patient+parasite decision above resolved what was blocking it — parasite
+      no longer needs a UI-level block against patient_scope, it's handled functionally instead) but
+      NOT YET BUILT — this full redesign is a separate, larger UI task not attempted this session
+      (only the new parasite-aggressiveness dropdown was added to the existing account.html layout).
 
 ---
 

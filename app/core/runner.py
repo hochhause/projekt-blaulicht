@@ -367,6 +367,10 @@ class DispatchRunner:
         self._log(f"cleanup done: recalled {done} vehicle(s)")
         return done
 
+    # Vehicle classes patient-only mode itself ever sends (see
+    # resolver.resolve_patient_only) — the ONLY ones its recall may touch.
+    _PATIENT_GOVERNED_CLASSES = ("ambulances", "nef", "rescue_helicopter", "kdow_lna", "kdow_orgl")
+
     async def _recall_cleared_patient_missions(self, missions, vehicles) -> None:
         """Patient-only cleanup: recall units we no longer need at a mission whose
         patients are all handled.
@@ -374,8 +378,14 @@ class DispatchRunner:
         A mission counts as cleared only when one of OUR units is actually **on
         scene** (FMS 4) and sees zero patients — so units stick around until every
         patient is treated or on the way to a hospital, and we never recall on a
-        still-hidden count. Then every unit of ours there is recalled EXCEPT one
-        with a patient aboard (FMS 5), which is left to reach the hospital."""
+        still-hidden count. Then every unit of ours there whose TYPE is one
+        patient-only mode itself would have sent (ambulances/NEF/rescue
+        helicopter/incident-command) is recalled, except one with a patient
+        aboard (FMS 5), which is left to reach the hospital. A vehicle another
+        mode or a manual send put on that same mission (a fire truck, a police
+        car, …) is left alone — patient-only never governs it, so it never
+        recalls it (confirmed by Sasha: a real live bug, this was previously
+        unfiltered by vehicle type)."""
         from ..domain.dispatch import _scope_covers
 
         scope = getattr(self._policy, "patient_scope", None)
@@ -393,6 +403,10 @@ class DispatchRunner:
         cleared = {mid for mid in on_scene if mid in patients_by_mid and patients_by_mid[mid] == 0}
         if not cleared:
             return
+        by_class = self._resolver.library.class_map.by_class
+        governed_type_ids = {
+            tid for cls in self._PATIENT_GOVERNED_CLASSES for tid in by_class.get(cls, ())
+        }
         for v in vehicles:
             if getattr(v, "target_type", None) != "mission":
                 continue
@@ -400,6 +414,8 @@ class DispatchRunner:
                 continue
             if getattr(v, "fms", None) == 5:
                 continue  # patient aboard — must reach a hospital, don't recall
+            if getattr(v, "type_id", None) not in governed_type_ids:
+                continue  # not a vehicle patient-only mode itself would send
             name = _vehicle_name(v, v.id)
             if await self._client.recall(v.id):
                 self._log(f"recalled {name}: patients cleared at #{v.target_id}")

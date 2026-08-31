@@ -125,6 +125,7 @@ class WebPanelTests(unittest.TestCase):
                 "own_credit_min": 100, "alliance_credit_max": 8000,
                 "max_vehicles_per_mission": "", "order": "oldest",
                 "mission_source": "own",
+                "parasite_scope": "alliance", "parasite_aggressiveness": "needed",
                 "transport_enabled": "1", "transport_max_distance_km": 50,
                 "transport_max_tax": "", "transport_prefer_own": "1",
                 "transport_allow_alliance": "",
@@ -135,6 +136,7 @@ class WebPanelTests(unittest.TestCase):
         self.assertEqual(cfg["own_credit_min"], 100)
         self.assertEqual(cfg["alliance_credit_max"], 8000)
         self.assertEqual(cfg["mission_source"], "own")
+        self.assertEqual(cfg["parasite_aggressiveness"], "needed")
 
     def test_settings_page_and_password_change(self):
         self._login()

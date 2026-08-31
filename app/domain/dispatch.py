@@ -63,6 +63,15 @@ class ModeScope(str, Enum):
     BOTH = "both"
 
 
+class ParasiteAggressiveness(str, Enum):
+    """How eagerly parasite mode grabs a mission (Sasha, 2026-08-31)."""
+
+    ACTIVE = "active"  # default/current: only missions someone's ALREADY on (vehicle_state>=1)
+    ALL = "all"        # any scope-covered mission, regardless of whether anyone's on it yet
+    NEEDED = "needed"  # only missions with REVEALED missing_text — never a pure "claim anyway"
+    # spare send; if there's nothing genuinely still missing, parasite skips it.
+
+
 def _scope_covers(scope, is_alliance: bool) -> bool:
     """True if a :class:`ModeScope` value covers a mission of this source."""
     scope = getattr(scope, "value", scope)
@@ -116,6 +125,8 @@ class DispatchPolicy:
     # if a role is missing, else a spare just to claim a participation share
     # (priority pass; bypasses cash/category filters + batch/order).
     parasite_scope: ModeScope = ModeScope.OFF
+    # How eagerly parasite grabs a mission — see ParasiteAggressiveness.
+    parasite_mode: ParasiteAggressiveness = ParasiteAggressiveness.ACTIVE
     # Top-up (symbiont): only reinforce ALREADY-begun missions (vehicle_state>=1),
     # sending the useful vehicles we have (partial ok). No fresh missions.
     top_up_scope: ModeScope = ModeScope.OFF
@@ -506,23 +517,47 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
         on_it = mid in assigned                       # a mission we're already on
         others_on = getattr(mission, "vehicle_state", 0) >= 1
         is_alliance = getattr(mission, "is_alliance", False)
-        is_parasite = _scope_covers(policy.parasite_scope, is_alliance) and others_on and not on_it
+        scope_ok = _scope_covers(policy.parasite_scope, is_alliance) and not on_it
+        # Aggressiveness (Sasha, 2026-08-31): ACTIVE (default) requires someone
+        # already on it, matching the original behavior; ALL drops that
+        # requirement entirely (grab any scope-covered mission); NEEDED adds
+        # the extra requirement that missing_text is actually revealed (skip
+        # missions others are on but that are already fully covered).
+        if policy.parasite_mode is ParasiteAggressiveness.ALL:
+            is_parasite = scope_ok
+        elif policy.parasite_mode is ParasiteAggressiveness.NEEDED:
+            revealed = parse_missing_text(getattr(mission, "missing_text", "")).revealed
+            is_parasite = scope_ok and others_on and revealed
+        else:  # ACTIVE
+            is_parasite = scope_ok and others_on
         if not (on_it or is_parasite):
             continue
 
         pos = getattr(mission, "position", None)
         patient_here = _scope_covers(policy.patient_scope, is_alliance)
-        reqs = _outstanding(mission, resolver, text_engine, assigned, patient_here)
+        # Parasite on a patient-governed mission we're not on (leeching, not
+        # topping up): never compute a "useful" patient-only contribution
+        # here — go straight to the plain participation-claiming spare send
+        # below. Decision (Sasha, 2026-08-31): patient_scope's own governance
+        # (the top-up/`on_it` branch above, for missions we're actually
+        # assigned to) is what handles real medical need; a parasite leech
+        # isn't medically aware and shouldn't pretend a random "useful" pick
+        # is patient care. Once this claim send lands, the mission becomes
+        # `on_it` from NEXT cycle onward, so real medical coverage follows
+        # with a one-cycle delay, not immediately this same cycle.
+        skip_patient_contribution = is_parasite and patient_here
         chosen: list[int] = []
-        if reqs and pos is not None:
-            cov = select_coverage(reqs, pool, distance_of=_distance_fn(pos, building_pos))
-            if cov.vehicle_ids:
-                chosen = list(cov.vehicle_ids)
-                plan.planned.append(MissionPlan(mid, getattr(mission, "caption", ""),
-                                                tuple(chosen), cov.satisfied, dict(cov.shortfall)))
-                if not cov.satisfied:
-                    _note_shortfall(plan.shortfalls, cov.shortfall.keys())
-                batch_used += 1  # useful contribution -> counts to batch
+        if not skip_patient_contribution:
+            reqs = _outstanding(mission, resolver, text_engine, assigned, patient_here)
+            if reqs and pos is not None:
+                cov = select_coverage(reqs, pool, distance_of=_distance_fn(pos, building_pos))
+                if cov.vehicle_ids:
+                    chosen = list(cov.vehicle_ids)
+                    plan.planned.append(MissionPlan(mid, getattr(mission, "caption", ""),
+                                                    tuple(chosen), cov.satisfied, dict(cov.shortfall)))
+                    if not cov.satisfied:
+                        _note_shortfall(plan.shortfalls, cov.shortfall.keys())
+                    batch_used += 1  # useful contribution -> counts to batch
         if not chosen and is_parasite:
             spare = _abundance_vehicle(pool, pos, building_pos)
             if spare is not None:

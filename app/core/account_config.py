@@ -10,7 +10,13 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from ..domain.dispatch import DispatchOrder, DispatchPolicy, MissionSource, ModeScope
+from ..domain.dispatch import (
+    DispatchOrder,
+    DispatchPolicy,
+    MissionSource,
+    ModeScope,
+    ParasiteAggressiveness,
+)
 from ..domain.group import GroupPolicy, RadiusBasis
 from ..domain.transport import TransportPolicy
 
@@ -40,6 +46,11 @@ class AccountConfig:
     alliance_radius_km: float | None = None
     # Special modes, each scoped independently: off / own / alliance / both.
     parasite_scope: str = ModeScope.OFF.value
+    # How eagerly parasite grabs a mission: active (default, someone's already
+    # on it) / all (any scope-covered mission) / needed (active + missing_text
+    # actually revealed). NB named distinctly from the legacy `parasite_mode`
+    # boolean key migrated below — don't rename to avoid re-colliding with it.
+    parasite_aggressiveness: str = ParasiteAggressiveness.ACTIVE.value
     top_up_scope: str = ModeScope.OFF.value
     patient_scope: str = ModeScope.OFF.value
     # Hilferuf: share own missions we can't crew to the alliance.
@@ -70,6 +81,11 @@ class AccountConfig:
             except ValueError:
                 return ModeScope.OFF
 
+        try:
+            aggressiveness = ParasiteAggressiveness(self.parasite_aggressiveness)
+        except ValueError:
+            aggressiveness = ParasiteAggressiveness.ACTIVE
+
         return DispatchPolicy(
             radius_km=self.radius_km,
             own_credit_min=self.own_credit_min,
@@ -85,6 +101,7 @@ class AccountConfig:
             mission_source=source,
             alliance_radius_km=self.alliance_radius_km,
             parasite_scope=_scope(self.parasite_scope),
+            parasite_mode=aggressiveness,
             top_up_scope=_scope(self.top_up_scope),
             patient_scope=_scope(self.patient_scope),
             hilferuf=self.hilferuf,

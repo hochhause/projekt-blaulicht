@@ -43,6 +43,27 @@ class AccountConfigTests(unittest.TestCase):
         self.assertEqual(again.parasite_scope, "alliance")
         self.assertEqual(again.patient_scope, "own")
 
+    def test_legacy_parasite_mode_boolean_does_not_collide_with_aggressiveness(self):
+        # The legacy `parasite_mode` key was a BOOLEAN; the new
+        # `parasite_aggressiveness` field is a distinctly-named string enum to
+        # avoid colliding with it. A stored `parasite_mode: true` must still
+        # only drive the scope migration, leaving aggressiveness at its
+        # default (active).
+        cfg = AccountConfig.from_dict({"parasite_mode": True})
+        self.assertEqual(cfg.parasite_scope, "alliance")
+        self.assertEqual(cfg.parasite_aggressiveness, "active")
+        self.assertEqual(cfg.dispatch_policy().parasite_mode.value, "active")
+
+    def test_parasite_aggressiveness_roundtrip_and_maps_to_policy(self):
+        cfg = AccountConfig(parasite_aggressiveness="needed")
+        again = AccountConfig.from_dict(cfg.to_dict())
+        self.assertEqual(again.parasite_aggressiveness, "needed")
+        self.assertEqual(again.dispatch_policy().parasite_mode.value, "needed")
+
+    def test_invalid_parasite_aggressiveness_falls_back_to_active(self):
+        cfg = AccountConfig(parasite_aggressiveness="bogus")
+        self.assertEqual(cfg.dispatch_policy().parasite_mode.value, "active")
+
     def test_policies_reflect_config(self):
         cfg = AccountConfig(
             radius_km=15, own_credit_min=200, alliance_credit_max=9000,

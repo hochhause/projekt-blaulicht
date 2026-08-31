@@ -15,6 +15,7 @@ Status: DRAFT for discussion. Check items off as we settle/implement them.
 |---|---|---|
 | `mission_source` | both / own / alliance | Which missions **normal** dispatch works. |
 | `parasite_scope` | off / own / alliance / both | Leech missions others are already on (priority pass, additive). |
+| `parasite_aggressiveness` | active / all / needed | Added 2026-08-31 (Sasha). How eagerly, WITHIN `parasite_scope`: `active` (default) = only missions someone's already on; `all` = any scope-covered mission, even untouched ones (bypasses cash/category/batch/order filters, same as `active` always has); `needed` = `active` + `missing_text` must actually be revealed (skip missions that are already fully covered). |
 | `top_up_scope` | off / own / alliance / both | Only reinforce **already-begun** missions; partial ok. |
 | `patient_scope` | off / own / alliance / both | Dispatch **only** patient units (RTW/NEF/RTH + LNA/OrgL); recall idle after. |
 | `hilferuf` | on / off | Share own missions we can't crew to the alliance (add-on). |
@@ -57,9 +58,11 @@ Legend: ✅ combine cleanly · ⚠️ works but questionable · ❌ conflict / u
 | **transport-only** | ⤵️ | ⤵️ | ⤵️ | ⤵️ | — | ⚠️ nothing to share (no dispatch) | ⤵️ |
 
 **Open questions to resolve:**
-- [ ] **patient + parasite**: parasite may throw a random spare at a mission patient-only is on →
+- [x] **patient + parasite**: parasite may throw a random spare at a mission patient-only is on →
       contradicts "only medical". Decide: parasite should skip missions governed by patient scope,
-      OR block the combo in the UI.
+      OR block the combo in the UI. RESOLVED (2026-08-31, see §6) — neither: parasite still claims
+      participation on patient-governed missions (doesn't skip them, no UI block needed), it just never
+      pretends the claim is medical care.
 - [x] **top-up vs partial_starts**: overlapping ("send what you have"). Keep both? partial_starts is
       the general one; top-up adds the begun-only restriction. Document that top-up ⊂ partial + begun.
       DOCUMENTED (2026-08-31, see §6) — keeping both as-is, they're not redundant: top_up_scope governs
@@ -117,6 +120,28 @@ plus Dispatch filters and a Transport card. Proposed cleanup:
   top_up_scope answers "which missions get top-up treatment" (a governing-mode choice, mutually
   exclusive with normal/patient per mission), `partial_starts` answers "should normal dispatch settle
   for less than a full crew" (an add-on). No code change needed, only this clarification.
+- **2026-08-31 — patient + parasite conflict, resolved by Sasha.** "if both are active, patients are
+  removed AND one vehicle is sent to stay for claiming the cash": parasite on a mission also governed
+  by `patient_scope` (that we're not already assigned to) never computes a "useful" patient-only pick —
+  it always goes straight to the plain participation-claiming spare send, regardless of whether a real
+  patient need exists. Real medical coverage for that mission still happens, just from the NEXT cycle
+  onward once the claim send makes us `on_it` (the top-up/`on_it` branch keeps its patient-aware
+  behavior unchanged — this only affects the not-yet-assigned leech path). Implemented in
+  `app/domain/dispatch.py::_priority_pass` (`skip_patient_contribution`).
+- **2026-08-31 — new parasite aggressiveness setting (Sasha).** Three levels, orthogonal to
+  `parasite_scope` (which missions) — see §1's inventory row: `active` (default, unchanged), `all`
+  (drop the "someone's on it" requirement), `needed` (require `missing_text` to be revealed on top of
+  `active`'s gate). `ALL` mode bypasses cash/category/batch/order filters on missions the main loop
+  would otherwise have filtered out or deferred — the SAME bypass parasite's priority pass has always
+  had for `active`-mode leech targets, just reachable on more missions now. Confirmed via
+  `tests/test_dispatch.py::test_parasite_mode_all_preempts_missions_the_main_loop_would_have_filtered`.
+- **2026-08-31 — real bug found and fixed: patient-only recall wasn't type-filtered.** Sasha asked
+  "it should ONLY recall the vehicles it governs itself... not interfere with eventual manual sends" —
+  confirmed true: `DispatchRunner._recall_cleared_patient_missions` (`app/core/runner.py`) recalled
+  EVERY vehicle assigned to a cleared mission except one with a patient aboard, with no filter on
+  vehicle type. Fixed: now also requires the vehicle's type to be one of the classes
+  `resolve_patient_only` itself ever sends (ambulances/nef/rescue_helicopter/kdow_lna/kdow_orgl) —
+  a manually-sent fire truck or police car on the same mission is left alone.
 - **2026-08-31 — parasite + top-up never double-send.** Confirmed structurally, not by luck: parasite
   is entirely handled in `dispatch.py`'s priority pass (`_priority_pass`), which runs before the main
   candidate loop and marks a handled mission id so the main loop (where top-up's branch lives) skips

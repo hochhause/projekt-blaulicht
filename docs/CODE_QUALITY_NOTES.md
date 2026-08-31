@@ -260,6 +260,41 @@ of each module's history if it's revisited.
 - Rationale: verification-only task (confirming existing correct behavior
   against real timed-mission data), no production code touched.
 
+## app/core/runner.py, app/domain/dispatch.py, app/core/account_config.py, app/web/app.py + account.html — reviewed 2026-08-31, TODO P2 (patient+parasite resolution, real recall bug, new aggressiveness setting)
+- Stability (1-5): 4 — three related, Sasha-specified changes: (1) a REAL bug
+  fix (`_recall_cleared_patient_missions` wasn't filtered by vehicle type —
+  confirmed via code reading that it would recall a manually-sent fire truck
+  on a mission it never governed), (2) the patient+parasite conflict
+  resolution (parasite on a patient-governed mission always claims
+  participation only, never a fake "useful" pick), (3) a new
+  `ParasiteAggressiveness` (active/all/needed) setting wired end-to-end
+  (domain → account config → web form → template). Code-reviewer: APPROVE,
+  1 MEDIUM (missing test for `ALL` mode's filter-bypass interaction — added:
+  `test_parasite_mode_all_preempts_missions_the_main_loop_would_have_filtered`)
+  + 1 LOW (docstring implied immediate patient coverage on a leeched mission;
+  clarified to "from next cycle onward") — both addressed before commit.
+  Confirmed `is_parasite`/`on_it` are provably disjoint (`scope_ok = ... and
+  not on_it` gates every `is_parasite` branch), so the fix never touches the
+  top-up path's existing patient-aware behavior.
+- Expandability (1-5): 4 — `ParasiteAggressiveness` follows the exact same
+  enum + `_scope`-style-helper + `try/except ValueError` pattern already
+  established for `ModeScope`/`DispatchOrder`/`MissionSource`, so a future
+  4th aggressiveness level (or an analogous setting for top-up) has a clear
+  template. `_PATIENT_GOVERNED_CLASSES` as a class-level tuple keeps the
+  governed-class list in one place, next to the method that uses it.
+- Maintainability (1-5): 4 — deliberate care taken to avoid a real naming
+  collision: `AccountConfig.parasite_aggressiveness` (new) is named
+  DISTINCTLY from the pre-existing legacy migration key `parasite_mode`
+  (an old boolean field, unrelated), with a dedicated regression test
+  (`test_legacy_parasite_mode_boolean_does_not_collide_with_aggressiveness`)
+  proving no collision through the `to_dict()`/`from_dict()` round-trip.
+- Verdict: keep-as-is
+- Rationale: each of the three changes is narrowly scoped to what Sasha
+  asked for, tested at the layer where it's actually exercisable, and the
+  one real correctness risk found in review (ALL mode's filter-bypass, a
+  known/intentional design consequence but previously untested) was closed
+  with a regression test before commit.
+
 ## app/domain/requirements.py — reviewed 2026-08-31, TODO P1 (item 7, docstring only)
 - Stability (1-5): 5 — code unchanged (only the module docstring was
   rewritten to describe the engine's new tertiary role); its own 5-ish unit
