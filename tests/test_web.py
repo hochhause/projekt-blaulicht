@@ -139,6 +139,24 @@ class WebPanelTests(unittest.TestCase):
         self.assertIn("Brand", r.text)
         self.assertIn("4", r.text)  # dispatched total
 
+    def test_dashboard_shows_live_mission_status_breakdown(self):
+        self._login()
+        self.client.post("/accounts", data={"label": "n", "email": "u@e.com", "password": "p"})
+        aid = self.store.list_accounts()[0].id
+        self.store.set_mission_status(aid, {"red": 12, "yellow": 3, "green": 1})
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("12 red", r.text)
+        self.assertIn("3 yellow", r.text)
+        self.assertIn("1 green", r.text)
+
+    def test_dashboard_omits_status_breakdown_when_unset(self):
+        self._login()
+        self.client.post("/accounts", data={"label": "n", "email": "u@e.com", "password": "p"})
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn(" red</span>", r.text)
+
     def test_classify_log_colors(self):
         from app.web.app import classify_log
         self.assertEqual(classify_log("FAILED LF (#1) → #2"), "log-err")

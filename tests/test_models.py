@@ -82,6 +82,19 @@ class MissionParsingTests(unittest.TestCase):
         self.assertEqual(m.patient_missing, ("Wir benötigen: NEF",))
         self.assertIn("ELW 1", m.missing_text)
 
+    def test_icon_status_red_yellow_green_unknown(self):
+        from app.game.models import Mission
+
+        def status_for(icon):
+            m = Mission.from_json({"id": 1, "mtid": 1, "latitude": 47, "longitude": 7, "icon": icon})
+            return m.status
+
+        self.assertEqual(status_for("feuer_rot"), "red")
+        self.assertEqual(status_for("rd_gelb"), "yellow")
+        self.assertEqual(status_for("polizei_gruen"), "green")
+        self.assertEqual(status_for(""), "unknown")
+        self.assertEqual(status_for("something_else"), "unknown")
+
 
 @unittest.skipUnless(HAVE_HTTPX, "httpx not installed")
 class AsListTests(unittest.TestCase):

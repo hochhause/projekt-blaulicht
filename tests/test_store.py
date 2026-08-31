@@ -113,6 +113,30 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(len(self.store.shortfalls(a1)), 1)
         self.assertEqual(self.store.shortfalls(a2), [])
 
+    def test_mission_status_is_a_snapshot_not_cumulative(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.store.set_mission_status(aid, {"red": 5, "yellow": 2})
+        self.assertEqual(self.store.mission_status(aid), {"red": 5, "yellow": 2})
+        # A second cycle's snapshot REPLACES the first, unlike shortfalls.
+        self.store.set_mission_status(aid, {"red": 1, "green": 3})
+        self.assertEqual(self.store.mission_status(aid), {"red": 1, "green": 3})
+
+    def test_mission_status_zero_counts_dropped(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.store.set_mission_status(aid, {"red": 2, "yellow": 0})
+        self.assertEqual(self.store.mission_status(aid), {"red": 2})
+
+    def test_mission_status_scoped_per_account(self):
+        a1 = self.store.add_account("a", "a@e.com")
+        a2 = self.store.add_account("b", "b@e.com")
+        self.store.set_mission_status(a1, {"red": 4})
+        self.assertEqual(self.store.mission_status(a1), {"red": 4})
+        self.assertEqual(self.store.mission_status(a2), {})
+
+    def test_mission_status_empty_when_unset(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.assertEqual(self.store.mission_status(aid), {})
+
 
 if __name__ == "__main__":
     unittest.main()

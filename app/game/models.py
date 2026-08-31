@@ -66,6 +66,10 @@ class Mission:
     # requested once the patient is on scene (from patients_prisoners.patients[]).
     patient_missing: tuple[str, ...] = ()
     vehicle_state: int = 0         # 0 = no responders yet, >=1 = someone is on it
+    # Raw icon string, e.g. "feuer_rot" — suffix is the status (see `status`
+    # below). docs/live-data-model.md: _rot=missing, _gelb=en route, _gruen=done
+    # (leaves the feed shortly after). Empty when the feed doesn't carry one.
+    icon: str = ""
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> "Mission":
@@ -93,6 +97,7 @@ class Mission:
             missing_text=str(_first(d, "missing_text", default="") or ""),
             patient_missing=patient_missing,
             vehicle_state=_as_int(_first(d, "vehicle_state")) or 0,
+            icon=str(_first(d, "icon", default="") or ""),
         )
 
     @property
@@ -105,6 +110,19 @@ class Mission:
     def is_alliance(self) -> bool:
         """True if this is an alliance-shared (Verbands-) mission."""
         return self.alliance_shared_at is not None
+
+    @property
+    def status(self) -> str:
+        """The icon-suffix status: "red" (missing something / untouched),
+        "yellow" (something on the way), "green" (fully crewed, about to leave
+        the feed), or "unknown" if the feed carried no icon at all."""
+        if self.icon.endswith("_rot"):
+            return "red"
+        if self.icon.endswith("_gelb"):
+            return "yellow"
+        if self.icon.endswith("_gruen"):
+            return "green"
+        return "unknown"
 
 
 @dataclass(frozen=True)

@@ -309,7 +309,8 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
 
         def on_cycle(aid: int, report) -> None:
             # Persist per-cycle analytics for the dashboard: which classes we
-            # couldn't field, and estimated credits earned.
+            # couldn't field, estimated credits earned, and the live mission
+            # status breakdown (a snapshot — see set_mission_status).
             plan = getattr(report, "plan", None)
             shortfalls = getattr(plan, "shortfalls", None) if plan is not None else None
             if shortfalls:
@@ -317,6 +318,9 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
             credits = int(getattr(report, "credits_est", 0) or 0)
             if credits:
                 store.add_stat(aid, 0, 0, credits=credits)
+            status_counts = getattr(report, "mission_status_counts", None)
+            if status_counts is not None:
+                store.set_mission_status(aid, status_counts)
 
         return AccountWorker(account_id, runner, timing, on_state=on_state, on_cycle=on_cycle)
 

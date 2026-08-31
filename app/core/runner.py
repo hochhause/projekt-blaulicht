@@ -72,6 +72,11 @@ class CycleReport:
     # Estimated credits from the missions we fully crewed this cycle (mission
     # average_credits summed). An estimate — no extra API call — labelled as such.
     credits_est: int = 0
+    # Live "red/yellow/green/unknown" breakdown of THIS cycle's open missions
+    # (Mission.status, from the confirmed `icon` field) — a snapshot, not a
+    # cumulative tally like shortfalls. Empty in transport-only mode (no
+    # mission poll that cycle).
+    mission_status_counts: dict[str, int] = field(default_factory=dict)
 
     def summary(self) -> str:
         return (
@@ -234,6 +239,8 @@ class DispatchRunner:
         idle = sum(1 for v in vehicles if getattr(v, "is_available", False))
         self._log(f"polled {len(missions)} mission(s), {idle} idle vehicle(s)")
 
+        status_counts = dict(Counter(getattr(m, "status", "unknown") for m in missions))
+
         # Subtract vehicles already en route so missions are topped up, not
         # re-dispatched (avoids piling vehicles onto an already-covered mission).
         now = time.time()
@@ -243,7 +250,7 @@ class DispatchRunner:
             assigned=assigned, text_engine=self._text_engine, now=now,
             strikes=self._strikes,
         )
-        report = CycleReport(plan=plan)
+        report = CycleReport(plan=plan, mission_status_counts=status_counts)
 
         # Show why missions were (or weren't) actionable — the key diagnostic.
         reasons = Counter(_summary_key(reason) for _mid, reason in plan.skipped)

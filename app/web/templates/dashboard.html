@@ -70,7 +70,16 @@
       <td class="muted">{{ r.account.server }}</td>
       <td><span class="pill {{ r.status }}">{{ r.status }}</span>
           {% if r.last_error %}<div class="err" style="font-size:11px">{{ r.last_error }}</div>{% endif %}</td>
-      <td>{{ r.totals.missions }}</td>
+      <td>{{ r.totals.missions }}
+          {% if r.mission_status %}
+          <div class="muted" style="font-size:11px;white-space:nowrap;font-family:var(--mono)"
+               title="live open-mission status this cycle">
+            {%- if r.mission_status.red %}<span style="color:var(--crit)">{{ r.mission_status.red }} red</span>{% endif -%}
+            {%- if r.mission_status.yellow %}{% if r.mission_status.red %} · {% endif %}<span style="color:var(--amber)">{{ r.mission_status.yellow }} yellow</span>{% endif -%}
+            {%- if r.mission_status.green %}{% if r.mission_status.red or r.mission_status.yellow %} · {% endif %}<span style="color:var(--ok)">{{ r.mission_status.green }} green</span>{% endif -%}
+          </div>
+          {% endif %}
+      </td>
       <td>{{ r.totals.dispatched }}</td>
       <td class="muted" style="font-size:12px">{{ r.last_cycle or "—" }}</td>
       <td class="actions">

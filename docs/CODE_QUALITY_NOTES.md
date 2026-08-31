@@ -136,6 +136,34 @@ of each module's history if it's revisited.
   should get a decision (wire it in vs. remove it) rather than sit
   indefinitely — logged for a future session, not blocking this one.
 
+## app/game/models.py, app/core/runner.py, app/store/db.py, app/core/orchestrator.py, app/web/app.py + dashboard.html — reviewed 2026-08-31, TODO P4 (surface live icon status)
+- Stability (1-5): 5 — `Mission.status`'s icon-suffix matching is exactly the
+  three documented suffixes (docs/live-data-model.md), no ambiguity; the
+  SQLite snapshot table (`mission_status`) reuses the same lock-guarded
+  delete-then-insert pattern already established elsewhere in `Store`, so no
+  new concurrency surface. Code-reviewer pass: APPROVE, 0 findings at any
+  severity. One noted (non-issue) behavior: transport-only accounts clear
+  their mission_status snapshot every cycle (no mission poll happens in that
+  mode) — correct, since there's genuinely no live data to show.
+- Expandability (1-5): 4 — the snapshot pattern (distinct from `shortfall`'s
+  cumulative one) is now a second precedent in `Store`; a future per-cycle
+  snapshot stat can follow either depending on whether it should accumulate
+  or reflect only the current cycle.
+- Maintainability (1-5): 4 — small, additive changes across 6 files, each
+  following an existing convention in that file (dataclass field + property
+  in models.py, Counter tally in runner.py, table+methods pair in db.py,
+  one more line in the on_cycle closure, one more dict key in app.py, one
+  more conditional block in the template). The `on_cycle` closure itself
+  remains untested (a PRE-EXISTING gap — confirmed via grep that no test
+  references it at all; this change's one new line there is not a new
+  regression in coverage rigor) — worth a follow-up ticket to test that
+  whole closure, not blocking.
+- Verdict: keep-as-is
+- Rationale: mechanically simple, each piece tested at the layer where it's
+  actually exercisable (model, runner, store, web route+template); the one
+  genuinely untestable-without-more-scaffolding piece (`on_cycle`) already
+  had zero coverage before this change touched it.
+
 ## app/domain/requirements.py — reviewed 2026-08-31, TODO P1 (item 7, docstring only)
 - Stability (1-5): 5 — code unchanged (only the module docstring was
   rewritten to describe the engine's new tertiary role); its own 5-ish unit

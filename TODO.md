@@ -103,8 +103,13 @@ See `docs/MODES-TODO.md` (full inventory + compatibility matrix).
 ## P4 — smaller features / ideas not yet explored
 - [ ] Timed missions: already dispatched like normal (same feed, carry `tv`). Optional **expiry-aware
       priority** (sort by remaining time before the timer runs out) — confirm the timer field first.
-- [ ] Surface live `icon` status on the Mission model + dashboard.
-- [ ] `additive_overlays` (mtid variants "6/a"): variants ADD requirements to the base — CONFIRMED.
+- [x] Surface live `icon` status on the Mission model + dashboard. `Mission.icon` + `.status`
+      property (`app/game/models.py`); `DispatchRunner.run_cycle` tallies a per-cycle snapshot
+      (`CycleReport.mission_status_counts`); persisted via a new `mission_status` table
+      (`app/store/db.py`, overwrite-per-cycle, not cumulative like `shortfall`); shown on the
+      dashboard's Missions cell as "N red · M yellow · K green". Group mode not covered (separate
+      from P3.2's combined group stats).
+- [x] `additive_overlays` (mtid variants "6/a"): variants ADD requirements to the base — CONFIRMED.
       The live `missing_text` already reflects the full base+overlay requirement, so the
       missing_text-based resolver (P1) handles overlays automatically. Only the catalogue FALLBACK
       path (base mtid only, when missing_text is empty) under-derives overlay missions — minor.
@@ -123,7 +128,7 @@ See `docs/MODES-TODO.md` (full inventory + compatibility matrix).
       (route_transport/TransportKind/specialty+tax routing) is built and tested but NOT wired into
       the live runner — `_handle_transports` uses the simpler "take the game's first offered target"
       approach instead. That's a pre-existing gap, not something this TODO item asked to fix.
-- [ ] FMS-5 immediacy: DECIDED to keep as-is (poll each cycle). Event-driven would need the game's
+- [x] FMS-5 immediacy: DECIDED to keep as-is (poll each cycle). Event-driven would need the game's
       client-side `radioMessage` JS (browser only) — not worth a headless browser.
 
 ---

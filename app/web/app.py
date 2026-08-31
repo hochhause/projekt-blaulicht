@@ -106,6 +106,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
                     "color": color_by_id[account.id],
                     "status": live.get(account.id, state.get("status", "stopped")),
                     "totals": store.totals(account.id),
+                    "mission_status": store.mission_status(account.id),
                     "last_cycle": state.get("last_cycle"),
                     "last_error": state.get("last_error"),
                 }

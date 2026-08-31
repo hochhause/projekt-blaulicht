@@ -56,6 +56,15 @@ CREATE TABLE IF NOT EXISTS app_setting (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+-- Live red/yellow/green/unknown breakdown of the CURRENT mission feed, per
+-- account — a snapshot overwritten every cycle (unlike shortfall, which is
+-- cumulative). Backs the dashboard's live mission-status display.
+CREATE TABLE IF NOT EXISTS mission_status (
+    account_id INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    status     TEXT NOT NULL,
+    count      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (account_id, status)
+);
 """
 
 
@@ -238,6 +247,29 @@ class Store:
         """Wipe the shortfall tally — called on account (re)start so the
         'struggling to field' list reflects the current run, like strikes."""
         self._write("DELETE FROM shortfall WHERE account_id = ?", (account_id,))
+
+    # -- live mission-status snapshot ---------------------------------------
+    def set_mission_status(self, account_id: int, counts) -> None:
+        """Overwrite the live status snapshot for an account — the CURRENT
+        cycle's breakdown, not a cumulative tally (see `shortfall` for that
+        pattern). *counts* maps status ("red"/"yellow"/"green"/"unknown") →
+        count; zero/falsy entries are dropped rather than stored as zero rows."""
+        with self._lock:
+            self._conn.execute("DELETE FROM mission_status WHERE account_id = ?", (account_id,))
+            for status, n in dict(counts).items():
+                if not n:
+                    continue
+                self._conn.execute(
+                    "INSERT INTO mission_status (account_id, status, count) VALUES (?, ?, ?)",
+                    (account_id, str(status), int(n)),
+                )
+            self._conn.commit()
+
+    def mission_status(self, account_id: int) -> dict[str, int]:
+        rows = self._all(
+            "SELECT status, count FROM mission_status WHERE account_id = ?", (account_id,)
+        )
+        return {r["status"]: r["count"] for r in rows}
 
     # -- app settings ------------------------------------------------------
     def set_setting(self, key: str, value: str) -> None:

@@ -63,8 +63,9 @@ class FakeClient:
         return True
 
 
-def m(mid, mtype, pos=NEAR):
-    return SimpleNamespace(id=mid, caption=f"M{mid}", mission_type_id=mtype, position=pos)
+def m(mid, mtype, pos=NEAR, status="unknown"):
+    return SimpleNamespace(id=mid, caption=f"M{mid}", mission_type_id=mtype, position=pos,
+                            status=status)
 
 
 def v(vid, type_id):
@@ -98,6 +99,17 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(client.dispatched, [(1, 100)])
         self.assertEqual(report.dispatched, 1)
         self.assertEqual(report.failed, 0)
+
+    def test_cycle_reports_mission_status_breakdown(self):
+        # TODO.md P4: surface live icon status. A snapshot of THIS cycle's
+        # missions by Mission.status, for the dashboard.
+        missions = [
+            m(1, 1, status="red"), m(2, 1, status="red"),
+            m(3, 1, status="yellow"), m(4, 1, status="green"),
+        ]
+        client = FakeClient(missions, [v(100, 0)], [b()])
+        report = asyncio.run(self._runner(client).run_cycle())
+        self.assertEqual(report.mission_status_counts, {"red": 2, "yellow": 1, "green": 1})
 
     def test_cycle_with_nothing_to_do(self):
         client = FakeClient([], [v(100, 0)], [b()])
