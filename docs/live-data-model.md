@@ -69,6 +69,38 @@ Our catalogue only stores the base mtid, so catalogue-only derivation under-coun
 — but the live `missing_text` already reflects the FULL (base + overlay) requirement, so the
 `missing_text`-based resolver handles overlays automatically. Only the catalogue fallback misses them.
 
+### Timed missions — `tv`, `sw`, `sw_start_in`, `sw_start_date`, `date_end`
+Live-verified 2026-08-31, confirmed by Sasha. A timed mission mimics a **scheduled event** (a parade,
+a planned protest) the dispatcher would know about and staff for in advance: **by the time the timer
+runs out, all requested vehicles must already be on scene.**
+
+- `tv` is a nonzero marker that a timing mechanic applies to this mission — NOT itself a countdown or
+  remaining-time value. Two real timed missions both read `tv: 60` despite having completely
+  different countdown targets (see below); treat it as a boolean-ish flag, not a duration.
+- **Two different countdown shapes observed, both confirmed against the mission page's own
+  `CountdownTimer(...)` JS call (same millisecond timestamp as the feed field):**
+  - `sw: true` + `sw_start_in` (seconds) + `sw_start_date` (ms epoch) — the mission page's own DOM
+    element is literally named `countdown_start_in<id>`. Per Sasha's clarification, despite the name
+    this is the "must be fully staffed by" **deadline** for a scheduled event, not a "starts later"
+    delay — read `sw_start_in` as "seconds remaining to get everyone there."
+  - `date_end` (epoch seconds, no `sw` flag) — a plain `CountdownTimer` targeting `date_end`; a
+    different mission (observed as a non-`sw` "Bus in Wasser" instance) used this shape instead.
+    Whether this is the SAME "must be staffed by" deadline semantic or a different one (e.g. an
+    actual expiry/failure) is not yet confirmed — only the `sw`-flagged shape has been confirmed by
+    Sasha's dispatcher-domain explanation above.
+- **`missing_text` is revealed from creation for timed missions** — even with `vehicle_state=0` and
+  no participation, confirmed live (a fresh `sw` mission already carried
+  `{"vehicles":"4 MEK-Fahrzeuge",...}`). This differs from normal missions, where `missing_text` is
+  only revealed once ≥1 unit is on scene. Good news: `MissionRequirementResolver.resolve_mission`
+  already handles this correctly by construction — it never gates on `vehicle_state`, only on
+  whether `missing_text` itself parses as revealed (see `tests/test_resolver.py::
+  test_resolve_mission_timed_mission_reveals_missing_text_before_participation`).
+- **Decision (Sasha, 2026-08-31): no expiry-aware priority sorting.** Treat timed missions
+  functionally identical to normal ones — dispatch as soon as they're seen, same as any other
+  mission. Waiting until close to the deadline is explicitly NOT wanted. This resolves TODO.md P4's
+  "optional expiry-aware priority" item as **decided against** — current behavior (no special-casing
+  in `plan_dispatches`) is already correct, no code change needed.
+
 ---
 
 ## Opening a mission detail (`/missions/{id}`)

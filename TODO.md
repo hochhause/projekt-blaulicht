@@ -110,9 +110,13 @@ See `docs/MODES-TODO.md` (full inventory + compatibility matrix).
 ---
 
 ## P4 — smaller features / ideas not yet explored
-- [ ] Timed missions: already dispatched like normal (same feed, carry `tv`). Optional **expiry-aware
-      priority** (sort by remaining time before the timer runs out) — confirm the timer field first.
-      BLOCKED — see WORKFLOW.md §2 (no doc confirms `tv`'s semantics; no credentials to probe it).
+- [x] Timed missions: already dispatched like normal (same feed, carry `tv`). DECIDED 2026-08-31
+      (Sasha): no expiry-aware priority — treat identically to normal missions, dispatch as soon as
+      seen (explicitly NOT wait-until-near-deadline). Current behavior (no special-casing in
+      `plan_dispatches`) is already correct. Live-confirmed `tv`/`sw`/`sw_start_in` semantics and a
+      real correctness point (missing_text reveals from creation for timed missions, already handled
+      correctly by `resolve_mission`'s existing not-gated-on-vehicle_state design) — see
+      docs/live-data-model.md's "Timed missions" section.
 - [x] Surface live `icon` status on the Mission model + dashboard. `Mission.icon` + `.status`
       property (`app/game/models.py`); `DispatchRunner.run_cycle` tallies a per-cycle snapshot
       (`CycleReport.mission_status_counts`); persisted via a new `mission_status` table

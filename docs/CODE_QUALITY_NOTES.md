@@ -247,6 +247,19 @@ of each module's history if it's revisited.
   TODO.md) updated in the same pass so the finding isn't siloed in code
   comments alone.
 
+## app/domain/resolver.py — read 2026-08-31, TODO P4 (timed-mission verification, no code change)
+- Stability (1-5): 5 — live-verified that `resolve_mission` already handles
+  timed missions' early missing_text reveal correctly, purely as a side
+  effect of never gating vehicle-demand resolution on `vehicle_state`. No
+  bug found, no code changed — locked in with a regression test
+  (`test_resolve_mission_timed_mission_reveals_missing_text_before_participation`)
+  so a future change that DOES add a vehicle_state gate would be caught.
+- Expandability (1-5): n/a — no code change.
+- Maintainability (1-5): n/a — no code change.
+- Verdict: keep-as-is
+- Rationale: verification-only task (confirming existing correct behavior
+  against real timed-mission data), no production code touched.
+
 ## app/domain/requirements.py — reviewed 2026-08-31, TODO P1 (item 7, docstring only)
 - Stability (1-5): 5 — code unchanged (only the module docstring was
   rewritten to describe the engine's new tertiary role); its own 5-ish unit

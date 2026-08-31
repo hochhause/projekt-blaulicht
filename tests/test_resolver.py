@@ -201,6 +201,21 @@ class ResolverTests(unittest.TestCase):
         self.assertNotIn("firetrucks", by)   # catalogue estimate dropped
         self.assertEqual(by.get("ELW 1"), 1)  # missing_text category instead
 
+    def test_resolve_mission_timed_mission_reveals_missing_text_before_participation(self):
+        # Live-verified 2026-08-31, confirmed by Sasha: TIMED missions (a
+        # scheduled event like a parade/protest, "sw"/"tv" fields on the
+        # feed) reveal missing_text from the very start -- even with
+        # vehicle_state=0 and no participation, unlike normal missions.
+        # resolve_mission must resolve it anyway (it never gates on
+        # vehicle_state, only on whether missing_text itself is revealed).
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=0,
+                            missing_text='{"vehicles":"4 MEK-Fahrzeuge","personnel":"","other":""}')
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertNotIn("firetrucks", by)          # catalogue estimate dropped
+        self.assertEqual(by.get("MEK-Fahrzeuge"), 4)  # missing_text category instead
+
     def test_resolve_mission_missing_text_personnel_group_converted_to_vehicles(self):
         # "personnel" is a HEADCOUNT, not a vehicle count (unlike "vehicles") —
         # 8 missing firefighters needs ceil(8/9) = 1 vehicle (max crew among
