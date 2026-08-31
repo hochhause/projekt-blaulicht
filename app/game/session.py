@@ -58,6 +58,40 @@ def _find_auth_token(html: str) -> str | None:
     return m.group(1) or m.group(2)
 
 
+def _classify_rejected_login(body_lower: str) -> LoginResult:
+    """Classify a sign-in response that's still on ``/users/sign_in``
+    (rejected) — bad credentials, or a 2FA/device/captcha challenge.
+
+    Checks the known bad-credentials phrase FIRST — live-verified
+    2026-08-31: a plain wrong-password/username rejection renders
+    "Ungültige Anmeldedaten." and nothing else, but a bare ``"code"``
+    keyword (since removed) still matched it somewhere on the page,
+    false-positiving as NEEDS_VERIFICATION and masking a simple
+    bad-credentials error.
+
+    Both checks are plain substring matches anywhere in the whole page body,
+    not scoped to an error/alert element — the same class of false-positive
+    this fix closes for "code" could in principle recur (e.g. if a real
+    verification page's client-side JS happened to embed the bad-credentials
+    phrase, or if a verification challenge ever renders as JUST "enter your
+    code" with none of the other keywords, it would currently fall through
+    to BAD_CREDENTIALS below). Neither is fixable without a real captured
+    verification-challenge page to test against (none exists yet) — tighten
+    this once one is captured rather than guessing the shape now.
+    """
+    if "ungültige anmeldedaten" in body_lower:
+        return LoginResult(LoginStatus.BAD_CREDENTIALS, "sign-in was rejected")
+    if any(
+        kw in body_lower
+        for kw in ("bestätigung", "verification", "captcha", "zwei-faktor")
+    ):
+        return LoginResult(
+            LoginStatus.NEEDS_VERIFICATION,
+            "server asked for verification (2FA / device / captcha)",
+        )
+    return LoginResult(LoginStatus.BAD_CREDENTIALS, "sign-in was rejected")
+
+
 class GameSession:
     """One authenticated session against ``base_url`` for a single account."""
 
@@ -124,15 +158,7 @@ class GameSession:
             self._csrf_token = self._extract_csrf(resp.text)
             return LoginResult(LoginStatus.OK)
 
-        if any(
-            kw in body
-            for kw in ("bestätigung", "verification", "captcha", "code", "zwei-faktor")
-        ):
-            return LoginResult(
-                LoginStatus.NEEDS_VERIFICATION,
-                "server asked for verification (2FA / device / captcha)",
-            )
-        return LoginResult(LoginStatus.BAD_CREDENTIALS, "sign-in was rejected")
+        return _classify_rejected_login(body)
 
     # -- requests ----------------------------------------------------------
     async def get_json(self, path: str) -> object:

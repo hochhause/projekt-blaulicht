@@ -182,6 +182,35 @@ of each module's history if it's revisited.
   fragility for this size of change, especially given the running-implies-
   non-empty-totals invariant is verified statically.
 
+## app/game/session.py — reviewed 2026-08-31, live-testing bug fix (not a TODO.md item — found while probing for P0/P1/P4)
+- Stability (1-5): 3 — the login-rejection classifier had a REAL live bug
+  (bare `"code"` keyword false-positived a genuine "Ungültige Anmeldedaten."
+  rejection as NEEDS_VERIFICATION), found via an actual failed login attempt
+  with throwaway-account credentials this session. Fixed by extracting
+  `_classify_rejected_login` and checking the specific bad-credentials
+  phrase first. Both code-reviewer (APPROVE, 1 MEDIUM) and security-reviewer
+  (no findings, net improvement) confirmed the fix is correct and that
+  misclassification here is diagnostic-only (the OK/rejected split happens
+  earlier, via URL+cookie state, independent of this function) — never an
+  auth-bypass surface. Residual, currently-unverifiable limitation (flagged
+  by both reviewers, documented in the function's docstring rather than
+  guess-fixed): the same substring-match-anywhere pattern could in principle
+  still misfire on an unseen real verification-challenge page; no such page
+  has ever been captured to test against.
+- Expandability (1-5): 3 — `GameSession` has no dependency-injection seam for
+  `httpx.AsyncClient`'s transport, so `login()`'s full HTTP flow (only the
+  extracted pure classification helper) remains untestable without a live
+  account. Pre-existing gap (README already flags this), not introduced or
+  worsened here — a future session could add a `transport` param for proper
+  unit testing of the whole flow.
+- Maintainability (1-5): 4 — the extraction improved this specifically: the
+  classification logic is now a small, pure, directly-testable function
+  instead of buried inline in an async method.
+- Verdict: keep-as-is
+- Rationale: a targeted, live-verified bug fix with proportionate test
+  coverage; the module's larger untested-httpx-flow gap is real but
+  out of scope for this fix (same conclusion both reviewers reached).
+
 ## app/domain/requirements.py — reviewed 2026-08-31, TODO P1 (item 7, docstring only)
 - Stability (1-5): 5 — code unchanged (only the module docstring was
   rewritten to describe the engine's new tertiary role); its own 5-ish unit
