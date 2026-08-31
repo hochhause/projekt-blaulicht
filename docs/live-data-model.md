@@ -103,6 +103,20 @@ type 25 `4000 / 4000`).
 not a flat numeric and wasn't extracted. The fill mechanic (how much satisfies the bar) still to
 confirm.
 
+**Live check 2026-08-31 (throwaway account, real alliance, 26 own missions):** `water_damage_pump_value`
+is **NOT** a general fire-mission field — every actual fire mission observed (Reihenhaus in Flammen,
+Wohnhausbrand, Bürobrand, Brennende Telefonzelle, …) reads `0`. The **only** mission with a nonzero
+value was **"Parkdeck voll Wasser gelaufen"** (a flooded-parking-deck / water-damage mission, not a
+fire), at `40000`. This points to `water_damage_pump_value` being specific to water-damage/flooding
+cleanup missions (Schmutzwasserpumpe territory — see the LSSM category of the same name in
+`data/reference/lssm-missing-requirements.json`), not the general "Feuerlöschpumpe" fire-pump need the
+original `other` write-up assumed. Fire-pump need is likely conveyed entirely through vehicle CLASS
+(an LF/GW-L2/SW satisfying a category), not this capacity field. Still unconfirmed: the exact
+satisfy-threshold mechanic for `water_damage_pump_value` itself (all observed missions were untouched,
+so no before/after delta was visible), and whether `pumping_mission_value`/`live_current_value` (both
+`100` on every untouched mission observed) decrease as pump vehicles work the mission. Needs a
+water-damage mission actually being worked to confirm the mechanic — the "other" TODO item stays open.
+
 ---
 
 ## Bottom line for the rework

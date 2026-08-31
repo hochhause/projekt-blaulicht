@@ -7,17 +7,18 @@ Ordered by priority. Nothing here is built unless noted.
 
 ## P0 — blockers (things that are wrong or unverified and gate other work)
 
-### 0.1 `share_mission` endpoint — FIXED (real route captured), confirm it shares
-- Now `GET /missions/{id}/alliance?ifs=fi&ift=kt_al_ae&sd=a&sk=cr` (the real
-  `mission_alliance_share_btn` href). Still worth a glance that a shared mission actually becomes
-  alliance-visible on first live run. (dispatch_many/HTTP-200 success detection: DROPPED — not worth
-  the extra requests, per decision.)
+### 0.1 `share_mission` endpoint — CONFIRMED working live. ✅
+- `GET /missions/{id}/alliance?ifs=fi&ift=kt_al_ae&sd=a&sk=cr`. Live-confirmed 2026-08-31 (throwaway
+  account HyperCoderio, real alliance "Leitstelle Sommerblüte"): shared mission #4387674698 — before
+  `is_alliance=False, alliance_shared_at=None`; after `is_alliance=True, alliance_shared_at=<ts>`.
+  (dispatch_many/HTTP-200 success detection: DROPPED — not worth the extra requests, per decision.)
 
 ### 0.2 Bulk multi-vehicle POST — CONFIRMED working live. ✅
 
-### 0.3 DGL (FuStW-DGL) confirmation
-- Likely fixed by the requirement-resolver rework (P1.1). Still run `probe_vehicle.py 81048893`
-  (PowerShell `$env:...`) to confirm the vehicle is type 103 and mapped.
+### 0.3 DGL (FuStW-DGL) confirmation — CONFIRMED. ✅
+- Live-confirmed 2026-08-31: vehicle 81048893 on the throwaway account is captioned
+  `"FuStW (DGL) #I - Polizei 01"`, `vehicle_type=103` — matches our local mapping
+  (`police_service_group_leader` class, `data/de/vehicles/103.mscv`) exactly.
 
 ---
 
@@ -50,7 +51,11 @@ The live feed is the source of truth; our einsaetze-derivation guesses. Switch t
       last-resort fallback in `app/domain/dispatch.py::_derive_requirements` (only fires when the
       resolver returns nothing at all); the class itself is untouched/still tested.
 - [ ] Handle the `other` group — CAPACITY requirements, not vehicle counts. BLOCKED — see
-      WORKFLOW.md §2 (fill mechanic + tanker/foam capacity data unconfirmed). missing_text carries
+      WORKFLOW.md §2 (fill mechanic + tanker/foam capacity data unconfirmed). Live check 2026-08-31
+      found `water_damage_pump_value` is 0 on every real fire mission and only nonzero (40000) on a
+      water-damage/flooding mission ("Parkdeck voll Wasser gelaufen") — see docs/live-data-model.md's
+      "Live check" note. Re-scope signal: this field may be Schmutzwasserpumpe-specific, not the
+      general Feuerlöschpumpe need this item originally assumed. missing_text carries
       e.g. `"other":"1 Feuerlöschpumpe (z. B. LF)"`; the mission page has progress bars
       (`mission_{water|foam|pump}_holder` with driving/missing/selected values) and the feed has
       `water_damage_pump_value` / `live_current_water_damage_pump_value` / `pumping_mission_value`.
