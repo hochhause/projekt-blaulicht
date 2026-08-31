@@ -2,14 +2,22 @@
 
 Each cycle it:
 
-1. **shares** every member's own missions to the alliance, so all are visible to
-   the whole group;
-2. **reads** the union of missions plus every member's fleet (tagged by owner);
-3. **plans** globally via :func:`app.domain.group.plan_group_dispatches` — one
+1. **reads** each member's own missions (a first pass, just enough to find
+   what's unshared);
+2. **shares** every member's own missions to the alliance FIRST — before
+   planning — so a mission shared this cycle can already be joined by
+   teammates in the SAME cycle instead of only from the next one
+   (docs/MODES-TODO.md §5: supersedes the old end-of-cycle share);
+3. **re-reads** missions now that sharing has happened, so the union and the
+   ``visible_to`` map reflect what just got shared — ``visible_to`` itself is
+   kept as a safety net for the (expected, occasional) case the game hasn't
+   propagated a share instantly, so a plan never assigns an account to a
+   mission it still can't see;
+4. **plans** globally via :func:`app.domain.group.plan_group_dispatches` — one
    combined crew per mission (no over-send) and a participation token for every
    member (so all earn the reward);
-4. **dispatches** each account's own share in one bulk POST; and
-5. runs each member's **transport** phase.
+5. **dispatches** each account's own share in one bulk POST; and
+6. runs each member's **transport** phase.
 
 It's shaped like an :class:`AccountWorker` runner (``run_cycle`` / ``aclose``), so
 the orchestrator supervises it with the same back-off machinery.
@@ -68,6 +76,17 @@ class GroupCoordinator:
             self._buildings[aid] = await member.client.fetch_buildings()
         return self._buildings[aid]
 
+    async def _safe_fetch_missions(self, aid, member) -> list:
+        """fetch_missions(), isolating a transient per-account failure (mirrors
+        the connect() isolation below) instead of aborting the whole cycle —
+        this account just contributes nothing to the union/visible_to for
+        this pass; its vehicles/transport still process normally."""
+        try:
+            return await member.client.fetch_missions()
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[#{aid}] fetch_missions failed: {exc}")
+            return []
+
     async def run_cycle(self):
         # Connect every member (skip ones that fail to connect this cycle).
         live: dict[int, object] = {}
@@ -80,16 +99,32 @@ class GroupCoordinator:
         if not live:
             raise RuntimeError("no group member could connect")
 
-        # Read (no sharing yet — sharing is bounded and runs at the end so a big
-        # backlog of own missions can't make the cycle look dead).
+        # Vehicles/buildings don't change from sharing, so this one read of
+        # them is the one used for planning too.
         vehicles_by_account: dict[int, list] = {}
         buildings_by_account: dict[int, list] = {}
-        missions_by_account: dict[int, list] = {}
-        missions_by_id: dict[int, object] = {}
         for aid, member in live.items():
             vehicles_by_account[aid] = await member.client.fetch_vehicles(member.vehicle_cap)
             buildings_by_account[aid] = await self._buildings_for(aid, member)
-            missions = await member.client.fetch_missions()
+
+        # SHARE FIRST — before planning — so a mission shared this cycle can
+        # already be joined by teammates in the SAME cycle (bounded per
+        # account so a big backlog doesn't stall the loop). A first read of
+        # each member's own missions, just enough to find what's unshared.
+        if self._share_enabled:
+            for aid, member in live.items():
+                first_pass = await self._safe_fetch_missions(aid, member)
+                await self._share_own(aid, member, first_pass)
+
+        # RE-FETCH missions now that sharing has happened, so the union and
+        # visible_to reflect what just got shared. visible_to remains the
+        # SAFETY NET for the mission the game hasn't propagated visibility
+        # for instantly — an account still can't be assigned to one it can't
+        # (yet) see.
+        missions_by_account: dict[int, list] = {}
+        missions_by_id: dict[int, object] = {}
+        for aid, member in live.items():
+            missions = await self._safe_fetch_missions(aid, member)
             missions_by_account[aid] = missions
             for m in missions:
                 missions_by_id.setdefault(m.id, m)  # union / dedup
@@ -142,12 +177,6 @@ class GroupCoordinator:
                 else:
                     self._log(f"[#{aid}] batch failed → #{gmp.mission_id} {gmp.caption!r}")
                 await self._sleep(self._jittered_gap())
-
-        # Share each member's own missions so others can join them next cycle —
-        # bounded per cycle so a backlog trickles instead of stalling the loop.
-        if self._share_enabled:
-            for aid, member in live.items():
-                await self._share_own(aid, member, missions_by_account.get(aid, []))
 
         self._log(
             f"group cycle done: {plan.missions_actioned} mission(s), {dispatched} vehicle(s), "

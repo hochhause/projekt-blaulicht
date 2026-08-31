@@ -84,6 +84,35 @@ of each module's history if it's revisited.
   JSON-blob-parsing logic (DRY) without touching the well-tested dispatch
   policy/coverage machinery.
 
+## app/core/group_coordinator.py — reviewed 2026-08-31, TODO P3.1 (share-before-send)
+- Stability (1-5): 4 — restructured `run_cycle`'s read/share/plan ordering
+  (share now runs before the mission fetch used for planning, with a second
+  fetch after) and removed the old end-of-cycle share call. Covered by a new
+  `tests/test_group_coordinator.py` with fakes (no httpx needed — this module
+  only depends on duck-typed members, not the game layer directly), including
+  the propagation-lag case where the visibility guard must still hold. Not
+  yet run against a live account (this session had no credentials) — the
+  extra `fetch_missions()` round-trip per member per cycle is an accepted,
+  intentional cost per the user's own requested fix. A code-reviewer pass
+  (APPROVE, 1 MEDIUM + 1 LOW) caught that doubling the `fetch_missions()`
+  calls per cycle doubled the surface for an unguarded transient failure to
+  abort the WHOLE cycle (all members' transport/dispatch) instead of just
+  that account's contribution — fixed via `_safe_fetch_missions` (isolates
+  per-account, mirrors the existing `connect()` isolation pattern), with a
+  new regression test (`test_one_member_fetch_missions_failure_does_not_abort_cycle`).
+  Also fixed a stale comment that described a fetch order the code no longer had.
+- Expandability (1-5): 4 — the read/share/re-read/plan/dispatch phases are
+  now each a clearly delimited block in `run_cycle`; adding another
+  pre-plan phase (e.g. a future auto-accept step) has an obvious slot.
+- Maintainability (1-5): 4 — the module docstring's numbered list was
+  updated to match the new phase order; `_share_own` itself (cap/floor
+  logic) was untouched, so its existing behavior and reasoning still apply.
+- Verdict: keep-as-is
+- Rationale: a straightforward reordering with no new abstractions; the
+  fakes-based test suite is the first direct coverage this module has had
+  (previously only exercised indirectly through the pure `app/domain/group.py`
+  tests), which is a net improvement independent of this specific change.
+
 ## app/domain/requirements.py — reviewed 2026-08-31, TODO P1 (item 7, docstring only)
 - Stability (1-5): 5 — code unchanged (only the module docstring was
   rewritten to describe the engine's new tertiary role); its own 5-ish unit
