@@ -71,8 +71,21 @@ def parse_missing_text(raw: str) -> MissingTextGroups:
     Empty/absent (untouched mission) or a malformed blob both yield an empty,
     **unrevealed** :class:`MissingTextGroups` — never raises, so a mission we
     can't parse is just treated as having nothing revealed yet (catalogue
-    fallback applies). A well-formed JSON object is ``revealed=True`` even if
-    every group inside it is empty (see the class docstring).
+    fallback applies). A well-formed JSON object is ``revealed=True`` only if
+    it actually carries at least one of the ``vehicles``/``personnel``/
+    ``other`` KEYS (even if empty — see the class docstring) — NOT merely
+    "parsed as an object".
+
+    Live-verified 2026-08-31: some UNTOUCHED (still red, ``vehicle_state=0``)
+    prisoner-related missions reveal ``{"long_text": "Gefangene sollen
+    abtransportiert werden."}`` — a flavor-text hint with none of the three
+    expected keys at all. Treating that as "revealed, nothing more needed"
+    (the old behavior: any parseable object → revealed) would have wrongly
+    skipped the catalogue estimate for a mission that clearly still needs
+    vehicles. Requiring an actual expected key closes this without breaking
+    the confirmed "revealed but every group empty" case (real missions DO
+    send back e.g. ``{"vehicles":"","personnel":"","other":""}`` once fully
+    crewed — those keys are present, just empty).
     """
     text = (raw or "").strip()
     if not text or text[0] != "{":
@@ -83,11 +96,12 @@ def parse_missing_text(raw: str) -> MissingTextGroups:
         return MissingTextGroups()
     if not isinstance(data, dict):
         return MissingTextGroups()
+    revealed = any(key in data for key in ("vehicles", "personnel", "other"))
     return MissingTextGroups(
         vehicles=str(data.get("vehicles") or ""),
         personnel=str(data.get("personnel") or ""),
         other=str(data.get("other") or ""),
-        revealed=True,
+        revealed=revealed,
     )
 
 

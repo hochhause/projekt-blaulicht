@@ -179,6 +179,17 @@ class ResolverTests(unittest.TestCase):
         by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
         self.assertEqual(by["firetrucks"], 2)  # fixture type 2's catalogue requirement
 
+    def test_resolve_mission_long_text_only_blob_falls_back_to_catalogue(self):
+        # Live-verified 2026-08-31: an untouched mission's missing_text can be
+        # {"long_text": "..."} -- a flavor-text hint with none of
+        # vehicles/personnel/other present. Must NOT be treated as "nothing
+        # more needed"; the catalogue estimate still applies.
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"long_text":"Gefangene sollen abtransportiert werden."}')
+        by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
+        self.assertEqual(by["firetrucks"], 2)  # fixture type 2's catalogue requirement
+
     def test_resolve_mission_prefers_missing_text_over_catalogue(self):
         # Once revealed, missing_text REPLACES the catalogue's class/chance
         # estimate for the vehicle-class demand (docs/live-data-model.md).
@@ -209,15 +220,47 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(by.get("Feuerwehrmann"), 3)
 
     def test_resolve_mission_revealed_and_fully_satisfied_is_not_stale_catalogue(self):
-        # Revealed blob with EMPTY vehicles/personnel means "nothing more
-        # needed" (authoritative) — must NOT fall back to the catalogue's
-        # stale firetrucks:1 estimate for fixture type 2.
+        # Revealed blob with EMPTY vehicles/personnel/other means "nothing
+        # more needed" (authoritative) — must NOT fall back to the
+        # catalogue's stale firetrucks:1 estimate for fixture type 2.
         m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
                             prisoners_count=0, possible_prisoners_count=0,
-                            missing_text='{"vehicles":"","personnel":"","other":"1 Feuerlöschpumpe"}')
+                            missing_text='{"vehicles":"","personnel":"","other":""}')
         res = self.resolver.resolve_mission(m)
         self.assertEqual(res.requirements, [])
         self.assertEqual(res.unmatched, [])
+
+    def test_resolve_mission_other_group_feuerloeschpumpe_resolves_to_loeschfahrzeug(self):
+        # Live-verified 2026-08-31: "Feuerlöschpumpe (z. B. LF)" in the
+        # `other` group is a plain category (same shape as `vehicles`), not a
+        # numeric capacity need — any Löschfahrzeug already satisfies it, so
+        # a mission whose only remaining need is this is fully covered by an
+        # LF/HLF the base fire-vehicle requirement would send anyway.
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"",'
+                                         '"other":"1 Feuerlöschpumpe (z. B. LF)"}')
+        res = self.resolver.resolve_mission(m)
+        self.assertEqual(len(res.requirements), 1)
+        req = res.requirements[0]
+        self.assertEqual(req.count, 1)
+        self.assertIn(0, req.type_ids)   # LF (type 0)
+        self.assertIn(30, req.type_ids)  # HLF (type 30)
+
+    def test_resolve_mission_other_group_schmutzwasserpumpe_is_dedicated_only(self):
+        # The rare, genuinely specialized case (per live confirmation): a
+        # flooding/water-damage mission needs a DEDICATED pump vehicle, not
+        # any Löschfahrzeug.
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"",'
+                                         '"other":"1 Schmutzwasserpumpe"}')
+        res = self.resolver.resolve_mission(m)
+        self.assertEqual(len(res.requirements), 1)
+        req = res.requirements[0]
+        self.assertEqual(req.count, 1)
+        self.assertNotIn(0, req.type_ids)   # plain LF does NOT count
+        self.assertEqual(set(req.type_ids), {101, 102})
 
     def test_resolve_mission_casualty_extras_layered_on_missing_text(self):
         # NEF/ambulances/incident-command are never in missing_text's own

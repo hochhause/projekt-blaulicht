@@ -73,6 +73,17 @@ class ParseMissingTextTests(unittest.TestCase):
         self.assertFalse(groups.has_vehicle_demand)
         self.assertTrue(groups.revealed)
 
+    def test_long_text_only_blob_is_not_revealed(self):
+        # Live-verified 2026-08-31: some UNTOUCHED (still red, vehicle_state=0)
+        # prisoner-related missions carry {"long_text": "..."} with NONE of
+        # vehicles/personnel/other present at all -- a flavor-text hint, not
+        # a vehicle-need reveal. Must NOT be treated as "nothing more needed"
+        # (that would wrongly skip the catalogue estimate for a mission that
+        # clearly still needs vehicles).
+        groups = parse_missing_text('{"long_text":"Gefangene sollen abtransportiert werden."}')
+        self.assertFalse(groups.revealed)
+        self.assertFalse(groups.has_vehicle_demand)
+
 
 class MissingTextResolverTests(unittest.TestCase):
     @classmethod

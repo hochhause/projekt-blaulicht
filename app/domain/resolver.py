@@ -153,6 +153,23 @@ class MissionRequirementResolver:
                 sub = self._missing.resolve(groups.vehicles)
                 reqs.extend(sub.requirements)
                 unmatched.extend(sub.unmatched)
+            if groups.other:
+                # `other` is documented as a CAPACITY dimension (progress
+                # bars), but live-verified 2026-08-31: the entries actually
+                # seen there ("Feuerlöschpumpe (z. B. LF)", "Schmutzwasserpumpe")
+                # are the SAME category-text shape as `vehicles` — already
+                # correctly mapped in the LSSM table (Feuerlöschpumpe -> almost
+                # the whole Löschfahrzeug set; Schmutzwasserpumpe -> only the
+                # two dedicated SW types) — so the same category resolver
+                # handles them with no capacity math needed. The numeric
+                # water_damage_pump_value / live_current_* fields on the feed
+                # entry are a separate, apparently-informational signal for
+                # the mission page's progress bars, not something dispatch
+                # needs to compute independently once the category text names
+                # the right vehicle.
+                sub = self._missing.resolve(groups.other)
+                reqs.extend(sub.requirements)
+                unmatched.extend(sub.unmatched)
             if groups.personnel:
                 sub = self._missing.resolve(groups.personnel)
                 # `personnel` entries are a HEADCOUNT ("12 Feuerwehrleute"),

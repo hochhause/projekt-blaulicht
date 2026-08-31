@@ -33,8 +33,11 @@ The live feed is the source of truth; our einsaetze-derivation guesses. Switch t
 - [x] Parse `missing_text` (JSON blob: `vehicles` + `personnel` + `other`) against it. This is the
       **authoritative remaining need** (category names like "Löschfahrzeug (LF)", "Polizeihubschrauber",
       compound "LF oder RW"). REPLACES the brittle regex engine (which mis-parsed counts + LF).
-      `vehicles`+`personnel` are resolved to vehicle demand in `MissionRequirementResolver.resolve_mission`;
-      `other` is parsed (`MissingTextGroups.other`) but not yet acted on — see the "other" item below.
+      All three groups (`vehicles`+`personnel`+`other`) resolve to vehicle demand in
+      `MissionRequirementResolver.resolve_mission` (`other` added 2026-08-31 — see the "other" item).
+      Also live-verified 2026-08-31: a FOURTH `missing_text` shape exists,
+      `{"long_text": "..."}` (a status ping, e.g. prisoner-ready-for-transport — not a vehicle-need
+      reveal), correctly treated as unrevealed (catalogue fallback applies) — see docs/live-data-model.md.
 - [ ] En-route subtraction: `Noch benötigt = fehlend − Auf Anfahrt`. Our delta subtracts OUR
       en-route (unchanged, already done); for SHARED missions, other players' en-route is only on the
       DETAIL page — open it only for red / not-participating / has-missing_text missions (the
@@ -50,23 +53,18 @@ The live feed is the source of truth; our einsaetze-derivation guesses. Switch t
       no LF captions) once missing_text-based resolution is primary. Retired to a tertiary,
       last-resort fallback in `app/domain/dispatch.py::_derive_requirements` (only fires when the
       resolver returns nothing at all); the class itself is untouched/still tested.
-- [ ] Handle the `other` group — CAPACITY requirements, not vehicle counts. BLOCKED — see
-      WORKFLOW.md §2 (fill mechanic + tanker/foam capacity data unconfirmed). Live check 2026-08-31
-      found `water_damage_pump_value` is 0 on every real fire mission and only nonzero (40000) on a
-      water-damage/flooding mission ("Parkdeck voll Wasser gelaufen") — see docs/live-data-model.md's
-      "Live check" note. Re-scope signal: this field may be Schmutzwasserpumpe-specific, not the
-      general Feuerlöschpumpe need this item originally assumed. missing_text carries
-      e.g. `"other":"1 Feuerlöschpumpe (z. B. LF)"`; the mission page has progress bars
-      (`mission_{water|foam|pump}_holder` with driving/missing/selected values) and the feed has
-      `water_damage_pump_value` / `live_current_water_damage_pump_value` / `pumping_mission_value`.
-      Satisfied by vehicles that supply the capacity (pumps/water tankers; an LF often counts).
-      LSSM reads the bars; we currently ignore it.
-      DATA: water + pump capacity per type IS in the assets — extracted to
-      `data/reference/vehicle-water-pump.json` (22 firetruck types, e.g. LF water 2000/pump 2000).
-      GAPS: (a) dedicated water tankers (GTLF type 11 etc.) have NO capacity in the salvaged .mscv —
-      need another source (LSSM vehicles API / game) for those; (b) foam ("löschmittel") appears in
-      14 .mscv files but not as a flat numeric — needs deeper parsing. Mechanic (how much fills the
-      bar / when satisfied) still to confirm.
+- [x] Handle the `other` group — CAPACITY requirements, not vehicle counts. RESOLVED 2026-08-31,
+      confirmed by Sasha: turns out `other`'s real entries ("Feuerlöschpumpe (z. B. LF)",
+      "Schmutzwasserpumpe") are plain CATEGORY text — the exact same shape as `vehicles` — already
+      correctly mapped in `data/reference/lssm-missing-requirements.json`. "Feuerlöschpumpe" maps to
+      almost the whole Löschfahrzeug set (any LF/HLF satisfies it — a dedicated SW pump is too rare
+      to route separately); "Schmutzwasserpumpe" maps to only the two dedicated SW types (the rare,
+      genuinely specialized flooding case). No capacity math needed — `resolve_mission` now resolves
+      `other` the same way as `vehicles`/`personnel` (`app/domain/resolver.py`). The numeric
+      `water_damage_pump_value`/`live_current_*` fields appear to be a separate, dispatch-irrelevant
+      signal (probably feeding the mission-detail progress bars) — see docs/live-data-model.md.
+      The tanker/foam capacity data gaps no longer block dispatch (category-text path doesn't need
+      per-vehicle liter/foam numbers).
 
 ### When-to-open-detail rule (from live verification, `docs/live-data-model.md`)
 - `icon` suffix = status: `_rot` (missing) / `_gelb` (on the way) / `_gruen` (done, leaves feed).

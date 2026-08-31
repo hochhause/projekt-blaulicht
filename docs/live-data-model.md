@@ -45,8 +45,18 @@ Cross-tab observed `(color, participating, has_missing_text) → count`:
   `"3 Schlauchwagen (GW-L2 Wasser oder SW)"`, `"1 Polizeihubschrauber"`,
   `"3 Funkstreifenwagen oder Polizeimotorräder"`, `"1 Radlader (BRmG R)"`.
 - **`vehicles`** — vehicle categories. **`personnel`** (JSON key `personnel`, HTML label "Fehlendes
-  Personal") — e.g. `"1 Einsatzleiter 2"`, `"8 GW-Wasserrettung"`. **`other`** — CAPACITY, e.g.
-  `"1 Feuerlöschpumpe (z. B. LF)"` (water/foam/pump, see below).
+  Personal") — e.g. `"1 Einsatzleiter 2"`, `"8 GW-Wasserrettung"`. **`other`** — live-verified
+  2026-08-31: also plain CATEGORY text (`"1 Feuerlöschpumpe (z. B. LF)"`, `"1 Schmutzwasserpumpe"`),
+  resolved through the same LSSM category table as `vehicles` — see "Water / foam / pump" below for
+  why this ISN'T a numeric-capacity problem after all.
+- **A fourth shape exists**: `{"long_text": "..."}` — live-verified 2026-08-31 on UNTOUCHED
+  (`vehicle_state=0`, still red) prisoner-related missions, e.g.
+  `{"long_text":"Gefangene sollen abtransportiert werden."}`. Per Sasha: this is just the police
+  equivalent of FMS-5 (an already-on-scene unit is ready to transport a prisoner away) — a status
+  ping, NOT a vehicle-need reveal. None of `vehicles`/`personnel`/`other` are present in this shape.
+  `missingtext.parse_missing_text` treats it as **unrevealed** (requires at least one of those three
+  keys to be present, even if empty) so the catalogue estimate still applies for the mission's base
+  vehicle requirement.
 
 ### `patients_prisoners`
 `{"patients":[{"missing_text":"Wir benötigen: NEF", ...}]}` — the **NEF is revealed per patient**
@@ -111,11 +121,20 @@ fire), at `40000`. This points to `water_damage_pump_value` being specific to wa
 cleanup missions (Schmutzwasserpumpe territory — see the LSSM category of the same name in
 `data/reference/lssm-missing-requirements.json`), not the general "Feuerlöschpumpe" fire-pump need the
 original `other` write-up assumed. Fire-pump need is likely conveyed entirely through vehicle CLASS
-(an LF/GW-L2/SW satisfying a category), not this capacity field. Still unconfirmed: the exact
-satisfy-threshold mechanic for `water_damage_pump_value` itself (all observed missions were untouched,
-so no before/after delta was visible), and whether `pumping_mission_value`/`live_current_value` (both
-`100` on every untouched mission observed) decrease as pump vehicles work the mission. Needs a
-water-damage mission actually being worked to confirm the mechanic — the "other" TODO item stays open.
+(an LF/GW-L2/SW satisfying a category), not this capacity field.
+
+**Resolved (2026-08-31), confirmed by Sasha:** the practical dispatch need here is just the category
+TEXT that shows up in `missing_text.other` (`"Feuerlöschpumpe (z. B. LF)"`, `"Schmutzwasserpumpe"`),
+which our `MissingTextResolver` already resolves correctly — "Feuerlöschpumpe" maps to almost the
+entire Löschfahrzeug set (any LF/HLF already satisfies it: "you might as well link it to any
+Löschfahrzeug... a dedicated SwPu is too rare to expend when an LF/HLF also works"), while
+"Schmutzwasserpumpe" maps to ONLY the two dedicated SW types (the genuinely rare, big/specialized
+flooding case). **No capacity math is needed for dispatch purposes** — `resolve_mission` now resolves
+`other` the same way as `vehicles`/`personnel`. The numeric `water_damage_pump_value` /
+`live_current_*` / `pumping_mission_value` fields appear to be a separate, dispatch-irrelevant signal
+(probably feeding the mission-detail page's progress bars) — their exact satisfy-threshold mechanic
+remains unconfirmed, but nothing currently needs it. The tanker/foam capacity data gaps above are
+likewise no longer blocking (the category-text path doesn't need per-vehicle liter/foam numbers).
 
 ---
 

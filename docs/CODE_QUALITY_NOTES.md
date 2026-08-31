@@ -211,6 +211,42 @@ of each module's history if it's revisited.
   coverage; the module's larger untested-httpx-flow gap is real but
   out of scope for this fix (same conclusion both reviewers reached).
 
+## app/domain/missingtext.py + resolver.py — reviewed 2026-08-31, TODO P1 ("other" group + revealed-semantics fix, live-verified)
+- Stability (1-5): 4 — two real bugs/gaps closed via live testing against a
+  real game account this session, both code-reviewed (APPROVE, 0
+  CRITICAL/HIGH each time): (1) `other` group is now resolved through the
+  same category table as `vehicles`/`personnel` — confirmed correct against
+  real "Feuerlöschpumpe (z. B. LF)" (→ almost the whole Löschfahrzeug set)
+  and "Schmutzwasserpumpe" (→ only the 2 dedicated SW types) examples, with
+  domain confirmation from the project owner that this is the actual
+  practical need (no capacity math required); (2) `revealed` now requires an
+  actual `vehicles`/`personnel`/`other` KEY present, not just "parsed as any
+  JSON object" — closes a real regression risk a 4th `missing_text` shape
+  exposed (`{"long_text": "..."}` on an untouched mission, which would have
+  wrongly skipped the catalogue estimate under the old definition). One
+  MEDIUM noted by review, not fixed (unproven, no concrete trigger found):
+  `other` is treated uniformly as vehicle-count-shaped since `MissingTextResolver`'s
+  table merges `vehiclesByRequirement` (vehicle-shaped) and `staff`
+  (headcount-shaped) into one flat dict — if a future real `other` entry
+  ever resolves against a `staff`-table text, it'd be mis-treated as a
+  vehicle count instead of a headcount. No evidence this happens; tracked
+  here rather than guess-fixed.
+- Expandability (1-5): 4 — the fix is a one-line addition mirroring the
+  existing `vehicles` handling; the `revealed` fix is a precise, minimal
+  change to one boolean expression with no new code paths.
+- Maintainability (1-5): 5 — both fixes are heavily commented with the exact
+  live evidence and reasoning that drove them, so a future session
+  re-investigating "other" or "revealed" semantics has the full trail
+  without needing to re-derive it from scratch.
+- Verdict: keep-as-is
+- Rationale: exactly the kind of fix live-testing is for — both bugs were
+  invisible from static analysis alone (the LSSM table already had the
+  right data; the bug was simply never routing `other` through it) or from
+  reasoning about the documented shape alone (the 4th `missing_text` shape
+  was undocumented until observed live). Docs (docs/live-data-model.md,
+  TODO.md) updated in the same pass so the finding isn't siloed in code
+  comments alone.
+
 ## app/domain/requirements.py — reviewed 2026-08-31, TODO P1 (item 7, docstring only)
 - Stability (1-5): 5 — code unchanged (only the module docstring was
   rewritten to describe the engine's new tertiary role); its own 5-ish unit
