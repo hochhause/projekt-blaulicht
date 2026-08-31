@@ -344,6 +344,21 @@ class RunnerTests(unittest.TestCase):
         asyncio.run(self._runner(client).run_cycle())
         self.assertEqual(client.transports, ["/vehicles/77/patient/90077"])
 
+    def test_transport_phase_sends_prisoner_fms5_vehicles_the_same_way(self):
+        # TODO.md P4: sanity-check prisoner transport works the same as patient
+        # transport. _handle_transports doesn't branch on href content at all —
+        # a `gefangener` (prisoner) target is followed identically to a
+        # `patient` one (app/game/client.py's _APPROACH regex already parses
+        # both symmetrically, per tests/test_client_paging.py).
+        class PrisonerClient(FakeClient):
+            async def transport_targets(self, vehicle_id):
+                return [f"/vehicles/{vehicle_id}/gefangener/500{vehicle_id}"]
+
+        v5 = SimpleNamespace(id=88, type_id=32, is_available=False, position=BUILDING, fms=5)
+        client = PrisonerClient([], [v5], [b()])
+        asyncio.run(self._runner(client).run_cycle())
+        self.assertEqual(client.transports, ["/vehicles/88/gefangener/50088"])
+
     def test_no_transport_when_no_fms5(self):
         client = FakeClient([], [v(100, 0)], [b()])  # v() has no fms attr
         asyncio.run(self._runner(client).run_cycle())

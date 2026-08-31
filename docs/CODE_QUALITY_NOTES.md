@@ -113,6 +113,29 @@ of each module's history if it's revisited.
   (previously only exercised indirectly through the pure `app/domain/group.py`
   tests), which is a net improvement independent of this specific change.
 
+## app/core/runner.py + app/game/client.py — read 2026-08-31, TODO P4 (prisoner transport sanity-check)
+- Stability (1-5): 4 (runner.py transport phase) — `_handle_transports` is
+  simple and kind-agnostic by construction (no patient/prisoner branch to get
+  wrong), backed by existing + one new symmetry test. Unrelated to this task
+  but worth flagging: `app/domain/transport.py`'s richer routing model
+  (hospital specialty, tax ceiling, prefer-own) is built/tested but never
+  called from `runner.py` — `_handle_transports` relies entirely on the
+  game's own pre-filtering instead. Not a bug, just an unused-in-practice
+  module; a future session should decide whether to wire it in (more control,
+  e.g. an alliance-tax ceiling we don't currently enforce) or delete it.
+- Expandability (1-5): 3 — wiring in the richer domain/transport.py routing
+  later would need `_handle_transports` to parse `transport_targets()`'s
+  hrefs into `TransportRequest`s (extracting building id, specialty) instead
+  of blindly taking `targets[0]`; that's a real (if modest) piece of new work,
+  not a config flip.
+- Maintainability (1-5): 4 — both files are small, focused, already
+  well-tested; no changes made here beyond the one new test.
+- Verdict: keep-as-is
+- Rationale: verification-only task; no code changed. Flagging the unwired
+  domain/transport.py module here since it's exactly the kind of thing that
+  should get a decision (wire it in vs. remove it) rather than sit
+  indefinitely — logged for a future session, not blocking this one.
+
 ## app/domain/requirements.py — reviewed 2026-08-31, TODO P1 (item 7, docstring only)
 - Stability (1-5): 5 — code unchanged (only the module docstring was
   rewritten to describe the engine's new tertiary role); its own 5-ish unit

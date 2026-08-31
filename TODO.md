@@ -113,8 +113,16 @@ See `docs/MODES-TODO.md` (full inventory + compatibility matrix).
       (join opportunity); the key isn't even in the JSON when we're not involved.
 - Estate / building automation — REMOVED (user has their own script; stubs deleted:
   crew/estate/layout/reconcile/training + executor + writes).
-- [ ] Prisoner transport: handled via the transport phase (gefangener hrefs) — sanity-check it works
-      the same as patient transport.
+- [x] Prisoner transport: handled via the transport phase (gefangener hrefs) — sanity-check it works
+      the same as patient transport. CONFIRMED by code reading + tests, no live account needed:
+      `app/core/runner.py::_handle_transports` never branches on href content — it treats whatever
+      `client.transport_targets()` returns identically regardless of patient/gefangener. The regex
+      (`app/game/client.py::_APPROACH`) already parsed both symmetrically
+      (`tests/test_client_paging.py`); added `tests/test_runner.py::test_transport_phase_sends_prisoner_fms5_vehicles_the_same_way`
+      to close the loop at the runner layer too. Note: the more elaborate `app/domain/transport.py`
+      (route_transport/TransportKind/specialty+tax routing) is built and tested but NOT wired into
+      the live runner — `_handle_transports` uses the simpler "take the game's first offered target"
+      approach instead. That's a pre-existing gap, not something this TODO item asked to fix.
 - [ ] FMS-5 immediacy: DECIDED to keep as-is (poll each cycle). Event-driven would need the game's
       client-side `radioMessage` JS (browser only) — not worth a headless browser.
 
