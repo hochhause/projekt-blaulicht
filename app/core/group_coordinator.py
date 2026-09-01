@@ -14,9 +14,14 @@ Each cycle it:
    propagated a share instantly, so a plan never assigns an account to a
    mission it still can't see;
 4. **plans** globally via :func:`app.domain.group.plan_group_dispatches` — one
-   combined crew per mission (no over-send) and a participation token for every
-   member (so all earn the reward);
-5. **dispatches** each account's own share in one bulk POST; and
+   combined crew per mission (no over-send), a participation token for every
+   member (so all earn the reward), and the combined pool excludes any
+   vehicle struck out on ITS OWNER's own :class:`~app.domain.strikes.StrikeTracker`
+   (each member's, same as solo dispatch — a chronically-uncrewed vehicle
+   never gets silently re-selected forever);
+5. **dispatches** each account's own share in one bulk POST, retrying a
+   failed batch one vehicle at a time to isolate and strike the one that
+   actually won't go (mirrors :class:`~app.core.runner.DispatchRunner`); and
 6. runs each member's **transport** phase.
 
 It's shaped like an :class:`AccountWorker` runner (``run_cycle`` / ``aclose``), so
@@ -152,6 +157,7 @@ class GroupCoordinator:
             missions, vehicles_by_account, buildings_by_account, resolver,
             self._policy, now=time.time(), text_engine=self._text_engine(resolver),
             visible_to=visible_to,
+            strikes_by_account={aid: member.strikes for aid, member in live.items()},
         )
 
         # Dispatch MISSION BY MISSION in sort order, so each mission is fully
@@ -174,9 +180,34 @@ class GroupCoordinator:
                     self._log(f"[#{aid}] → #{gmp.mission_id} {gmp.caption!r}: {names}")
                     if self._on_stat is not None:
                         self._on_stat(aid, len(ids), 1)
+                    await self._sleep(self._jittered_gap())
                 else:
-                    self._log(f"[#{aid}] batch failed → #{gmp.mission_id} {gmp.caption!r}")
-                await self._sleep(self._jittered_gap())
+                    # Batch failed — retry one-by-one so we can isolate and
+                    # strike the vehicle that actually won't go (e.g. a
+                    # crewless truck), same as solo dispatch
+                    # (DispatchRunner.run_cycle) — otherwise a chronically bad
+                    # vehicle stays in the combined pool forever, sinking
+                    # every good vehicle bundled with it in the failed batch.
+                    self._log(f"[#{aid}] batch failed → #{gmp.mission_id} {gmp.caption!r} — retrying individually")
+                    strike_now = time.time()
+                    sent = 0
+                    for vehicle_id in ids:
+                        name = _name(veh_by_id.get(vehicle_id), vehicle_id)
+                        if await member.client.dispatch(gmp.mission_id, vehicle_id):
+                            dispatched += 1
+                            sent += 1
+                            self._log(f"[#{aid}] → #{gmp.mission_id} {gmp.caption!r}: {name}")
+                        else:
+                            self._log(f"[#{aid}] FAILED {name} → #{gmp.mission_id} {gmp.caption!r} (no crew?)")
+                            member.strikes.record([str(vehicle_id)], strike_now)
+                            if member.strikes.is_struck(str(vehicle_id), strike_now):
+                                self._log(f"[#{aid}] struck out {name}: failed to dispatch 3× — skipping 24h")
+                        await self._sleep(self._jittered_gap())
+                    # One mission-send counted, like the batch-success path —
+                    # not once per vehicle (that inflated the dashboard's
+                    # "missions" stat on any multi-vehicle partial retry).
+                    if self._on_stat is not None and sent:
+                        self._on_stat(aid, sent, 1)
 
         self._log(
             f"group cycle done: {plan.missions_actioned} mission(s), {dispatched} vehicle(s), "

@@ -127,6 +127,13 @@ class AccountRunner:
     def vehicle_cap(self) -> int:
         return self._vehicle_cap
 
+    @property
+    def strikes(self) -> StrikeTracker:
+        """This account's strike tracker — used by the group coordinator so a
+        chronically-uncrewed vehicle is excluded from the combined pool the
+        same way it would be in solo dispatch."""
+        return self._strikes
+
     async def handle_transports(self, vehicles) -> int:
         """Run the FMS-5 transport phase over an already-fetched fleet."""
         if self._dispatch is None:

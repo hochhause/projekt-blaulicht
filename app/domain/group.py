@@ -110,13 +110,20 @@ def plan_group_dispatches(
     now: float | None = None,
     text_engine=None,
     visible_to: dict[int, set[int]] | None = None,
+    strikes_by_account: dict[int, object] | None = None,
 ) -> GroupPlan:
     """Plan one cycle across all member accounts. Returns per-account sends.
 
     *visible_to* maps mission id -> the accounts whose feed currently contains it.
     An account can only be assigned to dispatch to a mission it can actually see
     (its own + alliance-shared) — otherwise the POST is a silent no-op. ``None``
-    means every member sees every mission (used in tests)."""
+    means every member sees every mission (used in tests).
+
+    *strikes_by_account* maps account id -> that account's
+    :class:`~app.domain.strikes.StrikeTracker` — a vehicle struck out on ITS
+    OWNER's tracker (repeatedly failed to dispatch, e.g. no crew) is excluded
+    from the combined pool, same as solo dispatch. ``None`` (or a missing
+    entry, or *now* unset) skips this filtering entirely."""
     plan = GroupPlan()
     member_ids = list(vehicles_by_account.keys())
     member_set = set(member_ids)
@@ -136,12 +143,21 @@ def plan_group_dispatches(
             if getattr(b, "position", None) and getattr(b, "id", None) is not None:
                 building_pos[b.id] = b.position
 
+    def _usable(v, aid) -> bool:
+        if not getattr(v, "is_available", False):
+            return False
+        if strikes_by_account is not None and now is not None:
+            tracker = strikes_by_account.get(aid)
+            if tracker is not None and tracker.is_struck(str(v.id), now):
+                return False
+        return True
+
     # Combined available pool, tagged by owner for dispatch routing.
     owner_of: dict[int, int] = {}
     pool: list = []
     for aid in member_ids:
         for v in vehicles_by_account.get(aid, []):
-            if getattr(v, "is_available", False):
+            if _usable(v, aid):
                 owner_of[v.id] = aid
                 pool.append(v)
 

@@ -295,6 +295,33 @@ of each module's history if it's revisited.
   known/intentional design consequence but previously untested) was closed
   with a regression test before commit.
 
+## app/domain/group.py, app/core/group_coordinator.py, app/core/account_runner.py — reviewed 2026-08-31, TODO P3 (group-mode logic audit + strike-tracking fix)
+- Stability (1-5): 4 — a full end-to-end audit (no over-send, visibility
+  gating, participation/token-cap, radius_basis, begun-first priority,
+  partial-start ownership) found the existing logic sound; the one real gap
+  (no strike-tracking, unlike solo dispatch — a chronically-uncrewed vehicle
+  would fail every cycle forever, sinking any good vehicle bundled with it
+  in the same batch) is now fixed and mirrors `DispatchRunner.run_cycle`
+  exactly (per-vehicle retry on batch failure, `StrikeTracker`-based
+  exclusion from the combined pool). Code-reviewer: APPROVE, 1 MEDIUM
+  (the retry loop's `on_stat` call was firing once per vehicle instead of
+  once per mission-send, inflating the dashboard's cumulative "missions"
+  stat on any multi-vehicle partial retry) — fixed before commit, with a
+  test (`stat_calls == [(1, 3, 1)]`) that would have caught it.
+- Expandability (1-5): 4 — `_usable(v, aid)` in group.py is a direct mirror
+  of dispatch.py's solo `_usable(v)`, so the two pool-filtering mechanisms
+  stay easy to keep in sync; `AccountRunner.strikes` is now a clean public
+  seam other future group-mode features can read (e.g. a "struggling to
+  field" dashboard view scoped to the group).
+- Maintainability (1-5): 4 — the retry/strike logic is a close structural
+  copy of the already-understood solo-mode pattern, not a novel mechanism to
+  learn; comments cross-reference `DispatchRunner.run_cycle` directly so a
+  future reader can diff the two instead of re-deriving intent.
+- Verdict: keep-as-is
+- Rationale: this was audit-then-fix, not speculative hardening — every
+  change traces to a concretely identified, real failure mode (chronic bad
+  vehicle) rather than defensive code added "just in case."
+
 ## app/domain/requirements.py — reviewed 2026-08-31, TODO P1 (item 7, docstring only)
 - Stability (1-5): 5 — code unchanged (only the module docstring was
   rewritten to describe the engine's new tertiary role); its own 5-ish unit

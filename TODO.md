@@ -118,6 +118,21 @@ See `docs/MODES-TODO.md` (full inventory + compatibility matrix).
       persistence), shown in the group-running banner on the dashboard.
 - [ ] Decide: per-member modes inside a group vs the single group-wide policy (current = group-wide).
       BLOCKED on Sasha — see WORKFLOW.md §2 (P3.3).
+- [x] **Group-mode logic audit (Sasha, 2026-08-31).** Traced `app/domain/group.py` +
+      `app/core/group_coordinator.py` end to end. CONFIRMED CORRECT: no over-send (global delta),
+      visibility gating, participation guarantee (incl. per-account token cap), radius_basis any/all,
+      begun-missions-first priority, partial-start ownership gating, and full reuse of the
+      single-account requirement resolver (group mode automatically got every P1 fix this session —
+      missing_text priority, the "other" group, the long_text bug — for free). ONE real gap found and
+      fixed: group mode had NO strike-tracking or per-vehicle retry-on-failure (unlike solo dispatch) —
+      a chronically-uncrewed vehicle in the combined pool would fail every cycle forever, sinking every
+      good vehicle bundled with it in the same failed batch. Fixed: `AccountRunner.strikes` exposed
+      publicly; `plan_group_dispatches` gained `strikes_by_account` (excludes a vehicle struck out on
+      its OWNER's tracker from the combined pool); `GroupCoordinator`'s dispatch loop now retries a
+      failed batch one vehicle at a time and strikes the one that actually won't go, mirroring
+      `DispatchRunner.run_cycle` exactly. Code review caught and fixed a real bug in the fix itself: the
+      retry loop was calling `on_stat` once per vehicle instead of once per mission-send, inflating the
+      dashboard's "missions" stat on any multi-vehicle partial retry.
 
 ---
 

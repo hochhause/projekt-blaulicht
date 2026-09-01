@@ -217,6 +217,37 @@ class GroupPlannerTests(unittest.TestCase):
         ba = _by_account(plan)
         self.assertEqual(len(ba.get(20, {})), 1)  # capped at one token
 
+    def test_struck_vehicle_excluded_from_combined_pool(self):
+        # A vehicle struck out on ITS OWNER's own tracker (repeated dispatch
+        # failures, e.g. no crew) must be excluded from the combined pool the
+        # same as solo dispatch — fixed 2026-08-31 (group mode previously had
+        # no strike-tracking at all).
+        from app.domain.strikes import StrikeTracker
+
+        strikes_a = StrikeTracker(threshold=1)
+        strikes_a.record(["100"], 1000.0)  # account 10's vehicle #100 struck out
+        strikes_b = StrikeTracker()  # account 20 clean
+        plan = plan_group_dispatches(
+            [mission(1, 1)],
+            {10: [vehicle(100, LF)], 20: [vehicle(200, LF)]},
+            {10: [building(10)], 20: [building(20)]},
+            self.resolver, GroupPolicy(radius_km=40, participation=False),
+            now=1000.0, strikes_by_account={10: strikes_a, 20: strikes_b},
+        )
+        ba = _by_account(plan)
+        self.assertNotIn(10, ba)         # #100 excluded -> A contributes nothing
+        self.assertEqual(ba.get(20, {}).get(1), (200,))  # B's LF still usable
+
+    def test_no_strikes_by_account_does_not_filter_anything(self):
+        # Backward compatible: omitting strikes_by_account (the default) never
+        # excludes a vehicle, matching every pre-existing test in this file.
+        plan = plan_group_dispatches(
+            [mission(1, 1)], {10: [vehicle(100, LF)]}, {10: [building(10)]},
+            self.resolver, GroupPolicy(radius_km=40, participation=False),
+        )
+        ba = _by_account(plan)
+        self.assertEqual(ba.get(10, {}).get(1), (100,))
+
 
 class FakeGroupClient:
     def __init__(self, missions, vehicles, buildings):
@@ -237,6 +268,10 @@ class FakeGroupClient:
         self.dispatched.append((mid, tuple(ids)))
         return True
 
+    async def dispatch(self, mid, vehicle_id):
+        self.dispatched.append((mid, (vehicle_id,)))
+        return True
+
     async def share_mission(self, mid):
         self.shared.append(mid)
         return True
@@ -249,6 +284,8 @@ class FakeMember:
         self.vehicle_cap = vehicle_cap
         self.transport_enabled = transport_enabled
         self.closed = False
+        from app.domain.strikes import StrikeTracker
+        self.strikes = StrikeTracker()
 
     async def connect(self):
         return None

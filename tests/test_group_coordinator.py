@@ -7,6 +7,7 @@ fake client's fetch_missions() can reflect what another account just shared.
 
 import asyncio
 import json
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -87,6 +88,10 @@ class FakeClient:
         self.dispatched.append((mission_id, list(vehicle_ids)))
         return True
 
+    async def dispatch(self, mission_id, vehicle_id) -> bool:
+        self.dispatched.append((mission_id, [vehicle_id]))
+        return True
+
 
 class FakeMember:
     def __init__(self, client, resolver, transport_enabled=False):
@@ -94,6 +99,8 @@ class FakeMember:
         self.resolver = resolver
         self.vehicle_cap = 0
         self.transport_enabled = transport_enabled
+        from app.domain.strikes import StrikeTracker
+        self.strikes = StrikeTracker()
 
     async def connect(self):
         pass
@@ -182,6 +189,61 @@ class GroupCoordinatorShareOrderTests(unittest.TestCase):
                                         share_enabled=False, dispatch_gap=0.0)
         asyncio.run(coordinator.run_cycle())
         self.assertEqual(client_a.shared_ids, set())
+
+
+class GroupCoordinatorStrikeTests(unittest.TestCase):
+    """A batch-dispatch failure in group mode must retry per-vehicle and
+    strike the one that actually won't go, same as solo dispatch — fixed
+    2026-08-31 (group mode previously had no strike-tracking at all, so a
+    chronically-uncrewed vehicle would sink every good vehicle bundled with
+    it in the same failed batch, forever)."""
+
+    @classmethod
+    def setUpClass(cls):
+        library = AssetLibrary.load(VEHICLES_DIR)
+        catalog = MissionCatalog.from_payload(json.loads(FIXTURE.read_text(encoding="utf-8")))
+        cls.resolver = MissionRequirementResolver(catalog, library)
+
+    def test_batch_failure_retries_individually_and_strikes_the_bad_vehicle(self):
+        from app.domain.strikes import StrikeTracker
+
+        board = AllianceBoard(propagate=True)
+        mission = _mission(1)
+        mission.mission_type_id = 2  # firetrucks:2, platform_trucks:1, battalion_chief_vehicles:1
+
+        class FlakyBatchClient(FakeClient):
+            async def dispatch_many(self, mission_id, vehicle_ids):
+                return False  # always fails -> forces the per-vehicle retry
+
+            async def dispatch(self, mission_id, vehicle_id) -> bool:
+                if vehicle_id == 103:  # the "crewless" one
+                    return False
+                self.dispatched.append((mission_id, [vehicle_id]))
+                return True
+
+        client_a = FlakyBatchClient([mission], board, vehicles=[
+            _vehicle(100, type_id=0), _vehicle(101, type_id=0),  # 2x LF (firetrucks)
+            _vehicle(102, type_id=2),                            # a platform truck
+            _vehicle(103, type_id=3),                            # a battalion vehicle -- will fail
+        ])
+        member_a = FakeMember(client_a, self.resolver)
+        member_a.strikes = StrikeTracker(threshold=1)  # one failure = struck, for an unambiguous check
+        stat_calls = []
+        coordinator = GroupCoordinator({1: member_a}, GroupPolicy(radius_km=40),
+                                        on_stat=lambda aid, dispatched, missions: stat_calls.append(
+                                            (aid, dispatched, missions)),
+                                        share_enabled=False, dispatch_gap=0.0)
+        plan = asyncio.run(coordinator.run_cycle())
+
+        sent_ids = {vid for (mid, ids) in client_a.dispatched if mid == 1 for vid in ids}
+        self.assertEqual(sent_ids, {100, 101, 102})  # the 3 good ones went through individually
+        self.assertNotIn(103, sent_ids)              # the bad one never recorded as sent
+        self.assertTrue(member_a.strikes.is_struck("103", time.time()))  # and got struck
+        # on_stat counts ONE mission-send (3 vehicles), not one per retried
+        # vehicle -- a partial-batch retry must not inflate the dashboard's
+        # "missions" stat.
+        self.assertEqual(stat_calls, [(1, 3, 1)])
+        self.assertEqual(plan.missions_actioned, 1)  # the mission plan itself still counts as actioned
 
 
 if __name__ == "__main__":
