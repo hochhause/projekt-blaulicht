@@ -222,12 +222,17 @@ def plan_dispatches(
 
     pool = [v for v in vehicles if _usable(v)]
     # Average firetruck crew size, for SMART order's rough min_fire_personnel
-    # estimate below (real per-type data, not a guessed constant).
+    # estimate below (real per-type data, not a guessed constant). Uses
+    # planning_personnel (HLF halved) for consistency with the actual
+    # dispatch-time crew math below, though at today's fleet composition the
+    # shift is small enough to vanish under the estimate's own int() rounding
+    # -- fine, since this only needs to be a reasonable relative ranking, not
+    # an exact count (see the SMART order comment further down).
     _fire_types = [
         vt for tid, vt in resolver.library.types.items()
         if tid in resolver.library.class_map.by_class.get("firetrucks", ())
     ]
-    avg_fire_crew = (sum(vt.personnel for vt in _fire_types) / len(_fire_types)) if _fire_types else 6.0
+    avg_fire_crew = (sum(vt.planning_personnel for vt in _fire_types) / len(_fire_types)) if _fire_types else 6.0
     # Vehicles carry no coordinates — a vehicle's position is its building's,
     # used to rank same-role candidates nearest-first.
     building_pos = {
@@ -657,7 +662,10 @@ def _note_shortfall(shortfalls, classes) -> None:
 
 
 def _fire_crew(resolver, type_ids) -> int:
-    """Total firefighter crew carried by these vehicle TYPE ids (firetruck class)."""
+    """Total firefighter crew carried by these vehicle TYPE ids (firetruck
+    class) — uses each type's PLANNING crew (halved for HLF; see
+    ``VehicleType.planning_personnel``), not its nominal max, so a personnel
+    floor doesn't look satisfied by crew that's rarely actually aboard."""
     lib = resolver.library
     fire = lib.class_map.by_class.get("firetrucks", ())
     fire = set(fire)
@@ -665,7 +673,7 @@ def _fire_crew(resolver, type_ids) -> int:
     for tid in type_ids:
         if tid in fire:
             vt = lib.types.get(tid)
-            total += vt.personnel if vt is not None else 0
+            total += vt.planning_personnel if vt is not None else 0
     return total
 
 
@@ -680,7 +688,7 @@ def _fire_personnel_topup(chosen_ids, pool, resolver, need, mission_pos, buildin
 
     def crew(tid: int) -> int:
         vt = lib.types.get(tid)
-        return vt.personnel if vt is not None else 0
+        return vt.planning_personnel if vt is not None else 0
 
     by_id = {v.id: v for v in pool}
     have = sum(

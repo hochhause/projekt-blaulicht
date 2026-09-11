@@ -225,16 +225,19 @@ class MissionRequirementResolver:
 
     def _personnel_to_vehicles(self, requirement: Requirement) -> Requirement:
         """Convert a ``missing_text`` personnel-group requirement's raw
-        HEADCOUNT into a vehicle count, using the largest per-vehicle crew
-        size among its eligible types (the fewest-vehicles/best-case
-        estimate — coverage doesn't know in advance which type it'll end up
-        picking, so this avoids the alternative of demanding one vehicle per
-        missing head). Left as-is if none of the eligible types have a known
-        crew size (defensive; shouldn't happen with the committed data)."""
+        HEADCOUNT into a vehicle count, using the largest per-vehicle
+        PLANNING crew size among its eligible types (the fewest-vehicles/
+        best-case estimate — coverage doesn't know in advance which type
+        it'll end up picking, so this avoids the alternative of demanding
+        one vehicle per missing head). Uses ``planning_personnel`` (halved
+        for HLF) rather than nominal capacity, so a real crew shortfall
+        (HLF often staffed well under its 9-person cap) doesn't get masked.
+        Left as-is if none of the eligible types have a known crew size
+        (defensive; shouldn't happen with the committed data)."""
         crews = [
-            vt.personnel
+            vt.planning_personnel
             for tid in requirement.type_ids
-            if (vt := self._library.types.get(tid)) is not None and vt.personnel > 0
+            if (vt := self._library.types.get(tid)) is not None and vt.planning_personnel > 0
         ]
         if not crews:
             return requirement

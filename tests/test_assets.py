@@ -50,6 +50,18 @@ class AssetLoadingTests(unittest.TestCase):
         # LF (type 0) carries 9 crew per the salvaged data.
         self.assertEqual(self.lib.types[0].personnel, 9)
 
+    def test_planning_personnel_halves_only_hlf(self):
+        # Confirmed live 2026-09-11: "usually max is fine but for HLF
+        # because they carry a lot go for only half" -- HLF 20 (30) and
+        # HLF 10 (90) plan at half their nominal 9-crew cap; every other
+        # firetruck type (e.g. plain LF, type 0) keeps its full nominal
+        # capacity for planning purposes.
+        self.assertEqual(self.lib.types[30].personnel, 9)
+        self.assertEqual(self.lib.types[30].planning_personnel, 4)
+        self.assertEqual(self.lib.types[90].personnel, 9)
+        self.assertEqual(self.lib.types[90].planning_personnel, 4)
+        self.assertEqual(self.lib.types[0].planning_personnel, self.lib.types[0].personnel)
+
     def test_trailer_types_flagged(self):
         trailers = {t.id for t in self.lib.types.values() if t.is_trailer}
         # 13 trailer (Anhänger) types confirmed in the DE data.

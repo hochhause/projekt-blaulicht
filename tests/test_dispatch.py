@@ -703,6 +703,30 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(plan.planned, [])
         self.assertEqual(plan.skipped, [(1, "already covered")])
 
+    def test_fire_personnel_hlf_plans_at_half_crew(self):
+        # Live-verified 2026-09-11: HLF is capped at 9 crew but usually
+        # staffed at roughly half that -- a lone HLF (planning_personnel=4)
+        # must NOT look sufficient for a 5-firefighter floor (it would have,
+        # pre-fix, using the nominal 9); a second HLF gets added to actually
+        # cover it.
+        resolver = self._fire_resolver(5)
+        plan = plan_dispatches([mission(1, 900, NEAR)], [vehicle(100, HLF), vehicle(101, HLF)],
+                               [building()], resolver, DispatchPolicy(radius_km=40))
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(set(plan.planned[0].vehicle_ids), {100, 101})
+        self.assertTrue(plan.planned[0].satisfied)
+
+    def test_fire_personnel_plain_lf_still_plans_at_full_crew(self):
+        # Sanity: the halving is specific to HLF -- a plain LF (also 9
+        # nominal) still plans at full capacity and alone covers a
+        # 9-firefighter floor, unlike the HLF case above.
+        resolver = self._fire_resolver(9)
+        plan = plan_dispatches([mission(1, 900, NEAR)], [vehicle(100, LF)],
+                               [building()], resolver, DispatchPolicy(radius_km=40))
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].vehicle_ids, (100,))
+        self.assertTrue(plan.planned[0].satisfied)
+
     # -- cleanup: recall surplus vehicles ------------------------------------
     def _assigned(self, vid, type_id, mid, fms=4):
         return SimpleNamespace(id=vid, type_id=type_id, target_type="mission",

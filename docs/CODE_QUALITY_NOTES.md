@@ -788,3 +788,47 @@ push/merge/rebuild this round.
   (4 direct `_dispatch_verb` unit tests + 2 log-integration tests). 356
   tests pass.
 - Verdict: keep-as-is
+
+## app/domain/assets.py, app/domain/dispatch.py, app/domain/resolver.py — reviewed 2026-09-11, live gap (HLF crew over-assumed)
+- User reported live under-sending on "Kleine Feldbrand" (mission type 14):
+  it requests 9 firefighter personnel, and the bot treated a single HLF
+  (nominally capped at 9 crew) as fully satisfying that need -- but real
+  HLFs are typically staffed at "4-7" crew in practice, not the full 9.
+  Clarified scope: "usually max is fine but for HLF because they carry a
+  lot go for only half" -- ONLY HLF gets discounted, every other firetruck
+  type keeps its full nominal capacity.
+- Investigated: identified HLF 20 (type 30) and HLF 10 (type 90) as the two
+  HLF variants via their `.mscv` pattern text, both nominally capped at 9
+  crew. Added `VehicleType.planning_personnel` (assets.py) -- same as
+  `personnel` for every type except 30/90, which return half (floor,
+  minimum 1). `personnel` itself is UNCHANGED (still the raw nominal
+  capacity, used elsewhere e.g. for display). Switched 4 call sites from
+  `.personnel` to `.planning_personnel`: `_fire_crew`/`_fire_personnel_topup`
+  (dispatch.py, the actual dispatch-time crew math), the SMART order's
+  `avg_fire_crew` estimate (dispatch.py, a ranking approximation), and
+  `_personnel_to_vehicles` (resolver.py, missing_text personnel-headcount
+  conversion).
+- Code review (async): APPROVE, 0 blocking findings. Confirmed via a full
+  185-file sweep of `data/de/vehicles/*.mscv` that no other firetruck-class
+  type has "HLF" in its pattern text (4 other files mention "HLF" in
+  disjunctive text like "Rüstwagen oder HLF" but are heavy_rescue_vehicles,
+  not HLF themselves, uncrewed in the data either way). Confirmed the
+  SMART-order `avg_fire_crew` change is a complete no-op today (shifts
+  ~5.7->~5.3, both truncate to 5 via the estimate's own `int()`) -- not a
+  bug, just currently inert; added a comment explaining why that's fine
+  (only needs relative ranking, not an exact count). Confirmed
+  `_personnel_to_vehicles` is ALSO currently inert -- the real committed
+  "Feuerwehrmann"/"Feuerwehrleute" staff category has 62 eligible type IDs
+  including 6 other non-HLF types at personnel=9, so `max(crews)` still
+  resolves to 9 regardless; not worth a forced synthetic test since no live
+  category is HLF-only. Confirmed the `_fire_personnel_topup` nearest-first
+  tie-break is unaffected (distance is still the primary sort key; the
+  crew-based tie-break only applies at equal distance, and correctly now
+  prefers an equal-distance non-HLF truck over an HLF, which is the
+  intended effect).
+- Stability (1-5): 5 -- 2 new tests (`test_planning_personnel_halves_only_hlf`
+  in test_assets.py; `test_fire_personnel_hlf_plans_at_half_crew` +
+  `test_fire_personnel_plain_lf_still_plans_at_full_crew` in
+  test_dispatch.py, confirming the discount is HLF-specific not a general
+  derating). 359 tests pass.
+- Verdict: keep-as-is

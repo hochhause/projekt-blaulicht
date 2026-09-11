@@ -51,6 +51,13 @@ from . import jsonc, regexcompat
 # against these, then divided into the type's ``additional.base`` capacity.
 CAPACITY_DIMENSIONS = ("personnel", "water", "pump")
 
+# HLF 20 (30) / HLF 10 (90) — the game caps them at 9 crew, but real crews are
+# usually staffed at roughly half that in practice (confirmed by Sasha,
+# 2026-09-11: "usually max is fine but for HLF because they carry a lot go for
+# only half"). Every other firetruck type keeps its nominal capacity — this is
+# a per-type exception, not a general derating.
+_HALF_CREW_TYPE_IDS = frozenset({30, 90})
+
 
 @dataclass(frozen=True)
 class ExtendRule:
@@ -105,6 +112,18 @@ class VehicleType:
     def personnel(self) -> int:
         """Crew this vehicle carries when fully staffed (0 if unknown)."""
         return int(self.capacities.get("personnel", 0))
+
+    @property
+    def planning_personnel(self) -> int:
+        """Crew to PLAN dispatch with for personnel-floor math — same as
+        :attr:`personnel` for most types, but halved for HLF (see
+        ``_HALF_CREW_TYPE_IDS``): the nominal 9-person cap is rarely reached
+        in practice, so treating it as reliable under-crews a mission that
+        looked satisfied on paper."""
+        nominal = self.personnel
+        if self.id in _HALF_CREW_TYPE_IDS:
+            return max(1, nominal // 2)
+        return nominal
 
     @property
     def trailer_capacity(self) -> int:
