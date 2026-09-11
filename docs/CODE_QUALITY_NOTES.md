@@ -388,3 +388,23 @@ of each module's history if it's revisited.
   behavior; `AccountConfig.dispatch_policy()` needed no equivalent guard
   since solo mode's SMART path is fully implemented.
 - Verdict: keep-as-is
+
+## app/web/templates/dashboard.html — reviewed 2026-09-11, ad-hoc fix (auto-refresh eating form input)
+- Bug: user report — "the site frequently reloads itself... impossible to
+  fill in the account fields." The dashboard's `<meta http-equiv="refresh"
+  content="5">` (added for the live log console) hard-reloaded the whole
+  page every 5s, wiping the "Add account" form (label/email/password) mid-
+  keystroke since it's the only form on the page with free-text inputs.
+- Fix: replaced the meta-refresh with an equivalent `setInterval(reload,
+  5000)`, guarded to skip the reload whenever the add-account form has
+  focus OR any of its inputs already hold a typed value — so a user who
+  tabs briefly out of the form (or types slowly) doesn't lose work either.
+  `details.html` keeps its plain meta-refresh unchanged (that page has no
+  input fields to protect).
+- Stability (1-5): 4 — pure client-side JS, no server/domain change, no new
+  test surface (nothing in `tests/test_web.py` asserted on the meta tag).
+  Manually reasoned through, not live-browser-verified this session.
+- Verdict: keep-as-is
+- Rationale: minimal, targeted fix — kept the 5s live-refresh behavior
+  everywhere else on the page, only suppressed it exactly where it was
+  destructive.

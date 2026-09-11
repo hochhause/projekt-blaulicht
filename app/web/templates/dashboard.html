@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block head %}<meta http-equiv="refresh" content="5">
+{% block head %}
 <style>
   .wrap{max-width:none}   /* use the full window width on the dashboard */
   .triptych{display:grid;grid-template-columns:280px minmax(0,1fr) 300px;gap:16px;align-items:start;margin-top:18px}
@@ -192,7 +192,7 @@
 
 <div class="card">
   <h2>Add account</h2>
-  <form method="post" action="/accounts">
+  <form method="post" action="/accounts" id="new-account-form">
     <div class="grid">
       <div class="field"><label>Label</label><input name="label" placeholder="nord-1" required></div>
       <div class="field"><label>E-mail or username</label><input name="email" required></div>
@@ -204,6 +204,23 @@
 </div>
 
 <script>
+  // Auto-refresh the dashboard every 5s (was a <meta refresh>, which reloaded
+  // mid-keystroke and wiped the "Add account" form). Skipped whenever that
+  // form has focus or an unsaved value, so it never eats what you're typing.
+  (function () {
+    var form = document.getElementById('new-account-form');
+    setInterval(function () {
+      if (form) {
+        if (form.contains(document.activeElement)) return;
+        var inputs = form.querySelectorAll('input');
+        for (var i = 0; i < inputs.length; i++) {
+          if (inputs[i].value) return;
+        }
+      }
+      location.reload();
+    }, 5000);
+  })();
+
   // Maximise the compound console to fill the window. Persisted in sessionStorage
   // so it survives the 5s auto-refresh; Esc exits.
   (function () {
