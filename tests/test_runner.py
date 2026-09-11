@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from app.core.runner import DispatchRunner, RunnerTiming
 from app.domain.assets import AssetLibrary
 from app.domain.catalog import MissionCatalog
-from app.domain.dispatch import DispatchPolicy, ModeScope
+from app.domain.dispatch import DispatchPolicy, HilferufAggressiveness, ModeScope
 from app.domain.resolver import MissionRequirementResolver
 
 BASE = Path(__file__).resolve().parent
@@ -440,7 +440,8 @@ class RunnerTests(unittest.TestCase):
 
         client = FakeClient([m(1, 1)], [v(100, 32)], [b()])  # need fire, only police
         runner = DispatchRunner(
-            client, self.resolver, DispatchPolicy(radius_km=40, hilferuf=True),
+            client, self.resolver,
+            DispatchPolicy(radius_km=40, hilferuf_mode=HilferufAggressiveness.UNCREWABLE),
             timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
         )
         asyncio.run(runner.run_cycle())
@@ -462,7 +463,40 @@ class RunnerTests(unittest.TestCase):
                              is_alliance=True)
         client = FakeClient([am], [v(100, 32)], [b()])
         runner = DispatchRunner(
-            client, self.resolver, DispatchPolicy(radius_km=40, hilferuf=True),
+            client, self.resolver,
+            DispatchPolicy(radius_km=40, hilferuf_mode=HilferufAggressiveness.UNCREWABLE),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.shared, [])
+
+    def test_hilferuf_all_shares_own_mission_even_when_fully_crewed(self):
+        # ALL mode (Sasha, 2026-09-11): share every own mission, not just
+        # ones we can't crew -- this one dispatches fine (LF available) but
+        # still gets shared so allies can pile on for extra credit.
+        async def no_sleep(_):
+            return None
+
+        client = FakeClient([m(1, 1)], [v(100, 0)], [b()])  # LF -- fully crewable
+        runner = DispatchRunner(
+            client, self.resolver,
+            DispatchPolicy(radius_km=40, hilferuf_mode=HilferufAggressiveness.ALL),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.shared, [1])
+        self.assertEqual(client.dispatched, [(1, 100)])  # still dispatched normally too
+
+    def test_hilferuf_all_ignores_alliance_missions(self):
+        async def no_sleep(_):
+            return None
+
+        am = SimpleNamespace(id=2, caption="A", mission_type_id=1, position=NEAR,
+                             is_alliance=True)
+        client = FakeClient([am], [v(100, 0)], [b()])
+        runner = DispatchRunner(
+            client, self.resolver,
+            DispatchPolicy(radius_km=40, hilferuf_mode=HilferufAggressiveness.ALL),
             timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
         )
         asyncio.run(runner.run_cycle())

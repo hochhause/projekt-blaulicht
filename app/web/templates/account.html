@@ -84,8 +84,12 @@
       <div class="field"><label>Patient-only (only RTW/NEF/RTH + LNA&gt;5/OrgL&gt;10; recall idle units when cleared)</label>
         {{ scope_select('patient_scope', cfg.patient_scope) }}</div>
     </div>
-    <div class="field" style="margin-top:14px"><label>Hilferuf — add-on: share own missions we can't crew to the alliance (safe with any mode)</label>
-      <select name="hilferuf"><option value="1" {{ 'selected' if cfg.hilferuf else '' }}>on</option><option value="" {{ '' if cfg.hilferuf else 'selected' }}>off</option></select></div>
+    <div class="field" style="margin-top:14px"><label>Hilferuf — add-on: share own missions to the alliance (safe with any mode)</label>
+      <select name="hilferuf_mode">
+        <option value="off" {{ 'selected' if cfg.hilferuf_mode == 'off' else '' }}>off</option>
+        <option value="uncrewable" {{ 'selected' if cfg.hilferuf_mode == 'uncrewable' else '' }}>only missions I can't crew</option>
+        <option value="all" {{ 'selected' if cfg.hilferuf_mode == 'all' else '' }}>everything (let allies pile on for extra credit too)</option>
+      </select></div>
     <div class="field"><label>Partial dispatch — add-on: send what I have even if I can't fully crew a mission (reports the gap)</label>
       <select name="partial_starts"><option value="1" {{ 'selected' if cfg.partial_starts else '' }}>on</option><option value="" {{ '' if cfg.partial_starts else 'selected' }}>off</option></select></div>
   </div>

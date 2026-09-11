@@ -882,3 +882,33 @@ push/merge/rebuild this round.
   fake session; `test_runner.py`/`test_group_coordinator.py` cover both
   dispatch loops' handling of a confirmed rejection.
 - Verdict: keep-as-is
+
+## app/domain/dispatch.py, app/core/account_config.py, app/core/runner.py, app/web/* — reviewed 2026-09-11, ad-hoc feature (Hilferuf share-everything mode)
+- User asked: "add a 3rd option to hilferuf to share everything or do we
+  already have such an option." Investigated: Hilferuf was a plain
+  on/off toggle -- on shared only own missions genuinely uncrewable this
+  cycle. No "share everything" option existed.
+- Implementation: `HilferufAggressiveness(str, Enum)` -- OFF / UNCREWABLE
+  (original ON behavior) / ALL (every own, not-yet-shared mission,
+  regardless of crew status -- lets allies pile on for extra participation
+  credit even on missions already handled fine). Follows the exact
+  established precedent from `ParasiteAggressiveness`: legacy boolean
+  `hilferuf` kept for migration only, new `hilferuf_mode` field added
+  distinctly, `from_dict()` migrates `hilferuf: true` -> `hilferuf_mode:
+  "uncrewable"` only when the new key is absent (explicit key always wins).
+  `runner.py`'s `_hilferuf` branches on mode: UNCREWABLE keeps the original
+  `plan.skipped`-filtered candidate list; ALL iterates every mission in
+  `by_id` (every mission the account currently sees this cycle, already
+  fetched before this call), same `is_alliance`/`self._shared` exclusions
+  applied either way.
+- Code review (async): APPROVE, zero findings across all 5 points checked
+  (migration ordering/precedence, no orphaned old-boolean references
+  anywhere in app/, ALL-mode candidate scope correctness, full
+  backward-compatibility trace for both `hilferuf: true` and `false`/absent
+  stored configs, and a broad search for any other `DispatchPolicy(hilferuf=
+  ...)` construction site that might have been missed by the rename).
+- Stability (1-5): 5 -- 4 new tests in test_account_config.py (migration,
+  roundtrip, invalid-value fallback, explicit-key-wins-over-legacy) + 2 new
+  tests in test_runner.py (ALL mode shares a fully-crewable mission too;
+  ALL mode still excludes alliance missions). 379 tests pass.
+- Verdict: keep-as-is

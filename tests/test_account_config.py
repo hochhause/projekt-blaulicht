@@ -68,6 +68,31 @@ class AccountConfigTests(unittest.TestCase):
         cfg = AccountConfig(parasite_aggressiveness="bogus")
         self.assertEqual(cfg.dispatch_policy().parasite_mode.value, "active")
 
+    def test_legacy_hilferuf_boolean_migrates_to_uncrewable_mode(self):
+        # A stored `hilferuf: true` (the old on/off toggle) must map to the
+        # new mode's UNCREWABLE value -- preserving the original behavior for
+        # existing accounts.
+        cfg = AccountConfig.from_dict({"hilferuf": True})
+        self.assertEqual(cfg.hilferuf_mode, "uncrewable")
+        self.assertEqual(cfg.dispatch_policy().hilferuf_mode.value, "uncrewable")
+
+    def test_hilferuf_mode_roundtrip_and_maps_to_policy(self):
+        cfg = AccountConfig(hilferuf_mode="all")
+        again = AccountConfig.from_dict(cfg.to_dict())
+        self.assertEqual(again.hilferuf_mode, "all")
+        self.assertEqual(again.dispatch_policy().hilferuf_mode.value, "all")
+
+    def test_invalid_hilferuf_mode_falls_back_to_off(self):
+        cfg = AccountConfig(hilferuf_mode="bogus")
+        self.assertEqual(cfg.dispatch_policy().hilferuf_mode.value, "off")
+
+    def test_hilferuf_mode_explicit_key_takes_precedence_over_legacy_boolean(self):
+        # An explicit hilferuf_mode in the stored dict wins even if the
+        # legacy boolean is also present (matches the parasite/top_up/patient
+        # migration precedent: legacy only fills in when the new key is absent).
+        cfg = AccountConfig.from_dict({"hilferuf": True, "hilferuf_mode": "off"})
+        self.assertEqual(cfg.hilferuf_mode, "off")
+
     def test_policies_reflect_config(self):
         cfg = AccountConfig(
             radius_km=15, own_credit_min=200, alliance_credit_max=9000,

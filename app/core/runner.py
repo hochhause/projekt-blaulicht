@@ -22,6 +22,7 @@ from typing import Awaitable, Callable, Protocol
 from ..domain.dispatch import (
     DispatchPlan,
     DispatchPolicy,
+    HilferufAggressiveness,
     MissionRequirementResolver,
     assigned_from_vehicles,
     plan_cleanup,
@@ -388,8 +389,9 @@ class DispatchRunner:
             if self._on_stat is not None and sent:
                 self._on_stat(sent, 1)
 
-        if getattr(self._policy, "hilferuf", False):
-            await self._hilferuf(plan, by_id)
+        hilferuf_mode = getattr(self._policy, "hilferuf_mode", HilferufAggressiveness.OFF)
+        if hilferuf_mode is not HilferufAggressiveness.OFF:
+            await self._hilferuf(plan, by_id, hilferuf_mode)
 
         if getattr(getattr(self._policy, "patient_scope", None), "value", "off") != "off":
             await self._recall_cleared_patient_missions(missions, vehicles)
@@ -475,12 +477,24 @@ class DispatchRunner:
                 self._log(f"recalled {name}: patients cleared at #{v.target_id}")
             await self._timing.sleep(self._timing.dispatch_gap())
 
-    async def _hilferuf(self, plan, by_id) -> None:
-        """Share our OWN missions we couldn't crew to the alliance, so members
-        can help. Only shortfall skips of not-yet-shared own missions qualify."""
-        for mid, reason in plan.skipped:
-            if not reason.startswith("not enough vehicles"):
-                continue
+    async def _hilferuf(self, plan, by_id, mode: HilferufAggressiveness) -> None:
+        """Share our OWN missions to the alliance so members can help.
+
+        UNCREWABLE (Sasha, 2026-08-31 — the original behavior): only missions
+        we genuinely couldn't crew this cycle (a "not enough vehicles" skip).
+        ALL (Sasha, 2026-09-11): every own, not-yet-shared mission, regardless
+        of whether we handled it ourselves — lets allies pile on for the
+        extra participation credit too, not just the ones we're stuck on.
+        """
+        if mode is HilferufAggressiveness.UNCREWABLE:
+            candidates = [
+                (mid, "can't crew it")
+                for mid, reason in plan.skipped
+                if reason.startswith("not enough vehicles")
+            ]
+        else:  # ALL
+            candidates = [(mid, "sharing everything") for mid in by_id]
+        for mid, why in candidates:
             mission = by_id.get(mid)
             if mission is None or getattr(mission, "is_alliance", False):
                 continue  # not ours, or already shared
@@ -490,6 +504,6 @@ class DispatchRunner:
                 self._shared.add(mid)
                 self._log(
                     f"Hilferuf: shared #{mid} {getattr(mission, 'caption', '')!r} "
-                    f"to the alliance — can't crew it"
+                    f"to the alliance — {why}"
                 )
             await self._timing.sleep(self._timing.dispatch_gap())

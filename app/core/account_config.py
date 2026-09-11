@@ -13,6 +13,7 @@ from typing import Any
 from ..domain.dispatch import (
     DispatchOrder,
     DispatchPolicy,
+    HilferufAggressiveness,
     MissionSource,
     ModeScope,
     ParasiteAggressiveness,
@@ -53,8 +54,12 @@ class AccountConfig:
     parasite_aggressiveness: str = ParasiteAggressiveness.ACTIVE.value
     top_up_scope: str = ModeScope.OFF.value
     patient_scope: str = ModeScope.OFF.value
-    # Hilferuf: share own missions we can't crew to the alliance.
+    # Legacy boolean, migrated to hilferuf_mode below — kept only so old
+    # stored configs (True = "uncrewable") still work; don't rename.
     hilferuf: bool = False
+    # Hilferuf: off / uncrewable (only own missions we couldn't crew this
+    # cycle) / all (every own, not-yet-shared mission, regardless of crew).
+    hilferuf_mode: str = HilferufAggressiveness.OFF.value
     # Partial dispatch: send what we have even if we can't fully crew a mission.
     partial_starts: bool = False
     # transport
@@ -86,6 +91,11 @@ class AccountConfig:
         except ValueError:
             aggressiveness = ParasiteAggressiveness.ACTIVE
 
+        try:
+            hilferuf_mode = HilferufAggressiveness(self.hilferuf_mode)
+        except ValueError:
+            hilferuf_mode = HilferufAggressiveness.OFF
+
         return DispatchPolicy(
             radius_km=self.radius_km,
             own_credit_min=self.own_credit_min,
@@ -104,7 +114,7 @@ class AccountConfig:
             parasite_mode=aggressiveness,
             top_up_scope=_scope(self.top_up_scope),
             patient_scope=_scope(self.patient_scope),
-            hilferuf=self.hilferuf,
+            hilferuf_mode=hilferuf_mode,
             partial_starts=self.partial_starts,
         )
 
@@ -134,6 +144,8 @@ class AccountConfig:
             d["top_up_scope"] = ModeScope.BOTH.value
         if "patient_scope" not in d and d.get("patient_only"):
             d["patient_scope"] = ModeScope.BOTH.value
+        if "hilferuf_mode" not in d and d.get("hilferuf"):
+            d["hilferuf_mode"] = HilferufAggressiveness.UNCREWABLE.value
         known = {f for f in cls.__dataclass_fields__}
         values = {k: v for k, v in d.items() if k in known}
         if "allowed_categories" in values:  # JSON stores a list; keep it a tuple

@@ -78,6 +78,14 @@ class ParasiteAggressiveness(str, Enum):
     # spare send; if there's nothing genuinely still missing, parasite skips it.
 
 
+class HilferufAggressiveness(str, Enum):
+    """How much Hilferuf shares to the alliance (Sasha, 2026-09-11)."""
+
+    OFF = "off"
+    UNCREWABLE = "uncrewable"  # only OWN missions we genuinely couldn't crew this cycle
+    ALL = "all"                # every OWN, not-yet-shared mission, regardless of crew status
+
+
 def _scope_covers(scope, is_alliance: bool) -> bool:
     """True if a :class:`ModeScope` value covers a mission of this source."""
     scope = getattr(scope, "value", scope)
@@ -139,9 +147,10 @@ class DispatchPolicy:
     # Patient-only: dispatch ONLY the units that clear patients (RTW/NEF/RTH + an
     # LNA >5 patients, OrgL >10); the runner recalls idle units once patients gone.
     patient_scope: ModeScope = ModeScope.OFF
-    # Hilferuf ("call for help"): when we can't crew one of our OWN missions,
-    # share it to the alliance so members can help. Runner-level add-on.
-    hilferuf: bool = False
+    # Hilferuf ("call for help"): share OWN missions to the alliance so
+    # members can help. UNCREWABLE = only ones we couldn't crew this cycle;
+    # ALL = every own mission. Runner-level add-on.
+    hilferuf_mode: HilferufAggressiveness = HilferufAggressiveness.OFF
     # Partial dispatch: send whatever useful vehicles we have to a mission even if
     # we can't fully crew it (instead of waiting for a full set). Reports the gap.
     partial_starts: bool = False
