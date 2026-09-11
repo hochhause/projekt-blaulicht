@@ -59,6 +59,31 @@ class ParseMissingTextTests(unittest.TestCase):
         self.assertFalse(groups.has_vehicle_demand)
         self.assertFalse(groups.revealed)
 
+    def test_nbsp_between_count_and_category_is_normalized(self):
+        # Live-verified 2026-09-11 (mission #4397737525 "Straße unter
+        # Wasser"): the game renders these strings with U+00A0 (non-breaking
+        # space) wherever a plain space would go -- between the count and the
+        # category, and inside abbreviations like "z. B.". Un-normalized,
+        # "Löschfahrzeug\xa0(LF)" doesn't match the reference table's
+        # plain-space "Löschfahrzeug (LF)" key, so a real, visible need
+        # silently resolved to nothing.
+        raw = ('{"vehicles":"1\xa0Löschfahrzeug\xa0(LF)","personnel":"",'
+               '"other":"1\xa0Feuerlöschpumpe\xa0(z.\xa0B.\xa0LF)"}')
+        groups = parse_missing_text(raw)
+        self.assertEqual(groups.vehicles, "1 Löschfahrzeug (LF)")
+        self.assertEqual(groups.other, "1 Feuerlöschpumpe (z. B. LF)")
+        self.assertTrue(groups.has_vehicle_demand)
+
+    def test_other_unicode_space_variants_are_also_normalized(self):
+        # Not yet observed live, but the game is already inconsistent about
+        # which invisible space codepoint it uses -- guard against the same
+        # failure mode recurring for U+2009 (thin space) / U+202F (narrow
+        # no-break space) etc. by normalizing the same \s class the count and
+        # split regexes already tolerate, not just U+00A0.
+        raw = '{"vehicles":"1 ELW 1","personnel":"","other":""}'
+        groups = parse_missing_text(raw)
+        self.assertEqual(groups.vehicles, "1 ELW 1")
+
     def test_missing_keys_default_empty(self):
         groups = parse_missing_text('{"vehicles":"1 RTW"}')
         self.assertEqual(groups.vehicles, "1 RTW")
@@ -174,6 +199,19 @@ class DefaultResolverTests(unittest.TestCase):
 
     def test_is_cached_singleton(self):
         self.assertIs(default_resolver(), default_resolver())
+
+    def test_live_nbsp_pump_text_resolves_end_to_end(self):
+        # Mission #4397737525 "Straße unter Wasser", verbatim missing_text.
+        raw = ('{"vehicles":"1\xa0Löschfahrzeug\xa0(LF)","personnel":"",'
+               '"other":"1\xa0Feuerlöschpumpe\xa0(z.\xa0B.\xa0LF)"}')
+        groups = parse_missing_text(raw)
+        resolver = default_resolver()
+        vehicles = resolver.resolve(groups.vehicles)
+        other = resolver.resolve(groups.other)
+        self.assertEqual(vehicles.unmatched, [])
+        self.assertEqual(other.unmatched, [])
+        self.assertTrue(vehicles.requirements)
+        self.assertTrue(other.requirements)
 
 
 if __name__ == "__main__":

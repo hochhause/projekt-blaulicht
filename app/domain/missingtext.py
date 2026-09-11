@@ -98,11 +98,27 @@ def parse_missing_text(raw: str) -> MissingTextGroups:
         return MissingTextGroups()
     revealed = any(key in data for key in ("vehicles", "personnel", "other"))
     return MissingTextGroups(
-        vehicles=str(data.get("vehicles") or ""),
-        personnel=str(data.get("personnel") or ""),
-        other=str(data.get("other") or ""),
+        vehicles=_normalize_spaces(data.get("vehicles")),
+        personnel=_normalize_spaces(data.get("personnel")),
+        other=_normalize_spaces(data.get("other")),
         revealed=revealed,
     )
+
+
+def _normalize_spaces(value: Any) -> str:
+    """Collapse ANY Unicode whitespace (the game uses U+00A0 non-breaking
+    space both between a count and its category, e.g. "1\xa0Löschfahrzeug",
+    and inside abbreviations like "z.\xa0B." — and it's already shown to be
+    inconsistent about which invisible space character it uses where) to a
+    plain space, so category text matches the reference table's plain-space
+    keys. Uses the SAME \\s class _COUNT_RE/_SPLIT_RE already tolerate when
+    splitting, so a stray thin/narrow-no-break space etc. can't reintroduce
+    the same failure mode for a codepoint we haven't seen yet. Live-verified
+    2026-09-11: without this, every multi-word category silently resolved to
+    zero vehicles (a well-formed but unmatched lookup), so a "revealed"
+    mission with real, visible needs (e.g. "1 Löschfahrzeug (LF)") was
+    treated as needing nothing and skipped."""
+    return re.sub(r"\s", " ", str(value or ""))
 
 
 class MissingTextResolver:

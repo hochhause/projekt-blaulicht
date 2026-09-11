@@ -434,3 +434,41 @@ of each module's history if it's revisited.
   knapsack) problem, not a literal proven-optimal solver; it's not expected
   to matter in practice at typical fleet/mission scale, but it's not a
   mathematical guarantee either.
+
+## app/domain/missingtext.py — reviewed 2026-09-11, live bug (NBSP breaks category matching)
+- Bug: user shared a live "unresolved" diagnostic log line for mission
+  #4397737525 "Straße unter Wasser" (mtid 173). Its `missing_text` was
+  revealed and plainly needed a fire engine + pump, but the resolver came
+  back with zero requirements, so the bot silently skipped it. Root cause:
+  the game renders these category strings with U+00A0 (non-breaking space)
+  everywhere a plain space would go -- e.g. `"1\xa0Löschfahrzeug\xa0(LF)"`
+  -- both between the count and the category, and inside abbreviations like
+  "z.\xa0B.". `_COUNT_RE`'s `\s` DOES match across the NBSP (confirmed via
+  the real reference JSON), so the count strips correctly, but the leftover
+  category string still CONTAINS an embedded NBSP, which fails an exact
+  dict-key lookup against `MissingTextResolver._by_text` (built from the
+  reference table's plain-space keys). Net effect: a "revealed" mission
+  with real, visible needs was treated as needing nothing -- no error, no
+  distinct log signal beyond the generic "no requirements found" line.
+- Fix: `_normalize_spaces()` (new), called from `parse_missing_text()` on
+  all three group strings right when they're extracted from the parsed
+  JSON, before anything downstream (split/count-regex/dict-lookup) sees
+  the text. Code review (async) flagged that the first version only
+  handled U+00A0 specifically -- widened to `re.sub(r"\s", " ", ...)`,
+  the SAME whitespace class `_COUNT_RE`/`_SPLIT_RE` already tolerate, so
+  other invisible-space codepoints the game might also emit (thin space,
+  narrow no-break space, etc. -- it's already shown to be inconsistent
+  about which one it uses where) can't reintroduce the identical failure
+  mode for a codepoint not yet observed live.
+- Stability (1-5): 5 -- traced every caller (dispatch.py, resolver.py) and
+  confirmed both go through `parse_missing_text` before ever reaching
+  `MissingTextResolver.resolve`/`resolve_line`; no code constructs
+  `MissingTextGroups` directly with live text bypassing this normalization.
+  3 new regression tests incl. the exact live example, an end-to-end
+  resolve-through-`default_resolver()` check, and a non-NBSP Unicode space
+  variant. 309 tests pass.
+- Verdict: keep-as-is
+- Rationale: this is a real, live, silently-recurring dispatch bug (not a
+  hypothetical) -- likely affected every multi-word missing_text category,
+  not just this one mission, since the game appears to use NBSP
+  systematically rather than for this specific mission type.
