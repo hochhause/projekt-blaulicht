@@ -171,15 +171,23 @@ class MissionRequirementResolver:
                 reqs.extend(sub.requirements)
                 unmatched.extend(sub.unmatched)
             if groups.personnel:
-                sub = self._missing.resolve(groups.personnel)
-                # `personnel` entries are a HEADCOUNT ("12 Feuerwehrleute"),
-                # unlike `vehicles` entries which already count vehicles —
-                # convert via the category's largest per-vehicle crew size
-                # (the fewest-vehicles estimate), the same ceil(need/cap)
-                # convention assets.ExtendRule.needed uses for a single type,
-                # so we never balloon into one vehicle per missing head.
-                reqs.extend(self._personnel_to_vehicles(r) for r in sub.requirements)
-                unmatched.extend(sub.unmatched)
+                # `personnel` entries are usually a HEADCOUNT ("12
+                # Feuerwehrleute"), unlike `vehicles` entries which already
+                # count vehicles — convert via the category's largest
+                # per-vehicle crew size (the fewest-vehicles estimate), the
+                # same ceil(need/cap) convention assets.ExtendRule.needed
+                # uses for a single type, so we never balloon into one
+                # vehicle per missing head. BUT live-verified 2026-09-11
+                # (mission #4397704222 "Person in Wasser"): the game
+                # sometimes puts an actual VEHICLE name under `personnel` by
+                # mistake (e.g. "2 GW-Wasserrettung" -> 2 GW-W vehicles, type
+                # 64 -- not a headcount of some role) -- resolve_personnel
+                # tells the two apart so only genuine headcounts get converted.
+                headcount, vehicle = self._missing.resolve_personnel(groups.personnel)
+                reqs.extend(self._personnel_to_vehicles(r) for r in headcount.requirements)
+                reqs.extend(vehicle.requirements)
+                unmatched.extend(headcount.unmatched)
+                unmatched.extend(vehicle.unmatched)
             return reqs, unmatched
 
         counts: dict[str, int] = {}

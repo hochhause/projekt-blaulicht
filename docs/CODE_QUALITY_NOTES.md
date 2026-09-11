@@ -472,3 +472,45 @@ of each module's history if it's revisited.
   hypothetical) -- likely affected every multi-word missing_text category,
   not just this one mission, since the game appears to use NBSP
   systematically rather than for this specific mission type.
+
+## app/domain/missingtext.py, app/domain/resolver.py — reviewed 2026-09-11, live bug (vehicle mislabeled under personnel)
+- Bug: user shared another "unresolved" log line -- mission #4397704222
+  "Person in Wasser" (mtid 244), `missing_text`
+  `{"vehicles":null,"personnel":"2 GW-Wasserrettung","other":""}`. User
+  clarified: "GW-Wasserrettung" is satisfied by the same-named VEHICLE, not
+  a crew role. Confirmed against `data/de/vehicles/64.mscv`: type 64 (GW-W)
+  already carries a legacy regex extend-rule keyed on exactly this text
+  (`"([1-6]) GW-Wasserrettung": 1`, etc.), proving the game genuinely means
+  "N GW-W vehicles" here, just filed under the wrong JSON key. Since
+  "GW-Wasserrettung" wasn't in the LSSM `vehiclesByRequirement` table (only
+  in the legacy engine's per-type regex, a different, unrelated code path)
+  and every `personnel`-group entry was unconditionally run through
+  headcount/crew-size conversion, this mission's real, catalog-confirmed
+  need (`boats: 1`) silently resolved to nothing.
+- Fix: added `{"texts": ["GW-Wasserrettung", "GW-Wasserrettungen"],
+  "vehicles": [64]}` to the reference table. Split `MissingTextResolver`'s
+  merged `_by_text` into `_vehicle_text` (vehicles/other groups, unchanged
+  behavior) and `_staff_text` (crew roles); added `resolve_personnel()`
+  which tries the staff table first (genuine headcount, e.g.
+  "Feuerwehrleute"), falling back to the vehicle table (the game's
+  mislabeling case) -- so the caller (`resolver.py`'s `_vehicle_requirements`)
+  knows which bucket needs `_personnel_to_vehicles` conversion and which is
+  already a vehicle count.
+- Code review (async): APPROVE. Confirmed no other caller of
+  `resolve`/`resolve_line` was affected by the table split (only the
+  vehicles/other groups use them, both semantically vehicle-only already);
+  confirmed the staff/vehicle text tables don't currently collide on any
+  category name (today's precedence choice is inert, documented for if that
+  ever changes); confirmed type 64 is correct against the .mscv source.
+  One MEDIUM gap (no test for a personnel string mixing a staff chunk and a
+  vehicle chunk together, e.g. "8 Feuerwehrmann, 2 GW-Wasserrettung") --
+  closed with `test_resolve_personnel_mixed_staff_and_vehicle_chunks_route_separately`.
+  315 tests pass.
+- Verdict: keep-as-is
+- Rationale: same class of live-data bug as the NBSP fix above -- the game's
+  missing_text is the authoritative source but not perfectly structured;
+  real fleet-relevant fixes, not speculative hardening.
+
+NOTE: per explicit instruction, this fix is COMMITTED ONLY -- not pushed,
+not merged to master, not deployed. Batched together with any further
+findings from this live-testing session before the next rebuild.

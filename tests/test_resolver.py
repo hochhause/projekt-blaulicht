@@ -234,6 +234,21 @@ class ResolverTests(unittest.TestCase):
         by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
         self.assertEqual(by.get("Feuerwehrmann"), 3)
 
+    def test_resolve_mission_vehicle_name_under_personnel_not_headcount_converted(self):
+        # Live-verified 2026-09-11 (mission #4397704222 "Person in Wasser"):
+        # the game puts "2 GW-Wasserrettung" -- a VEHICLE category (GW-W,
+        # type 64), not a crew role -- under the `personnel` group. Must
+        # resolve as 2 vehicles directly, NOT run through the headcount/crew
+        # conversion (which would silently drop it to 0, since it isn't in
+        # the staff table at all -- the original bug).
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":null,"personnel":"2 GW-Wasserrettung","other":""}')
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertEqual(by.get("GW-Wasserrettung"), 2)
+        self.assertEqual(res.unmatched, [])
+
     def test_resolve_mission_revealed_and_fully_satisfied_is_not_stale_catalogue(self):
         # Revealed blob with EMPTY vehicles/personnel/other means "nothing
         # more needed" (authoritative) — must NOT fall back to the

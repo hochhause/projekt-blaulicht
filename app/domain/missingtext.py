@@ -124,22 +124,35 @@ def _normalize_spaces(value: Any) -> str:
 class MissingTextResolver:
     """Maps ``missing_text`` requirement-category strings to vehicle type IDs.
 
-    Built from LSSM V4's ``vehiclesByRequirement`` + ``staff`` tables. Multiple
-    display variants of the same category (singular/plural, "z. B."/"z.\xa0B.")
-    map to the same type-id set, per the source data.
+    Built from LSSM V4's ``vehiclesByRequirement`` + ``staff`` tables, kept as
+    TWO separate tables rather than one merged dict: a ``vehicles``/``other``
+    group entry is already a VEHICLE COUNT (e.g. "4 Löschfahrzeuge (LF)" means
+    4 vehicles), while a ``personnel`` group entry is normally a HEADCOUNT
+    (e.g. "12 Feuerwehrleute" means 12 people, converted to a vehicle count by
+    the caller via crew size) — so the caller needs to know which table a
+    ``personnel`` match came from to know whether that conversion applies.
+    Live-verified 2026-09-11 (mission #4397704222 "Person in Wasser"): the
+    game sometimes puts an actual VEHICLE name under ``personnel`` by mistake
+    (``"2 GW-Wasserrettung"`` — a GW-W, vehicle type 64, not a headcount of
+    some "GW-Wasserrettung" role); :meth:`resolve_personnel` checks the
+    vehicle table too so that case resolves as 2 vehicles, not 0.
+
+    Multiple display variants of the same category (singular/plural,
+    "z. B."/"z.\xa0B.") map to the same type-id set, per the source data.
     """
 
     def __init__(self, data: dict[str, Any]) -> None:
-        by_text: dict[str, frozenset[int]] = {}
-        for entry in data.get("vehiclesByRequirement", ()):
+        self._vehicle_text = self._build_table(data.get("vehiclesByRequirement", ()))
+        self._staff_text = self._build_table(data.get("staff", ()))
+
+    @staticmethod
+    def _build_table(entries) -> dict[str, frozenset[int]]:
+        table: dict[str, frozenset[int]] = {}
+        for entry in entries:
             ids = frozenset(int(v) for v in entry.get("vehicles", ()))
             for text in entry.get("texts", ()):
-                by_text[text] = ids
-        for group in data.get("staff", ()):
-            ids = frozenset(int(v) for v in group.get("vehicles", ()))
-            for text in group.get("texts", ()):
-                by_text[text] = ids
-        self._by_text = by_text
+                table[text] = ids
+        return table
 
     @classmethod
     def load(cls, path: str | Path) -> "MissingTextResolver":
@@ -149,22 +162,30 @@ class MissingTextResolver:
             raise FileNotFoundError(f"LSSM requirement mapping not found: {directory}")
         return cls(json.loads(directory.read_text(encoding="utf-8")))
 
-    def resolve_line(self, chunk: str) -> Requirement | None:
-        """Resolve one ``"<count> <category>"`` chunk, or ``None`` if the
-        category isn't in the table (an unmatched — never dropped silently)."""
+    @staticmethod
+    def _split_count(chunk: str) -> tuple[int, str] | None:
         chunk = chunk.strip()
         if not chunk:
             return None
         m = _COUNT_RE.match(chunk)
-        count, category = (int(m.group(1)), m.group(2).strip()) if m else (1, chunk)
-        type_ids = self._by_text.get(category)
+        return (int(m.group(1)), m.group(2).strip()) if m else (1, chunk)
+
+    def resolve_line(self, chunk: str) -> Requirement | None:
+        """Resolve one ``"<count> <category>"`` chunk against the VEHICLE
+        table (``vehicles``/``other`` groups), or ``None`` if the category
+        isn't in it (an unmatched — never dropped silently)."""
+        split = self._split_count(chunk)
+        if split is None:
+            return None
+        count, category = split
+        type_ids = self._vehicle_text.get(category)
         if type_ids is None:
             return None
         return Requirement(source=category, type_ids=type_ids, count=count)
 
     def resolve(self, raw_group: str) -> Resolution:
         """Resolve a full requirement-group string (``vehicles`` or
-        ``personnel``), e.g. ``"4 Löschfahrzeuge (LF), 1 ELW 1"``."""
+        ``other``), e.g. ``"4 Löschfahrzeuge (LF), 1 ELW 1"``."""
         resolution = Resolution()
         text = (raw_group or "").strip()
         if not text:
@@ -178,6 +199,38 @@ class MissingTextResolver:
             else:
                 resolution.requirements.append(requirement)
         return resolution
+
+    def resolve_personnel(self, raw_group: str) -> tuple[Resolution, Resolution]:
+        """Resolve a ``missing_text`` ``personnel`` group string.
+
+        Returns ``(headcount, vehicle)``: ``headcount`` entries matched a
+        genuine crew ROLE (e.g. "Feuerwehrleute") and carry a raw headcount
+        the caller must still convert to a vehicle count via crew size;
+        ``vehicle`` entries matched the VEHICLE table directly (the game
+        mislabeling a vehicle category under ``personnel``, e.g.
+        "GW-Wasserrettung") and are already a vehicle count, to be used
+        as-is. Unmatched chunks go in ``headcount.unmatched`` (arbitrary
+        choice — the caller merges both anyway).
+        """
+        headcount, vehicle = Resolution(), Resolution()
+        text = (raw_group or "").strip()
+        if not text:
+            return headcount, vehicle
+        for chunk in _SPLIT_RE.split(text):
+            split = self._split_count(chunk)
+            if split is None:
+                continue
+            count, category = split
+            staff_ids = self._staff_text.get(category)
+            if staff_ids is not None:
+                headcount.requirements.append(Requirement(source=category, type_ids=staff_ids, count=count))
+                continue
+            vehicle_ids = self._vehicle_text.get(category)
+            if vehicle_ids is not None:
+                vehicle.requirements.append(Requirement(source=category, type_ids=vehicle_ids, count=count))
+                continue
+            headcount.unmatched.append(category)
+        return headcount, vehicle
 
 
 @lru_cache(maxsize=1)

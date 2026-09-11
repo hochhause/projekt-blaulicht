@@ -20,6 +20,7 @@ SAMPLE_DATA = {
         {"texts": ["GW-Öl"], "vehicles": [10, 49], "equipment": ["oil"]},
         {"texts": ["Schlauchwagen (GW-L2 Wasser, SW 1000, SW 2000 oder Ähnliches)"],
          "vehicles": [11, 13]},
+        {"texts": ["GW-Wasserrettung", "GW-Wasserrettungen"], "vehicles": [64]},
     ],
     "staff": [
         {"texts": ["Feuerwehrmann", "Feuerwehrleute"], "vehicles": [0, 1, 30]},
@@ -149,10 +150,48 @@ class MissingTextResolverTests(unittest.TestCase):
     def test_unknown_category_is_unmatched_not_dropped(self):
         self.assertIsNone(self.resolver.resolve_line("1 Marsrover"))
 
-    def test_staff_category_resolves_via_crew_providing_types(self):
-        req = self.resolver.resolve_line("8 Feuerwehrmann")
+    def test_staff_category_not_matched_by_resolve_line(self):
+        # resolve_line/resolve only look at the VEHICLE table now (staff role
+        # text never appears in "vehicles"/"other" groups in practice) --
+        # staff categories are resolved via resolve_personnel instead (below).
+        self.assertIsNone(self.resolver.resolve_line("8 Feuerwehrmann"))
+
+    def test_staff_category_resolves_via_resolve_personnel_as_headcount(self):
+        headcount, vehicle = self.resolver.resolve_personnel("8 Feuerwehrmann")
+        self.assertEqual(vehicle.requirements, [])
+        req = headcount.requirements[0]
         self.assertEqual(req.count, 8)
         self.assertEqual(set(req.type_ids), {0, 1, 30})
+
+    def test_vehicle_category_under_personnel_resolves_as_direct_vehicle_count(self):
+        # Live-verified 2026-09-11 (mission #4397704222 "Person in Wasser"):
+        # the game puts "2 GW-Wasserrettung" -- a VEHICLE category, GW-W type
+        # 64 -- under the `personnel` group by mistake. resolve_personnel must
+        # recognize it via the vehicle table and NOT run it through headcount
+        # conversion (it's already a vehicle count, not a headcount).
+        headcount, vehicle = self.resolver.resolve_personnel("2 GW-Wasserrettung")
+        self.assertEqual(headcount.requirements, [])
+        req = vehicle.requirements[0]
+        self.assertEqual(req.count, 2)
+
+    def test_resolve_personnel_unmatched_category(self):
+        headcount, vehicle = self.resolver.resolve_personnel("3 Marsrover")
+        self.assertEqual(headcount.requirements, [])
+        self.assertEqual(vehicle.requirements, [])
+        self.assertEqual(headcount.unmatched, ["Marsrover"])
+
+    def test_resolve_personnel_mixed_staff_and_vehicle_chunks_route_separately(self):
+        # A mission could plausibly need both remaining crew AND a
+        # mislabeled-vehicle category in the same `personnel` string --
+        # confirm each chunk routes to its own bucket independently, not
+        # just when it's the only chunk present.
+        headcount, vehicle = self.resolver.resolve_personnel("8 Feuerwehrmann, 2 GW-Wasserrettung")
+        self.assertEqual(len(headcount.requirements), 1)
+        self.assertEqual(headcount.requirements[0].count, 8)
+        self.assertEqual(len(vehicle.requirements), 1)
+        self.assertEqual(vehicle.requirements[0].count, 2)
+        self.assertEqual(headcount.unmatched, [])
+        self.assertEqual(vehicle.unmatched, [])
 
     def test_resolve_splits_multiple_categories(self):
         res = self.resolver.resolve("4 Löschfahrzeuge (LF), 1 ELW 1")
@@ -212,6 +251,19 @@ class DefaultResolverTests(unittest.TestCase):
         self.assertEqual(other.unmatched, [])
         self.assertTrue(vehicles.requirements)
         self.assertTrue(other.requirements)
+
+    def test_live_gw_wasserrettung_under_personnel_resolves_as_vehicle(self):
+        # Mission #4397704222 "Person in Wasser", verbatim missing_text.
+        raw = '{"vehicles":null,"personnel":"2 GW-Wasserrettung","other":""}'
+        groups = parse_missing_text(raw)
+        resolver = default_resolver()
+        headcount, vehicle = resolver.resolve_personnel(groups.personnel)
+        self.assertEqual(headcount.requirements, [])
+        self.assertEqual(headcount.unmatched, [])
+        self.assertEqual(len(vehicle.requirements), 1)
+        req = vehicle.requirements[0]
+        self.assertEqual(req.count, 2)
+        self.assertIn(64, req.type_ids)  # GW-W is vehicle type 64
 
 
 if __name__ == "__main__":

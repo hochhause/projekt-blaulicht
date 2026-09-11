@@ -269,6 +269,15 @@
    ]
   },
   {
+   "texts": [
+    "GW-Wasserrettung",
+    "GW-Wasserrettungen"
+   ],
+   "vehicles": [
+    64
+   ]
+  },
+  {
    "equipment": [
     "breathing_protection"
    ],
