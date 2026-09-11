@@ -408,3 +408,29 @@ of each module's history if it's revisited.
 - Rationale: minimal, targeted fix — kept the 5s live-refresh behavior
   everywhere else on the page, only suppressed it exactly where it was
   destructive.
+
+## app/web/templates/account.html, app/domain/dispatch.py — reviewed 2026-09-11, ad-hoc fix (SMART wording)
+- User feedback: "smart isnt most cash per vehicles needed its more most cash
+  with all currently available vehicles... is that just a wording issue in
+  the settings page or have you built the algorithm wrongly." Investigated:
+  the algorithm was already correct for the stated goal -- `plan_dispatches`'
+  candidate-consuming loop (lines ~331-353) doesn't dispatch a single "best"
+  mission and stop; it walks the ENTIRE credits-per-vehicle-sorted list,
+  dispatching every mission the shrinking pool can still fully crew. The
+  per-vehicle ranking only decides priority (who gets first claim on scarce
+  vehicle types); the actual outcome of a full pass already is "the most
+  total credits this fleet can earn right now" -- which is what was asked
+  for. This was a pure labeling/comment problem: the settings dropdown and
+  code comments described the internal sort KEY, not the actual goal/outcome,
+  which read as if SMART only picked one efficient mission rather than
+  greedily clearing everything affordable.
+- Fix: reworded the account.html dropdown option and added a clarifying
+  comment in dispatch.py tying the per-vehicle ranking back to the aggregate
+  behavior of the loop that consumes it. No algorithm change -- behavior is
+  identical (all 306 tests unchanged and pass).
+- Verdict: keep-as-is (wording only)
+- Rationale: worth flagging the honest limit even so -- greedy-by-density is
+  the standard practical approximation for this NP-hard (multi-dimensional
+  knapsack) problem, not a literal proven-optimal solver; it's not expected
+  to matter in practice at typical fleet/mission scale, but it's not a
+  mathematical guarantee either.

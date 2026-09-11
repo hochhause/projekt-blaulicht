@@ -42,7 +42,12 @@ class DispatchOrder(str, Enum):
     CREDITS_LOW = "credits_low"    # least cash first
     OLDEST = "oldest"              # longest-open first (by created_at)
     NEWEST = "newest"
-    SMART = "smart"                # most credits per vehicle needed first (Sasha, 2026-09-11)
+    SMART = "smart"                # squeeze the most total credits out of the
+                                    # available fleet: rank by credits/vehicle
+                                    # needed so scarce vehicles go to the
+                                    # missions that stretch them furthest,
+                                    # then dispatch every mission the fleet
+                                    # can still fully crew (Sasha, 2026-09-11)
 
 
 class MissionSource(str, Enum):
@@ -306,6 +311,12 @@ def plan_dispatches(
         # a cheap, well-known knapsack heuristic: one expensive mission that
         # eats a rare vehicle type can deny several cheaper missions worth
         # more combined, so rank by "value density" instead of pure value.
+        # This ranking only decides PRIORITY, not the goal: the loop below
+        # (plan_dispatches' candidate-consuming pass) walks every candidate in
+        # this order and dispatches everything the shrinking pool can still
+        # fully crew, so the actual outcome is "the most total credits this
+        # fleet can earn right now" — density-first just means scarce
+        # vehicles go to whichever mission stretches them furthest first.
         # Resolved with the SAME requirement derivation + delta the actual
         # dispatch step uses, so the estimate matches what will really be sent.
         efficiency = 0.0
