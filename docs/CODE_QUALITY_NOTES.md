@@ -727,3 +727,22 @@ push/merge/rebuild this round.
   unused rather than helping a fresh mission) in exchange for a much
   simpler mental model when manually diagnosing a stuck dispatch -- not a
   bug to "optimize away" later without checking with them first.
+
+## app/domain/resolver.py, app/domain/coverage.py — reviewed 2026-09-11, verification (prisoner count vs base FuStW requirement)
+- User asked: "sometimes a mission requests X FuStW but has the option for
+  up to Y prisoners. if Y>X then send Y FustW instead." Verified via a
+  concrete check (mission type 3: base police_cars=1, possible_prisoners=3):
+  the resolver already produces TWO separate `police_cars` Requirement rows
+  (base=1, casualty-layer prisoner-derived=3) sharing the same type_ids
+  {32,95}. The coverage matcher's existing multi-role "max, not sum"
+  semantics (a vehicle satisfies every open requirement it qualifies for
+  simultaneously, coverage.py's own documented design) means a single
+  vehicle knocks down BOTH rows at once until the smaller is exhausted,
+  then keeps going for the larger -- converging to exactly max(X, Y) = 3
+  vehicles sent, not 1 (undercounting) and not 1+3=4 (double-counting).
+  No code change needed -- this was already correct by construction.
+- Added `test_prisoner_count_above_base_police_requirement_sends_the_larger_count`
+  to lock this in permanently (an easy behavior to accidentally break via a
+  future refactor that, say, merges same-source Requirement rows before
+  coverage matching). 342 tests pass.
+- Verdict: keep-as-is (verification only, no behavior change)

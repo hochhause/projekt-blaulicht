@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from app.domain.assets import AssetLibrary
 from app.domain.catalog import MissionCatalog
+from app.domain.coverage import select_coverage
 from app.domain.resolver import MissionRequirementResolver
 
 BASE = Path(__file__).resolve().parent
@@ -42,6 +43,25 @@ class ResolverTests(unittest.TestCase):
         res = self.resolver.resolve(3)
         police = next(r for r in res.requirements if r.source == "police_cars")
         self.assertEqual(set(police.type_ids), {32, 95})
+
+    def test_prisoner_count_above_base_police_requirement_sends_the_larger_count(self):
+        # Mission type 3's base need is 1 police_cars (X); more possible
+        # prisoners than that (Y=3 here) must result in 3 FuStW sent, not 1
+        # -- relies on the coverage matcher's max-not-sum multi-role
+        # semantics (coverage.py) rather than any special-case code: the base
+        # requirement and the casualty-layer prisoner requirement are two
+        # separate Requirement rows sharing the same type_ids, so a vehicle
+        # satisfies both simultaneously until the smaller is exhausted, then
+        # keeps going for the larger. Live-verified 2026-09-11.
+        m = SimpleNamespace(mission_type_id=3, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=3, missing_text="")
+        res = self.resolver.resolve_mission(m)
+        police_reqs = [r for r in res.requirements if r.source == "police_cars"]
+        self.assertEqual(len(police_reqs), 2)  # base (1) + casualty layer (3), separate rows
+        pool = [SimpleNamespace(id=i, type_id=32) for i in range(1, 4)]
+        cov = select_coverage(police_reqs, pool)  # isolate from the mission's other requirements
+        self.assertTrue(cov.satisfied)
+        self.assertEqual(len(cov.vehicle_ids), 3)  # max(1, 3), not 1+3
 
     def test_unknown_class_is_reported_not_dropped(self):
         res = self.resolver.resolve(99)
