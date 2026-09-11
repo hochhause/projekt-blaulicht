@@ -63,9 +63,9 @@ class FakeClient:
         return True
 
 
-def m(mid, mtype, pos=NEAR, status="unknown"):
+def m(mid, mtype, pos=NEAR, status="unknown", vehicle_state=0):
     return SimpleNamespace(id=mid, caption=f"M{mid}", mission_type_id=mtype, position=pos,
-                            status=status)
+                            status=status, vehicle_state=vehicle_state)
 
 
 def v(vid, type_id):
@@ -83,7 +83,7 @@ class RunnerTests(unittest.TestCase):
         catalog = MissionCatalog.from_payload(json.loads(FIXTURE.read_text(encoding="utf-8")))
         cls.resolver = MissionRequirementResolver(catalog, library)
 
-    def _runner(self, client):
+    def _runner(self, client, on_log=None):
         # No-op sleep so the test is instant.
         async def no_sleep(_):
             return None
@@ -91,6 +91,7 @@ class RunnerTests(unittest.TestCase):
         return DispatchRunner(
             client, self.resolver, DispatchPolicy(radius_km=40),
             timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+            on_log=on_log,
         )
 
     def test_cycle_dispatches_planned_vehicles(self):
@@ -116,6 +117,46 @@ class RunnerTests(unittest.TestCase):
         report = asyncio.run(self._runner(client).run_cycle())
         self.assertEqual(client.dispatched, [])
         self.assertEqual(report.dispatched, 0)
+
+    # -- dispatch-verb log wording (Sasha, 2026-09-11) --------------------
+
+    def test_log_says_dispatched_for_the_first_vehicles_on_a_mission(self):
+        # vehicle_state=0 -- untouched, nobody there yet.
+        client = FakeClient([m(1, 1, vehicle_state=0)], [v(100, 0)], [b()])
+        lines: list[str] = []
+        asyncio.run(self._runner(client, on_log=lines.append).run_cycle())
+        joined = "\n".join(lines)
+        self.assertIn("dispatched 1 → #1", joined)
+        self.assertNotIn("sent to help", joined)
+        self.assertNotIn("sent reinforcements", joined)
+
+    def test_log_says_sent_to_help_when_an_ally_is_already_on_it(self):
+        # vehicle_state>=1 (someone's there) but none of OUR vehicles are
+        # already assigned to it -- must be an alliance member.
+        client = FakeClient([m(1, 1, vehicle_state=1)], [v(100, 0)], [b()])
+        lines: list[str] = []
+        asyncio.run(self._runner(client, on_log=lines.append).run_cycle())
+        joined = "\n".join(lines)
+        self.assertIn("sent to help 1 → #1", joined)
+
+    def test_log_says_sent_reinforcements_when_we_already_have_units_there(self):
+        # Mission type 2 needs firetrucks:2, platform_trucks:1,
+        # battalion_chief_vehicles:1 -- one of OUR firetrucks is already
+        # assigned (busy, target_type=mission), so the top-up dispatch for
+        # the rest should read "reinforcements", not "sent to help".
+        already_ours = SimpleNamespace(
+            id=99, type_id=0, is_available=False, position=BUILDING,
+            target_type="mission", target_id=1,
+        )
+        new_ft = v(100, 0)
+        platform = v(101, 2)
+        elw = v(102, 3)
+        client = FakeClient([m(1, 2, vehicle_state=1)], [already_ours, new_ft, platform, elw], [b()])
+        lines: list[str] = []
+        asyncio.run(self._runner(client, on_log=lines.append).run_cycle())
+        joined = "\n".join(lines)
+        self.assertIn("sent reinforcements", joined)
+        self.assertNotIn("sent to help", joined)
 
     def test_log_lines_report_missing_vehicles(self):
         from app.core.runner import CycleReport

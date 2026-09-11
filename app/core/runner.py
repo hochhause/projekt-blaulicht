@@ -48,6 +48,19 @@ def _vehicle_name(vehicle, vehicle_id: int) -> str:
     return f"{label} (#{vehicle_id})" if label else f"vehicle #{vehicle_id}"
 
 
+def _dispatch_verb(mission, assigned: dict, mission_id: int) -> str:
+    """Log verb reflecting who's already on the mission (Sasha, 2026-09-11):
+    "sent reinforcements" if WE already have vehicles there (topping up our
+    own partial dispatch), "sent to help" if someone else — an alliance
+    member — is already on it (``vehicle_state`` revealed but none of ours),
+    else "dispatched" for the genuine first vehicles to go."""
+    if assigned.get(mission_id):
+        return "sent reinforcements"
+    if getattr(mission, "vehicle_state", 0) >= 1:
+        return "sent to help"
+    return "dispatched"
+
+
 class GameClientLike(Protocol):
     """The slice of the game client the runner needs."""
 
@@ -301,13 +314,14 @@ class DispatchRunner:
             if not ids:
                 continue
             mid, cap = mission_plan.mission_id, mission_plan.caption
+            verb = _dispatch_verb(by_id.get(mid), assigned, mid)
             sent = 0
             # One alarm POST for the whole mission (the game's multi-select form).
             if await self._client.dispatch_many(mid, ids):
                 sent = len(ids)
                 report.dispatched += sent
                 names = ", ".join(_vehicle_name(veh_by_id.get(v), v) for v in ids)
-                self._log(f"dispatched {sent} → #{mid} {cap!r}: {names}")
+                self._log(f"{verb} {sent} → #{mid} {cap!r}: {names}")
                 await self._timing.sleep(self._timing.dispatch_gap())
             else:
                 # Batch failed — retry one-by-one so we can isolate and strike the
@@ -318,7 +332,7 @@ class DispatchRunner:
                     if await self._client.dispatch(mid, vehicle_id):
                         report.dispatched += 1
                         sent += 1
-                        self._log(f"dispatched {name} → #{mid} {cap!r}")
+                        self._log(f"{verb} {name} → #{mid} {cap!r}")
                     else:
                         report.failed += 1
                         self._log(f"FAILED {name} → #{mid} {cap!r} (no crew?)")

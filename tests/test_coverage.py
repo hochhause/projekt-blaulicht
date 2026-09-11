@@ -71,6 +71,37 @@ class CoverageTests(unittest.TestCase):
         result = select_coverage(reqs, [veh(10, LF), veh(11, LF)], distance_of=lambda v: dist[v.id])
         self.assertEqual(result.vehicle_ids, [11])
 
+    def test_specialist_type_deprioritized_among_equally_covering_candidates(self):
+        # A generic and a specialist type both satisfy the same requirement --
+        # the specialist is picked last, even if it would otherwise be closer.
+        req = [Requirement(source="elw", type_ids=frozenset({3, 59}), count=1)]
+        dist = {1: 9.0, 2: 2.0}  # specialist (59) is CLOSER
+        result = select_coverage(
+            req, [veh(1, 3), veh(2, 59)],
+            distance_of=lambda v: dist[v.id], specialist_type_ids=frozenset({59}),
+        )
+        self.assertEqual(result.vehicle_ids, [1])
+
+    def test_specialist_still_used_when_it_is_the_only_option(self):
+        # Not a hard blocker -- a specialist covers the mission when nothing
+        # else does.
+        req = [Requirement(source="elw", type_ids=frozenset({3, 59}), count=1)]
+        result = select_coverage(req, [veh(2, 59)], specialist_type_ids=frozenset({59}))
+        self.assertTrue(result.satisfied)
+        self.assertEqual(result.vehicle_ids, [2])
+
+    def test_preferred_type_overrides_specialist_penalty_and_distance(self):
+        # On a mass-casualty mission the SEG-ELW is the BETTER choice, not
+        # just an acceptable one -- preferred beats both the specialist
+        # penalty and a closer generic alternative.
+        req = [Requirement(source="elw", type_ids=frozenset({3, 59}), count=1)]
+        dist = {1: 2.0, 2: 9.0}  # generic (3) is closer
+        result = select_coverage(
+            req, [veh(1, 3), veh(2, 59)], distance_of=lambda v: dist[v.id],
+            specialist_type_ids=frozenset({59}), preferred_type_ids=frozenset({59}),
+        )
+        self.assertEqual(result.vehicle_ids, [2])
+
 
 if __name__ == "__main__":
     unittest.main()

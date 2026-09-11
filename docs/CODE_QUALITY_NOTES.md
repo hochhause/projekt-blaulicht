@@ -553,3 +553,81 @@ findings from this live-testing session before the next rebuild.
   domain confirmation and the .mscv source pattern data before editing --
   proportionate to the size of the change per ponytail.
 - Verdict: keep-as-is
+
+## app/domain/coverage.py, app/domain/dispatch.py — reviewed 2026-09-11, ad-hoc features (ELW preference + MZB escort)
+- Feature 1: ELW specialist deprioritization. User: SEG-ELW and ELW2-Drohne
+  are eligible ELW1/ELW2 substitutes but both have another valuable use
+  (SEG-ELW: automatic patient handling on mass-casualty missions; ELW2-Drohne:
+  also a drone) -- so both should be picked LAST among equally-eligible ELW
+  candidates for an ordinary mission (never excluded -- still used if it's
+  the only option), UNLESS the mission has 20+ patients, where SEG-ELW
+  becomes the actively BETTER pick. Implemented as a new middle tiebreak
+  dimension in `select_coverage()` (`specialist_type_ids`/`preferred_type_ids`,
+  after coverage-count, before distance) plus `_ELW_SPECIALIST_TYPE_IDS =
+  {59, 129}` / `_SEG_ELW_TYPE_ID = 59` constants and a `patient_load`
+  computation in `_plan_one`.
+- Feature 2: MZB water-rescue escort. User: an MZB always wants a GW-Taucher
+  + GW-Wasserrettung riding along, preferably same station, never a hard
+  blocker. Implemented as `_add_water_rescue_escort()`, called AFTER every
+  gating check in `_plan_one` (satisfied / max_vehicles_per_mission), so it
+  structurally cannot cause a mission to be skipped, capped, or marked
+  unsatisfied.
+- Code review (async): WARNING verdict, 3 MEDIUM + 2 LOW. Fixed:
+  1. `patient_load` originally used `max(patients_count,
+     possible_patients_count)` -- since `possible_patients_count` is a
+     static per-mission ceiling that never drops, this never decayed: a
+     mission that started as 25-casualty would keep "preferring" SEG-ELW
+     for its entire lifetime even after most patients were already
+     transported. Fixed to reuse `resolver.py`'s existing `_casualties()`
+     revealed-vs-possible reconciliation (same one `_casualty_counts`
+     already uses for ambulances), gated on `vehicle_state >= 1` -- now
+     correctly drops to 0 once patients_count authoritatively clears.
+  2. MZB escort's same-station check (`v.building_id == mzb.building_id`)
+     let two UNKNOWN-station vehicles (`building_id=None` on both sides)
+     falsely match each other, wrongly preferring one over a genuinely
+     nearer, known-station candidate. Fixed with an explicit `is not None`
+     guard.
+  3. LOW: ELW2-Drohne (129) is only reachable via the missing_text path
+     (not in `Vehicle.mscv`'s `battalion_chief_vehicles` catalog class) --
+     had zero test coverage. Added
+     `test_elw2_drohne_deprioritized_via_missing_text_path`.
+  - NOT fixed, deliberately: MEDIUM #3 -- an opportunistic MZB escort pick
+    consumes from the SAME shared per-cycle pool as every other mission
+    `plan_dispatches` processes afterward, so it can (in principle) take a
+    diver/GW-Wasser vehicle a LATER-processed mission genuinely needs. This
+    is not unique to this feature: `plan_dispatches` already greedily
+    consumes the shared pool in priority order for every vehicle type --
+    any earlier mission can already "steal" a vehicle a later one needs.
+    Adding reservation/look-ahead logic just for escort picks would be
+    inconsistent special-casing (YAGNI) rather than a real fix for this
+    feature specifically; flagging it here as a known, accepted, pre-existing
+    system characteristic rather than building around it.
+- Stability (1-5): 4 -- 12 new tests across `test_coverage.py`,
+  `test_dispatch.py` covering both features' happy paths, the "not a hard
+  blocker" cases, and the two fixed edge cases above. 333 tests pass.
+- Verdict: keep-as-is
+
+## app/core/runner.py — reviewed 2026-09-11, ad-hoc feature (dispatch log verbs)
+- User: distinguish "these are the first vehicles to a mission" (dispatched)
+  from "an alliance member is already on it" (sent to help) from "we're
+  already there" (sent reinforcements), so the log reads more informatively
+  during manual monitoring.
+- New `_dispatch_verb(mission, assigned, mission_id)`: "sent reinforcements"
+  if `assigned.get(mission_id)` (our own vehicle already en route this
+  cycle), else "sent to help" if `mission.vehicle_state >= 1` (someone else
+  is on it), else "dispatched". Wired into both the batch-success and
+  per-vehicle-retry log lines in `run_cycle`.
+- Code review confirmed: `by_id.get(mid)` can't realistically miss (same
+  `missions` list backs both), and `getattr(None, ...)` degrades safely to
+  "dispatched" even if it somehow did; `assigned` is a per-cycle snapshot
+  with no staleness window since each mission is planned at most once per
+  `run_cycle` call. No fix needed.
+- Scope note: only the solo `DispatchRunner` path -- group mode's dispatch
+  log (`group_coordinator.py`) already uses a different, bracket-prefixed
+  format with no "dispatched" verb at all, so it wasn't touched (user's
+  wording matched the solo format exactly).
+- Stability (1-5): 5 -- 3 new tests, one per verb, 333 tests pass.
+- Verdict: keep-as-is
+
+NOTE: per the established pattern this session, this batch is COMMITTED
+ONLY unless/until told to push/merge/rebuild.

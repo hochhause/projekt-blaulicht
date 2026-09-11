@@ -34,16 +34,19 @@ NEAR2 = (52.5250, 13.4000)  # ~0.6 km
 FAR = (53.5500, 9.9900)     # Hamburg, ~250 km
 
 
-def mission(mid, mtype, pos, is_alliance=False, average_credits=0, created_at=None, vehicle_state=0):
+def mission(mid, mtype, pos, is_alliance=False, average_credits=0, created_at=None, vehicle_state=0,
+            patients_count=0, possible_patients_count=0, missing_text=""):
     return SimpleNamespace(
         id=mid, caption=f"M{mid}", mission_type_id=mtype, position=pos,
         is_alliance=is_alliance, average_credits=average_credits, created_at=created_at,
-        vehicle_state=vehicle_state, missing_text="",
+        vehicle_state=vehicle_state, missing_text=missing_text,
+        patients_count=patients_count, possible_patients_count=possible_patients_count,
     )
 
 
-def vehicle(vid, type_id, pos=BUILDING, available=True):
-    return SimpleNamespace(id=vid, type_id=type_id, is_available=available, position=pos)
+def vehicle(vid, type_id, pos=BUILDING, available=True, building_id=None):
+    return SimpleNamespace(id=vid, type_id=type_id, is_available=available, position=pos,
+                            building_id=building_id)
 
 
 def building(pos=BUILDING):
@@ -759,6 +762,114 @@ class DispatchPlannerTests(unittest.TestCase):
             DispatchPolicy(radius_km=200),
         )
         # The LF at the nearer building is chosen despite list order.
+        self.assertEqual(plan.planned[0].vehicle_ids, (100,))
+
+    # -- ELW specialist deprioritization (Sasha, 2026-09-11) --------------
+
+    def _mission2_support(self):
+        # Mission type 2 needs firetrucks:2, platform_trucks:1,
+        # battalion_chief_vehicles:1 -- give it everything except the ELW
+        # slot itself so the coverage matcher's choice there is isolated.
+        return [vehicle(1, LF), vehicle(2, LF), vehicle(3, 2)]  # 2=platform_trucks
+
+    def test_seg_elw_deprioritized_for_a_plain_elw_slot(self):
+        m = mission(1, 2, NEAR)
+        vehicles = self._mission2_support() + [vehicle(10, 59), vehicle(11, 3)]  # SEG-ELW, ELW1
+        plan = self.plan([m], vehicles)
+        self.assertTrue(plan.planned[0].satisfied)
+        self.assertIn(11, plan.planned[0].vehicle_ids)   # plain ELW1
+        self.assertNotIn(10, plan.planned[0].vehicle_ids)  # SEG-ELW held back
+
+    def test_seg_elw_preferred_on_mass_casualty_mission(self):
+        # 20+ patients also layers on an ambulance-per-patient requirement
+        # plus incident-command scaling (always-on, unrelated to this
+        # feature) -- supply enough ambulances (28), an LNA (55) and OrgL
+        # (56) so the mission stays satisfiable and the ELW pick is isolated
+        # to just the SEG-ELW-vs-plain-ELW1 choice being tested.
+        m = mission(1, 2, NEAR, possible_patients_count=20)
+        ambulances = [vehicle(200 + i, 28) for i in range(20)]
+        command = [vehicle(300, 55), vehicle(301, 56)]
+        vehicles = self._mission2_support() + ambulances + command + [vehicle(10, 59), vehicle(11, 3)]
+        plan = self.plan([m], vehicles)
+        self.assertTrue(plan.planned[0].satisfied)
+        self.assertIn(10, plan.planned[0].vehicle_ids)   # SEG-ELW preferred
+        self.assertNotIn(11, plan.planned[0].vehicle_ids)
+
+    def test_seg_elw_still_used_when_it_is_the_only_elw(self):
+        # Not a hard blocker -- a lone SEG-ELW still satisfies a plain ELW slot.
+        m = mission(1, 2, NEAR)
+        vehicles = self._mission2_support() + [vehicle(10, 59)]
+        plan = self.plan([m], vehicles)
+        self.assertTrue(plan.planned[0].satisfied)
+        self.assertIn(10, plan.planned[0].vehicle_ids)
+
+    def test_seg_elw_preference_decays_once_patients_are_already_cleared(self):
+        # possible_patients_count is a static ceiling that never drops; the
+        # preference must track the RECONCILED (revealed) patient count, not
+        # just that ceiling, once vehicle_state shows units already on scene
+        # and patients_count authoritatively reads 0 (already transported) --
+        # otherwise SEG-ELW stays "preferred" for a mission whose casualty
+        # burden has already resolved.
+        m = mission(1, 2, NEAR, vehicle_state=1, patients_count=0, possible_patients_count=20)
+        vehicles = self._mission2_support() + [vehicle(10, 59), vehicle(11, 3)]
+        plan = self.plan([m], vehicles)
+        self.assertTrue(plan.planned[0].satisfied)
+        self.assertIn(11, plan.planned[0].vehicle_ids)     # back to plain ELW1
+        self.assertNotIn(10, plan.planned[0].vehicle_ids)  # no longer preferred
+
+    def test_elw2_drohne_deprioritized_via_missing_text_path(self):
+        # The catalogue class map doesn't include 129 for battalion_chief (it
+        # only appears there via the revealed missing_text "ELW 1" category,
+        # a different code path than the other ELW tests above) -- confirm
+        # the specialist penalty still applies once it becomes eligible.
+        m = mission(1, 1, NEAR, missing_text='{"vehicles":"1 ELW 1","personnel":"","other":""}')
+        plan = self.plan([m], [vehicle(10, 129), vehicle(11, 3)])
+        self.assertTrue(plan.planned[0].satisfied)
+        self.assertIn(11, plan.planned[0].vehicle_ids)
+        self.assertNotIn(10, plan.planned[0].vehicle_ids)
+
+    # -- MZB water-rescue escort (Sasha, 2026-09-11) ----------------------
+
+    def _mzb_mission(self, **kw):
+        return mission(1, 1, NEAR, missing_text='{"vehicles":"1 Boot","personnel":"","other":""}', **kw)
+
+    def test_mzb_escort_sent_from_same_station(self):
+        mzb = vehicle(100, 70, building_id=1)
+        same_station_diver = vehicle(101, 63, building_id=1)
+        same_station_water = vehicle(102, 64, building_id=1)
+        other_station_diver = vehicle(103, 63, building_id=2)
+        plan = self.plan([self._mzb_mission()], [mzb, same_station_diver, same_station_water, other_station_diver])
+        ids = set(plan.planned[0].vehicle_ids)
+        self.assertEqual(ids, {100, 101, 102})
+
+    def test_mzb_escort_falls_back_to_nearest_when_no_same_station_escort(self):
+        mzb = vehicle(100, 70, building_id=1)
+        diver_elsewhere = vehicle(101, 63, building_id=2)
+        plan = self.plan([self._mzb_mission()], [mzb, diver_elsewhere])
+        self.assertIn(101, plan.planned[0].vehicle_ids)
+
+    def test_mzb_unknown_station_does_not_falsely_match_another_unknown_station(self):
+        # Both building_id=None (unknown station) must NOT be treated as
+        # "same station" just because None == None -- that would wrongly
+        # prefer this candidate over a genuinely nearer, known-station one.
+        mzb = vehicle(100, 70, pos=NEAR, building_id=None)
+        unknown_station_far = vehicle(101, 63, pos=FAR, building_id=None)
+        known_station_near = vehicle(102, 63, pos=NEAR2, building_id=5)
+        plan = self.plan([self._mzb_mission()], [mzb, unknown_station_far, known_station_near])
+        self.assertIn(102, plan.planned[0].vehicle_ids)
+        self.assertNotIn(101, plan.planned[0].vehicle_ids)
+
+    def test_mzb_dispatch_not_blocked_when_no_escort_available(self):
+        # Not a hard blocker -- the MZB itself still goes, and the mission is
+        # still fully satisfied, when no diver/water-rescue unit is idle.
+        mzb = vehicle(100, 70, building_id=1)
+        plan = self.plan([self._mzb_mission()], [mzb])
+        self.assertTrue(plan.planned[0].satisfied)
+        self.assertEqual(plan.planned[0].vehicle_ids, (100,))
+
+    def test_no_escort_added_when_no_mzb_is_dispatched(self):
+        # Sanity: a mission needing an LF doesn't pick up water-rescue escorts.
+        plan = self.plan([mission(1, 1, NEAR)], [vehicle(100, LF), vehicle(101, 63), vehicle(102, 64)])
         self.assertEqual(plan.planned[0].vehicle_ids, (100,))
 
 

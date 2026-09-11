@@ -30,7 +30,7 @@ from enum import Enum
 from .coverage import select_coverage
 from .geo import haversine_km, nearest_km
 from .missingtext import parse_missing_text
-from .resolver import MissionRequirementResolver
+from .resolver import MissionRequirementResolver, _casualties
 
 
 class DispatchOrder(str, Enum):
@@ -679,6 +679,60 @@ def _fire_personnel_topup(chosen_ids, pool, resolver, need, mission_pos, buildin
     return extra, max(0, need - have)
 
 
+# ELW-family vehicles that are also valuable elsewhere (SEG-ELW: preferred
+# for its own automatic patient handling on mass-casualty missions;
+# ELW2-Drohne: also a drone) -- deprioritized for a plain ELW slot so they
+# aren't spent on ordinary missions when a generic ELW1/ELW2 would do just
+# as well. Confirmed by Sasha, 2026-09-11.
+_ELW_SPECIALIST_TYPE_IDS = frozenset({59, 129})  # SEG-ELW, ELW2-Drohne
+# SEG-ELW specifically becomes the BETTER choice (not just an acceptable
+# substitute) once a mission's casualty load is heavy enough that its
+# automatic patient-FSM handling earns its keep.
+_SEG_ELW_TYPE_ID = 59
+_SEG_ELW_PREFERRED_PATIENT_THRESHOLD = 20
+
+# The self-propelled Mehrzweckboot (not its trailers -- Anh MzB/SchlB/MzAB,
+# types 66/67/68/71, which move only when towed by something else already).
+_MZB_TYPE_ID = 70
+
+
+def _add_water_rescue_escort(chosen, pool, resolver, mission_pos, building_pos):
+    """A dispatched MZB always wants a GW-Taucher + GW-Wasserrettung riding
+    along too, preferably from the SAME STATION (confirmed by Sasha,
+    2026-09-11). Purely opportunistic: never a hard requirement, never
+    recorded as a shortfall, never blocks the MZB's own dispatch -- if
+    either escort isn't idle and available, that one is just skipped.
+    """
+    by_id = {v.id: v for v in pool}
+    mzb = next(
+        (by_id[i] for i in chosen if i in by_id and by_id[i].type_id == _MZB_TYPE_ID),
+        None,
+    )
+    if mzb is None:
+        return chosen
+
+    lib = resolver.library
+    dist = _distance_fn(mission_pos, building_pos)
+    chosen_set = set(chosen)
+    extra = list(chosen)
+    for escort_class in ("diver_units", "gw_wasser"):  # GW-Taucher, GW-Wasserrettung
+        wanted = set(lib.class_map.by_class.get(escort_class, ()))
+        candidates = [v for v in pool if v.id not in chosen_set and v.type_id in wanted]
+        if not candidates:
+            continue
+        # `is not None` guard: two vehicles with an UNKNOWN station both read
+        # building_id=None, which would otherwise compare equal and wrongly
+        # look like a same-station match.
+        same_station = [
+            v for v in candidates
+            if mzb.building_id is not None and v.building_id == mzb.building_id
+        ]
+        pick = min(same_station or candidates, key=dist)
+        extra.append(pick.id)
+        chosen_set.add(pick.id)
+    return extra
+
+
 def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
               text_engine=None, allow_partial=False, patient_only=False, shortfalls=None):
     """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string.
@@ -720,7 +774,28 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
         return "already covered"
 
     if requirements:
-        coverage = select_coverage(requirements, pool, distance_of=_distance_fn(mission.position, building_pos))
+        # Same revealed-vs-possible reconciliation _casualty_counts uses for
+        # ambulances (resolver.py) -- NOT a plain max(), which would never
+        # decay: possible_patients_count is a static per-mission ceiling, so
+        # once units are on scene and patients_count authoritatively drops
+        # (most already transported), the SEG-ELW preference must drop with
+        # it rather than staying "preferred" for the mission's whole life.
+        count_revealed = getattr(mission, "vehicle_state", 0) >= 1
+        patient_load = _casualties(
+            int(getattr(mission, "patients_count", 0) or 0),
+            int(getattr(mission, "possible_patients_count", 0) or 0),
+            getattr(mtype, "possible_patient", 0) if mtype is not None else 0,
+            count_revealed,
+        )
+        preferred = (
+            frozenset({_SEG_ELW_TYPE_ID})
+            if patient_load >= _SEG_ELW_PREFERRED_PATIENT_THRESHOLD
+            else frozenset()
+        )
+        coverage = select_coverage(
+            requirements, pool, distance_of=_distance_fn(mission.position, building_pos),
+            specialist_type_ids=_ELW_SPECIALIST_TYPE_IDS, preferred_type_ids=preferred,
+        )
         chosen = list(coverage.vehicle_ids)
         satisfied = coverage.satisfied
         shortfall = dict(coverage.shortfall)
@@ -761,6 +836,10 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
         and len(chosen) > policy.max_vehicles_per_mission
     ):
         return f"needs {len(chosen)} > cap {policy.max_vehicles_per_mission}"
+
+    # Opportunistic add-on, after every gating check above: never causes a
+    # mission to be skipped or capped, and never affects `satisfied`/shortfall.
+    chosen = _add_water_rescue_escort(chosen, pool, resolver, mission.position, building_pos)
 
     mission_plan = MissionPlan(
         mission_id=mission.id,

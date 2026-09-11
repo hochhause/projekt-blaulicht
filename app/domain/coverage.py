@@ -63,11 +63,28 @@ def select_coverage(
     requirements: Iterable[Requirement],
     vehicles: Iterable[_HasType],
     distance_of: Callable[[_HasType], float] | None = None,
+    specialist_type_ids: frozenset[int] = frozenset(),
+    preferred_type_ids: frozenset[int] = frozenset(),
 ) -> CoverageResult:
     """Greedily pick the fewest *vehicles* covering all *requirements*.
 
     *distance_of*, if given, ranks equally-covering candidates nearest-first;
     otherwise ties fall back to a stable order by vehicle id.
+
+    *specialist_type_ids* / *preferred_type_ids* add a middle tiebreak
+    dimension, between "covers the most" and distance, for when several
+    DIFFERENT vehicle types are equally eligible for the same open
+    requirement(s): a specialist type (one with a valuable OTHER use
+    elsewhere — e.g. an ELW2-Drohne also serves as a drone) is picked LAST
+    among equals, since sending it here spends a vehicle that could be doing
+    its specialty job instead; a preferred type is picked FIRST, overriding
+    even that (e.g. a SEG-ELW's automatic patient handling makes it the
+    actively better choice on a mass-casualty mission, not just an
+    acceptable substitute). Neither ever excludes a vehicle — both are only
+    a tiebreak among vehicles that already cover equally many open
+    requirements, so a specialist is still used when it's the only option
+    (never a hard blocker). Both default to empty (no change from plain
+    coverage-then-distance).
     """
     reqs = [r for r in requirements if r.count > 0]
     remaining = {i: r.count for i, r in enumerate(reqs)}
@@ -82,8 +99,16 @@ def select_coverage(
             if remaining[i] > 0 and vehicle.type_id in r.type_ids
         ]
 
+    def tier(vehicle) -> int:
+        if vehicle.type_id in preferred_type_ids:
+            return 0
+        if vehicle.type_id in specialist_type_ids:
+            return 2
+        return 1
+
     while any(v > 0 for v in remaining.values()) and pool:
-        # Best = covers the most open requirements; nearest breaks ties.
+        # Best = covers the most open requirements; preference tier, then
+        # nearest, break ties.
         best = None
         best_key = None
         for vehicle in pool:
@@ -91,7 +116,7 @@ def select_coverage(
             if not covered:
                 continue
             dist = distance_of(vehicle) if distance_of else 0.0
-            key = (-len(covered), dist, vehicle.id)
+            key = (-len(covered), tier(vehicle), dist, vehicle.id)
             if best_key is None or key < best_key:
                 best, best_key, best_covered = vehicle, key, covered
 
