@@ -61,14 +61,27 @@ def _dispatch_verb(mission, assigned: dict, mission_id: int) -> str:
     return "dispatched"
 
 
+class DispatchOutcome(Protocol):
+    """Structural shape of a dispatch result: an ``ok`` (HTTP-transport-level
+    success) flag and a ``rejected`` mapping of vehicle id -> the game's own
+    reason text, for every vehicle explicitly named as unusable within an
+    otherwise-``ok`` batch — e.g. missing crew or its towing vehicle isn't at
+    the station (confirmed live 2026-09-11). Kept structural (not importing
+    ``app.game.client.DispatchResult`` directly) so this module stays
+    testable without httpx installed."""
+
+    ok: bool
+    rejected: dict[int, str]
+
+
 class GameClientLike(Protocol):
     """The slice of the game client the runner needs."""
 
     async def fetch_missions(self) -> list: ...
     async def fetch_vehicles(self, cap: int = 0) -> list: ...
     async def fetch_buildings(self) -> list: ...
-    async def dispatch(self, mission_id: int, vehicle_id: int) -> bool: ...
-    async def dispatch_many(self, mission_id: int, vehicle_ids: list[int]) -> bool: ...
+    async def dispatch(self, mission_id: int, vehicle_id: int) -> DispatchOutcome: ...
+    async def dispatch_many(self, mission_id: int, vehicle_ids: list[int]) -> DispatchOutcome: ...
     async def transport_targets(self, vehicle_id: int) -> list[str]: ...
     async def send_transport(self, action_url: str) -> bool: ...
     async def share_mission(self, mission_id: int) -> bool: ...
@@ -184,11 +197,17 @@ class DispatchRunner:
             except Exception:  # noqa: BLE001 — logging must never break the cycle
                 logger.exception("on_log hook failed")
 
-    def _record_dispatch_failure(self, vehicle, vehicle_id: int, now: float, report) -> None:
+    def _record_dispatch_failure(
+        self, vehicle, vehicle_id: int, now: float, report, *, reason: str | None = None
+    ) -> None:
         """A vehicle that LOOKED dispatchable (FMS 1/2, in the fleet) failed to
-        send — most often it has no crew. Strike the specific vehicle; after 3
-        such failures in 24h the planner drops it from the pool. Also surface it
-        on the dashboard's "struggling to field" list (trouble dispatching)."""
+        send. If *reason* is given, the game itself confirmed why (e.g. "missing
+        crew" or "towing vehicle not at the station" — live-verified 2026-09-11,
+        the alarm response carries an alert-danger div naming the vehicle) —
+        strike it out IMMEDIATELY, since that's much stronger evidence than an
+        ambiguous HTTP-level failure. Otherwise strike normally (3 such
+        failures in 24h before the planner drops it from the pool). Either way,
+        surface it on the dashboard's "struggling to field" list."""
         label = (
             getattr(vehicle, "type_caption", "")
             or getattr(vehicle, "caption", "")
@@ -198,9 +217,13 @@ class DispatchRunner:
         tally[label] = tally.get(label, 0) + 1
         if self._strikes is None:
             return
+        name = _vehicle_name(vehicle, vehicle_id)
+        if reason is not None:
+            self._strikes.record_confirmed_failure(str(vehicle_id), now)
+            self._log(f"struck out {name}: game rejected it ({reason}) — skipping until it clears")
+            return
         self._strikes.record([str(vehicle_id)], now)
         if self._strikes.is_struck(str(vehicle_id), now):
-            name = _vehicle_name(vehicle, vehicle_id)
             self._log(
                 f"struck out {name}: failed to dispatch 3× — likely no crew; "
                 f"skipping this vehicle for 24h"
@@ -317,11 +340,24 @@ class DispatchRunner:
             verb = _dispatch_verb(by_id.get(mid), assigned, mid)
             sent = 0
             # One alarm POST for the whole mission (the game's multi-select form).
-            if await self._client.dispatch_many(mid, ids):
-                sent = len(ids)
+            result = await self._client.dispatch_many(mid, ids)
+            if result.ok:
+                # The POST succeeded, but the game may still have explicitly
+                # rejected specific vehicles within it (missing crew / its
+                # towing vehicle isn't at the station — live-verified
+                # 2026-09-11) rather than erroring the whole request. Those
+                # are struck immediately, not counted as dispatched.
+                succeeded = [v for v in ids if v not in result.rejected]
+                sent = len(succeeded)
                 report.dispatched += sent
-                names = ", ".join(_vehicle_name(veh_by_id.get(v), v) for v in ids)
-                self._log(f"{verb} {sent} → #{mid} {cap!r}: {names}")
+                if succeeded:
+                    names = ", ".join(_vehicle_name(veh_by_id.get(v), v) for v in succeeded)
+                    self._log(f"{verb} {sent} → #{mid} {cap!r}: {names}")
+                for vehicle_id, reason in result.rejected.items():
+                    report.failed += 1
+                    self._record_dispatch_failure(
+                        veh_by_id.get(vehicle_id), vehicle_id, now, report, reason=reason
+                    )
                 await self._timing.sleep(self._timing.dispatch_gap())
             else:
                 # Batch failed — retry one-by-one so we can isolate and strike the
@@ -329,14 +365,18 @@ class DispatchRunner:
                 self._log(f"batch dispatch failed for #{mid} {cap!r} — retrying individually")
                 for vehicle_id in ids:
                     name = _vehicle_name(veh_by_id.get(vehicle_id), vehicle_id)
-                    if await self._client.dispatch(mid, vehicle_id):
+                    single = await self._client.dispatch(mid, vehicle_id)
+                    if single.ok and vehicle_id not in single.rejected:
                         report.dispatched += 1
                         sent += 1
                         self._log(f"{verb} {name} → #{mid} {cap!r}")
                     else:
                         report.failed += 1
-                        self._log(f"FAILED {name} → #{mid} {cap!r} (no crew?)")
-                        self._record_dispatch_failure(veh_by_id.get(vehicle_id), vehicle_id, now, report)
+                        reason = single.rejected.get(vehicle_id)
+                        self._log(f"FAILED {name} → #{mid} {cap!r} ({reason or 'no crew?'})")
+                        self._record_dispatch_failure(
+                            veh_by_id.get(vehicle_id), vehicle_id, now, report, reason=reason
+                        )
                     await self._timing.sleep(self._timing.dispatch_gap())
             if not mission_plan.satisfied:
                 self._log(f"#{mid} still MISSING {mission_plan.shortfall}")

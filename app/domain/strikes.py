@@ -38,6 +38,15 @@ class StrikeTracker:
             if not was_struck and self._on_struck is not None and self.is_struck(cls, now):
                 self._on_struck(cls)
 
+    def record_confirmed_failure(self, cls: str, now: float) -> None:
+        """Strike *cls* out IMMEDIATELY, bypassing the normal 3-in-24h count
+        (Sasha, 2026-09-11) — for a CONFIRMED failure (the game itself named
+        the vehicle and the reason it can't dispatch, e.g. "missing crew" /
+        "towing vehicle not at the station"), which is much stronger
+        evidence than :meth:`record`'s normal use (an ambiguous HTTP-level
+        dispatch failure that could be transient)."""
+        self.record([cls] * self._threshold, now)
+
     def is_struck(self, cls: str, now: float) -> bool:
         """True if *cls* has reached the threshold within the window. Prunes
         strikes older than the window as a side effect."""

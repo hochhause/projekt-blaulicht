@@ -177,12 +177,24 @@ class GroupCoordinator:
                     continue
                 ids = list(ids)
                 verb = _dispatch_verb(mission_obj, already_participating, aid)
-                if await member.client.dispatch_many(gmp.mission_id, ids):
-                    dispatched += len(ids)
-                    names = ", ".join(_name(veh_by_id.get(v), v) for v in ids)
-                    self._log(f"[#{aid}] {verb} → #{gmp.mission_id} {gmp.caption!r}: {names}")
-                    if self._on_stat is not None:
-                        self._on_stat(aid, len(ids), 1)
+                result = await member.client.dispatch_many(gmp.mission_id, ids)
+                if result.ok:
+                    # The POST succeeded, but the game may have explicitly
+                    # rejected specific vehicles within it (missing crew /
+                    # its towing vehicle isn't at the station — live-verified
+                    # 2026-09-11) rather than erroring the whole request.
+                    strike_now = time.time()
+                    succeeded = [v for v in ids if v not in result.rejected]
+                    dispatched += len(succeeded)
+                    if succeeded:
+                        names = ", ".join(_name(veh_by_id.get(v), v) for v in succeeded)
+                        self._log(f"[#{aid}] {verb} → #{gmp.mission_id} {gmp.caption!r}: {names}")
+                    for vehicle_id, reason in result.rejected.items():
+                        name = _name(veh_by_id.get(vehicle_id), vehicle_id)
+                        self._log(f"[#{aid}] struck out {name}: game rejected it ({reason})")
+                        member.strikes.record_confirmed_failure(str(vehicle_id), strike_now)
+                    if self._on_stat is not None and succeeded:
+                        self._on_stat(aid, len(succeeded), 1)
                     await self._sleep(self._jittered_gap())
                 else:
                     # Batch failed — retry one-by-one so we can isolate and
@@ -196,15 +208,21 @@ class GroupCoordinator:
                     sent = 0
                     for vehicle_id in ids:
                         name = _name(veh_by_id.get(vehicle_id), vehicle_id)
-                        if await member.client.dispatch(gmp.mission_id, vehicle_id):
+                        single = await member.client.dispatch(gmp.mission_id, vehicle_id)
+                        if single.ok and vehicle_id not in single.rejected:
                             dispatched += 1
                             sent += 1
                             self._log(f"[#{aid}] {verb} → #{gmp.mission_id} {gmp.caption!r}: {name}")
                         else:
-                            self._log(f"[#{aid}] FAILED {name} → #{gmp.mission_id} {gmp.caption!r} (no crew?)")
-                            member.strikes.record([str(vehicle_id)], strike_now)
-                            if member.strikes.is_struck(str(vehicle_id), strike_now):
-                                self._log(f"[#{aid}] struck out {name}: failed to dispatch 3× — skipping 24h")
+                            reason = single.rejected.get(vehicle_id)
+                            self._log(f"[#{aid}] FAILED {name} → #{gmp.mission_id} {gmp.caption!r} ({reason or 'no crew?'})")
+                            if reason is not None:
+                                member.strikes.record_confirmed_failure(str(vehicle_id), strike_now)
+                                self._log(f"[#{aid}] struck out {name}: game rejected it ({reason})")
+                            else:
+                                member.strikes.record([str(vehicle_id)], strike_now)
+                                if member.strikes.is_struck(str(vehicle_id), strike_now):
+                                    self._log(f"[#{aid}] struck out {name}: failed to dispatch 3× — skipping 24h")
                         await self._sleep(self._jittered_gap())
                     # One mission-send counted, like the batch-success path —
                     # not once per vehicle (that inflated the dashboard's

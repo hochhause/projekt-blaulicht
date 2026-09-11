@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,12 @@ BUILDING = (52.5200, 13.4050)
 NEAR = (52.5300, 13.4100)
 
 
+def _result(ok: bool, rejected: dict[int, str] | None = None) -> SimpleNamespace:
+    """A DispatchOutcome-shaped fake result (ok + rejected), without pulling
+    in app.game.client's httpx-dependent import chain."""
+    return SimpleNamespace(ok=ok, rejected=rejected or {})
+
+
 class FakeClient:
     """Records dispatch calls; serves canned reads. No network."""
 
@@ -27,6 +34,9 @@ class FakeClient:
         self.transports: list[tuple[str, int, int]] = []
         self.shared: list[int] = []
         self.recalled: list[int] = []
+        # vehicle_id -> reason: simulate the game explicitly rejecting a
+        # specific vehicle within an otherwise-ok batch/single dispatch.
+        self.rejections: dict[int, str] = {}
 
     async def fetch_missions(self):
         return self._missions
@@ -39,12 +49,17 @@ class FakeClient:
 
     async def dispatch(self, mission_id, vehicle_id):
         self.dispatched.append((mission_id, vehicle_id))
-        return True
+        reason = self.rejections.get(vehicle_id)
+        return _result(True, {vehicle_id: reason} if reason else None)
 
     async def dispatch_many(self, mission_id, vehicle_ids):
+        rejected = {}
         for vid in vehicle_ids:
             self.dispatched.append((mission_id, vid))
-        return True
+            reason = self.rejections.get(vid)
+            if reason:
+                rejected[vid] = reason
+        return _result(True, rejected)
 
     async def transport_targets(self, vehicle_id):
         # one hospital offered per vehicle
@@ -83,7 +98,7 @@ class RunnerTests(unittest.TestCase):
         catalog = MissionCatalog.from_payload(json.loads(FIXTURE.read_text(encoding="utf-8")))
         cls.resolver = MissionRequirementResolver(catalog, library)
 
-    def _runner(self, client, on_log=None):
+    def _runner(self, client, on_log=None, strikes=None):
         # No-op sleep so the test is instant.
         async def no_sleep(_):
             return None
@@ -91,7 +106,7 @@ class RunnerTests(unittest.TestCase):
         return DispatchRunner(
             client, self.resolver, DispatchPolicy(radius_km=40),
             timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
-            on_log=on_log,
+            on_log=on_log, strikes=strikes,
         )
 
     def test_cycle_dispatches_planned_vehicles(self):
@@ -200,7 +215,7 @@ class RunnerTests(unittest.TestCase):
         client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
 
         async def fail(*args):
-            return False
+            return _result(False)
 
         client.dispatch = fail
         client.dispatch_many = fail  # batch fails -> falls back to single, also fails
@@ -220,7 +235,7 @@ class RunnerTests(unittest.TestCase):
 
         async def counting_single(mission_id, vid):
             calls["single"] += 1
-            return True
+            return _result(True)
 
         client.dispatch_many = counting_many
         client.dispatch = counting_single
@@ -241,7 +256,7 @@ class RunnerTests(unittest.TestCase):
         client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
 
         async def fail(mission_id, vehicle_id):
-            return False
+            return _result(False)
 
         client.dispatch = fail
         client.dispatch_many = fail  # batch fails -> per-vehicle fallback isolates + strikes
@@ -266,6 +281,46 @@ class RunnerTests(unittest.TestCase):
         report2 = asyncio.run(runner.run_cycle())
         self.assertEqual(report2.failed, 0)
         self.assertEqual(report2.dispatched, 0)
+
+    # -- confirmed game rejection (Sasha, 2026-09-11) ---------------------
+
+    def test_confirmed_rejection_within_an_ok_batch_strikes_immediately(self):
+        # The alarm POST succeeds overall (ok=True), but the game explicitly
+        # rejected one vehicle within it (e.g. "towing vehicle not at the
+        # station") -- that vehicle must be struck out on ONE occurrence, not
+        # counted as dispatched, and not require the normal 3-strike wait.
+        from app.domain.strikes import StrikeTracker
+
+        client = FakeClient([m(1, 3)], [v(100, 0), v(101, 32)], [b()])  # LF + FuStW
+        client.rejections = {101: "Das Zugfahrzeug befindet sich nicht auf der Wache."}
+        strikes = StrikeTracker()  # default threshold=3
+        lines: list[str] = []
+        report = asyncio.run(self._runner(client, on_log=lines.append, strikes=strikes).run_cycle())
+
+        self.assertEqual(report.dispatched, 1)   # only the LF counted
+        self.assertEqual(report.failed, 1)       # the rejected FuStW counted as failed
+        self.assertTrue(strikes.is_struck("101", time.time()))  # struck immediately, threshold bypassed
+        self.assertTrue(any("game rejected it" in ln for ln in lines))
+        self.assertTrue(any("Zugfahrzeug" in ln for ln in lines))  # reason surfaced in the log
+
+    def test_confirmed_rejection_in_the_per_vehicle_retry_path_also_strikes_immediately(self):
+        # Same confirmed-rejection handling applies when the batch itself
+        # failed and we fall back to dispatching one vehicle at a time.
+        from app.domain.strikes import StrikeTracker
+
+        client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
+        client.rejections = {100: "Die Besatzung ist nicht vollständig."}
+
+        async def fail_batch(*args):
+            return _result(False)
+
+        client.dispatch_many = fail_batch  # forces the per-vehicle retry path
+        strikes = StrikeTracker()
+        report = asyncio.run(self._runner(client, strikes=strikes).run_cycle())
+
+        self.assertEqual(report.dispatched, 0)
+        self.assertEqual(report.failed, 1)
+        self.assertTrue(strikes.is_struck("100", time.time()))
 
     def test_patient_only_recalls_idle_units_when_cleared(self):
         # A mission whose patients are all gone (patients_count 0, vehicle_state 1):

@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import logging
 import re
+from types import MappingProxyType
+from typing import NamedTuple
 
 from .models import Building, Mission, Vehicle
 from .session import GameSession
@@ -36,6 +38,65 @@ from .session import GameSession
 _APPROACH = re.compile(
     r"""href=["'](/vehicles/\d+/(?:patient|gefangener)/\d+[^"']*)["']"""
 )
+
+# Live-verified 2026-09-11: an alarm POST that includes a vehicle the game
+# can't actually use (missing crew, or its towing vehicle isn't at the
+# station) still succeeds at the HTTP level — the response page just carries
+# a Bootstrap alert-danger div per rejected vehicle, e.g.:
+#   <div id="alert_danger_..." class="alert fade in alert-danger  ">
+#     <button ...>×</button><a href="/vehicles/125521931">🟢 Anh TeSi</a>:
+#     Das Zugfahrzeug befindet sich nicht auf der Wache.</div>
+# Matched generically on the alert-danger class + a /vehicles/{id} link,
+# NOT on the specific reason text (which varies by failure — missing crew
+# vs. missing tow vehicle — and we don't have every exact wording), so any
+# reason the game reports this way is caught the same way.
+#
+# Every gap uses a bounded "any char that doesn't start a div tag" class
+# (`(?:(?!</?div\b).)*?`), NOT a bare `.*?` — code review (2026-09-11) found
+# that a bare lazy dot-match under DOTALL happily crosses `</div>`/`<div>`
+# boundaries: an alert-danger div with NO vehicle link at all (a generic
+# error banner, plausible on a real page) would let the match run on and
+# latch onto the FIRST unrelated `<a href="/vehicles/…">…</a>: …</div>` found
+# ANYWHERE later on the page — e.g. a perfectly healthy vehicle's own status
+# row — and misreport it as a confirmed rejection, striking a healthy
+# vehicle out immediately. Bounding every gap to the current div closes that.
+_DISPATCH_FAILURE = re.compile(
+    r'class="[^"]*\balert-danger\b[^"]*"[^>]*>'
+    r'(?:(?!</?div\b).)*?'
+    r'<a href="/vehicles/(\d+)"[^>]*>'
+    r'(?:(?!</?div\b).)*?</a>'
+    r'\s*:\s*'
+    r'((?:(?!</?div\b).)*?)'
+    r'</div>',
+    re.DOTALL,
+)
+
+
+def _parse_dispatch_failures(html: str) -> dict[int, str]:
+    """Vehicles the game explicitly rejected in an alarm response, keyed by
+    id, with the reason text — see ``_DISPATCH_FAILURE``. Empty if the game
+    accepted every vehicle (the common case)."""
+    return {int(vid): reason.strip() for vid, reason in _DISPATCH_FAILURE.findall(html)}
+
+
+_NO_REJECTIONS: "MappingProxyType[int, str]" = MappingProxyType({})
+
+
+class DispatchResult(NamedTuple):
+    """Outcome of a dispatch attempt.
+
+    ``ok`` is the HTTP-transport-level result (unchanged meaning from the old
+    plain-bool return) — a POST that goes through is ``ok=True`` even if the
+    game rejected some vehicles within it. ``rejected`` maps vehicle id (among
+    the ones attempted) to the game's own reason text, for every vehicle it
+    explicitly named as unusable — the caller should strike these
+    immediately (see ``StrikeTracker.record_confirmed_failure``) rather than
+    count them as dispatched.
+    """
+
+    ok: bool
+    rejected: "MappingProxyType[int, str]" = _NO_REJECTIONS
+
 
 logger = logging.getLogger(__name__)
 
@@ -166,24 +227,26 @@ class GameClient:
         return _as_list(payload)
 
     # -- actions -----------------------------------------------------------
-    async def dispatch_many(self, mission_id: int, vehicle_ids) -> bool:
+    async def dispatch_many(self, mission_id: int, vehicle_ids) -> DispatchResult:
         """Dispatch one or more vehicles to a mission in a SINGLE alarm POST —
         the same multi-select form the browser submits (repeated ``vehicle_ids[]``).
 
         Loads the mission page once for a fresh authenticity token, then posts the
-        whole batch. One token + one request for the whole mission.
+        whole batch. One token + one request for the whole mission. ``ok=True``
+        means the POST went through — some of the vehicles in it may still have
+        been rejected by the game (see :attr:`DispatchResult.rejected`).
         """
         ids = [int(v) for v in vehicle_ids]
         if not ids:
-            return False
+            return DispatchResult(ok=False)
         page = await self._s.get_text(f"/missions/{mission_id}?{_CTX}")
         token = self._s.extract_form_token(page) or self._s.csrf_token
         if not token:
             logger.warning("dispatch %s: no authenticity token found", mission_id)
-            return False
+            return DispatchResult(ok=False)
 
         try:
-            await self._s.post_form(
+            resp = await self._s.post_form(
                 f"/missions/{mission_id}/alarm?{_CTX}",
                 {
                     "utf8": "✓",
@@ -201,10 +264,13 @@ class GameClient:
             )
         except Exception:  # noqa: BLE001 — caller decides how to react
             logger.exception("dispatch %s <- vehicles %s failed", mission_id, ids)
-            return False
-        return True
+            return DispatchResult(ok=False)
+        attempted = set(ids)
+        failures = _parse_dispatch_failures(resp.text)
+        rejected = {vid: reason for vid, reason in failures.items() if vid in attempted}
+        return DispatchResult(ok=True, rejected=MappingProxyType(rejected) if rejected else _NO_REJECTIONS)
 
-    async def dispatch(self, mission_id: int, vehicle_id: int) -> bool:
+    async def dispatch(self, mission_id: int, vehicle_id: int) -> DispatchResult:
         """Dispatch a single vehicle (a one-element :meth:`dispatch_many`) — used
         as the isolation fallback when a batch dispatch fails."""
         return await self.dispatch_many(mission_id, [vehicle_id])

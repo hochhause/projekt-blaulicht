@@ -57,6 +57,12 @@ class AllianceBoard:
             self.visible[mission.id] = mission
 
 
+def _result(ok: bool, rejected: dict[int, str] | None = None) -> SimpleNamespace:
+    """A DispatchOutcome-shaped fake result (ok + rejected), without pulling
+    in app.game.client's httpx-dependent import chain."""
+    return SimpleNamespace(ok=ok, rejected=rejected or {})
+
+
 class FakeClient:
     def __init__(self, own_missions, board: AllianceBoard, vehicles=None):
         self.own = {m.id: m for m in own_missions}
@@ -64,6 +70,9 @@ class FakeClient:
         self.vehicles = vehicles or []
         self.dispatched: list[tuple[int, list[int]]] = []
         self.shared_ids: set[int] = set()
+        # vehicle_id -> reason: simulate the game explicitly rejecting a
+        # specific vehicle within an otherwise-ok batch/single dispatch.
+        self.rejections: dict[int, str] = {}
 
     async def fetch_vehicles(self, cap=0):
         return self.vehicles
@@ -84,13 +93,15 @@ class FakeClient:
             self.shared_ids.add(mission_id)
         return True
 
-    async def dispatch_many(self, mission_id, vehicle_ids) -> bool:
+    async def dispatch_many(self, mission_id, vehicle_ids):
         self.dispatched.append((mission_id, list(vehicle_ids)))
-        return True
+        rejected = {vid: self.rejections[vid] for vid in vehicle_ids if vid in self.rejections}
+        return _result(True, rejected)
 
-    async def dispatch(self, mission_id, vehicle_id) -> bool:
+    async def dispatch(self, mission_id, vehicle_id):
         self.dispatched.append((mission_id, [vehicle_id]))
-        return True
+        reason = self.rejections.get(vehicle_id)
+        return _result(True, {vehicle_id: reason} if reason else None)
 
 
 class FakeMember:
@@ -213,13 +224,13 @@ class GroupCoordinatorStrikeTests(unittest.TestCase):
 
         class FlakyBatchClient(FakeClient):
             async def dispatch_many(self, mission_id, vehicle_ids):
-                return False  # always fails -> forces the per-vehicle retry
+                return _result(False)  # always fails -> forces the per-vehicle retry
 
-            async def dispatch(self, mission_id, vehicle_id) -> bool:
+            async def dispatch(self, mission_id, vehicle_id):
                 if vehicle_id == 103:  # the "crewless" one
-                    return False
+                    return _result(False)
                 self.dispatched.append((mission_id, [vehicle_id]))
-                return True
+                return _result(True)
 
         client_a = FlakyBatchClient([mission], board, vehicles=[
             _vehicle(100, type_id=0), _vehicle(101, type_id=0),  # 2x LF (firetrucks)
@@ -244,6 +255,34 @@ class GroupCoordinatorStrikeTests(unittest.TestCase):
         # "missions" stat.
         self.assertEqual(stat_calls, [(1, 3, 1)])
         self.assertEqual(plan.missions_actioned, 1)  # the mission plan itself still counts as actioned
+
+    def test_confirmed_rejection_within_an_ok_batch_strikes_immediately(self):
+        # The alarm POST succeeds overall (ok=True), but the game explicitly
+        # rejected one vehicle within it -- struck out on ONE occurrence
+        # (bypassing the normal 3-strike wait), and not counted as dispatched.
+        from app.domain.strikes import StrikeTracker
+
+        board = AllianceBoard(propagate=True)
+        mission = _mission(1)
+        mission.mission_type_id = 3  # firetrucks:1, police_cars:1
+
+        client_a = FakeClient([mission], board, vehicles=[
+            _vehicle(100, type_id=0),   # LF
+            _vehicle(101, type_id=32),  # FuStW -- will be rejected
+        ])
+        client_a.rejections = {101: "Das Zugfahrzeug befindet sich nicht auf der Wache."}
+        member_a = FakeMember(client_a, self.resolver)
+        member_a.strikes = StrikeTracker()  # default threshold=3
+        stat_calls = []
+        coordinator = GroupCoordinator(
+            {1: member_a}, GroupPolicy(radius_km=40),
+            on_stat=lambda aid, dispatched, missions: stat_calls.append((aid, dispatched, missions)),
+            share_enabled=False, dispatch_gap=0.0,
+        )
+        asyncio.run(coordinator.run_cycle())
+
+        self.assertTrue(member_a.strikes.is_struck("101", time.time()))
+        self.assertEqual(stat_calls, [(1, 1, 1)])  # only the LF counted as dispatched
 
 
 class GroupCoordinatorDispatchVerbTests(unittest.TestCase):

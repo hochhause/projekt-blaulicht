@@ -368,11 +368,11 @@ class FakeGroupClient:
 
     async def dispatch_many(self, mid, ids):
         self.dispatched.append((mid, tuple(ids)))
-        return True
+        return SimpleNamespace(ok=True, rejected={})
 
     async def dispatch(self, mid, vehicle_id):
         self.dispatched.append((mid, (vehicle_id,)))
-        return True
+        return SimpleNamespace(ok=True, rejected={})
 
     async def share_mission(self, mid):
         self.shared.append(mid)

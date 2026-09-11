@@ -832,3 +832,53 @@ push/merge/rebuild this round.
   test_dispatch.py, confirming the discount is HLF-specific not a general
   derating). 359 tests pass.
 - Verdict: keep-as-is
+
+## app/game/client.py, app/domain/strikes.py, app/core/runner.py, app/core/group_coordinator.py — reviewed 2026-09-11, live gap (confirmed dispatch rejections never detected)
+- User reported (via manual testing, then confirmed the exact live evidence):
+  a vehicle missing crew or a towing vehicle silently fails to dispatch
+  forever. Root cause: the alarm-dispatch endpoint returns HTTP 200 even
+  when it can't use a specific vehicle -- the response page just carries a
+  Bootstrap alert-danger div naming the vehicle and why
+  (`<a href="/vehicles/125521931">🟢 Anh TeSi</a>: Das Zugfahrzeug befindet
+  sich nicht auf der Wache.`, live-captured), which the client already
+  receives (follows redirects) but never reads. The existing strike system
+  only reacts to an outright HTTP-level failure, which this never produces.
+- User made two explicit design calls: (1) a CONFIRMED rejection (the game
+  itself named the vehicle) strikes it out IMMEDIATELY, bypassing the
+  normal 3-in-24h threshold -- stronger evidence than an ambiguous HTTP
+  failure; (2) don't try to model the two different real lockout durations
+  mentioned in passing (1h tow-vehicle vs. "until restart" crew) -- reuse
+  the existing StrikeTracker window uniformly for both.
+- Implementation: `StrikeTracker.record_confirmed_failure()` (front-loads
+  enough strikes to cross threshold in one call, reusing `record()`'s
+  `on_struck` machinery). `_parse_dispatch_failures()` + new
+  `DispatchResult(ok, rejected)` NamedTuple in client.py --
+  `dispatch()`/`dispatch_many()` now read the response body they already
+  had. Both `runner.py` and `group_coordinator.py`'s dispatch loops
+  adjusted to only count non-rejected vehicles as dispatched and strike
+  rejected ones immediately with the reason surfaced in the log -- this
+  ALSO fixed a related, previously-undiscovered bug: a "successful" batch
+  that silently dropped one vehicle was being counted/logged as if every
+  vehicle in it succeeded.
+- Code review (async): BLOCK on a CRITICAL finding, since fixed. The
+  regex's `.*?` gaps (under DOTALL) weren't bounded to the current div --
+  reviewer proved via direct execution that an alert-danger div with NO
+  vehicle link (a plausible generic error banner) would let the match run
+  on PAST its own `</div>` and latch onto the FIRST unrelated
+  `<a href="/vehicles/…">…</a>: …</div>` found anywhere later on the page --
+  e.g. a perfectly healthy vehicle's own status row -- misreporting it as a
+  confirmed rejection and striking it out immediately on zero real
+  evidence. Fixed by bounding every gap with `(?:(?!</?div\b).)*?` so the
+  anchor search can't cross a div boundary; verified against both the real
+  live example and the reviewer's adversarial case before and after the
+  fix. Also closed two LOW-priority test gaps from the same review: an
+  `on_struck`-fires-exactly-once test for `record_confirmed_failure`, and a
+  group_coordinator-level confirmed-rejection test (the FakeClient's
+  `.rejections` mechanism existed but no test ever used it).
+- Stability (1-5): 4 -- 373 tests pass, including the adversarial
+  cross-div-boundary regression test built directly from the reviewer's
+  proof-of-concept. New dedicated `tests/test_client_dispatch.py` covers
+  the parser and `GameClient.dispatch_many`/`dispatch` end-to-end via a
+  fake session; `test_runner.py`/`test_group_coordinator.py` cover both
+  dispatch loops' handling of a confirmed rejection.
+- Verdict: keep-as-is
