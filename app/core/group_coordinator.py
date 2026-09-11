@@ -188,7 +188,9 @@ class GroupCoordinator:
                     dispatched += len(succeeded)
                     if succeeded:
                         names = ", ".join(_name(veh_by_id.get(v), v) for v in succeeded)
-                        self._log(f"[#{aid}] {verb} → #{gmp.mission_id} {gmp.caption!r}: {names}")
+                        self._log(
+                            f"[#{aid}] {verb} {len(succeeded)} → #{gmp.mission_id} {gmp.caption!r}: {names}"
+                        )
                     for vehicle_id, reason in result.rejected.items():
                         name = _name(veh_by_id.get(vehicle_id), vehicle_id)
                         self._log(f"[#{aid}] struck out {name}: game rejected it ({reason})")

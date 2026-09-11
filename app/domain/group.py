@@ -112,6 +112,27 @@ def _note(shortfalls, classes) -> None:
         shortfalls[cls] = shortfalls.get(cls, 0) + 1
 
 
+def _smart_efficiency(mission, mtype, credits, resolver, assigned, text_engine, avg_fire_crew) -> float:
+    """Credits per vehicle needed -- same SMART-order heuristic as solo
+    dispatch (Sasha, 2026-09-11: "the sharing can work on a much faster
+    clock speed... a lot of the settings seem missing from group mode, such
+    as smart planning"). Reuses `_outstanding`, the SAME requirement
+    derivation the real dispatch step (`action()`) uses, so the estimate
+    matches what will actually be sent -- only decides PRIORITY order
+    (which mission group mode works first), not the goal itself; the
+    combined-pool dispatch loop still tries every candidate in this order
+    and crews everything it can, so the outcome is "the most total credits
+    this GROUP's combined fleet can earn right now."""
+    outstanding = _outstanding(mission, resolver, text_engine, assigned)
+    vehicles_needed = sum(r.count for r in outstanding)
+    min_fire = int(getattr(mtype, "min_fire_personnel", 0) or 0) if mtype is not None else 0
+    if min_fire:
+        already = _fire_crew(resolver, assigned.get(mission.id, []))
+        fire_needed = max(0, min_fire - already)
+        vehicles_needed += -(-fire_needed // max(1, int(avg_fire_crew)))  # ceil division
+    return credits / max(1, vehicles_needed)
+
+
 def plan_group_dispatches(
     missions,
     vehicles_by_account: dict[int, list],
@@ -138,6 +159,14 @@ def plan_group_dispatches(
     plan = GroupPlan()
     member_ids = list(vehicles_by_account.keys())
     member_set = set(member_ids)
+
+    # Average firetruck crew size, for SMART order's rough min_fire_personnel
+    # estimate below (same as solo dispatch's avg_fire_crew).
+    _fire_types = [
+        vt for tid, vt in resolver.library.types.items()
+        if tid in resolver.library.class_map.by_class.get("firetrucks", ())
+    ]
+    avg_fire_crew = (sum(vt.planning_personnel for vt in _fire_types) / len(_fire_types)) if _fire_types else 6.0
 
     def _visible(mid: int) -> set[int]:
         return member_set if visible_to is None else visible_to.get(mid, set())
@@ -356,8 +385,15 @@ def plan_group_dispatches(
         dists = [d for d in dists if d is not None]
         mtype = resolver.catalog.get(getattr(mission, "mission_type_id", None))
         credits = getattr(mission, "average_credits", 0) or (mtype.average_credits if mtype else 0)
-        begun_c.append((min(dists) if dists else 0.0, credits, mission))
-    for _d, _c, mission in _order(begun_c, policy.order):
+        dist = min(dists) if dists else 0.0
+        if policy.order is DispatchOrder.SMART:
+            efficiency = _smart_efficiency(mission, mtype, credits, resolver, global_assigned,
+                                            text_engine, avg_fire_crew)
+            begun_c.append((dist, credits, mission, "begun", efficiency))
+        else:
+            begun_c.append((dist, credits, mission))
+    for candidate in _order(begun_c, policy.order):
+        mission = candidate[2]
         reason = action(mission, is_begun=True)
         if reason:
             plan.skipped.append((mission.id, reason))
@@ -393,10 +429,17 @@ def plan_group_dispatches(
         if policy.credit_max and credits > policy.credit_max:
             plan.skipped.append((mission.id, f"above credit ceiling ({credits})"))
             continue
-        fresh_c.append((min(dists), credits, mission))
+        dist = min(dists)
+        if policy.order is DispatchOrder.SMART:
+            efficiency = _smart_efficiency(mission, mtype, credits, resolver, global_assigned,
+                                            text_engine, avg_fire_crew)
+            fresh_c.append((dist, credits, mission, "fresh", efficiency))
+        else:
+            fresh_c.append((dist, credits, mission))
 
     actioned = 0
-    for _d, _c, mission in _order(fresh_c, policy.order):
+    for candidate in _order(fresh_c, policy.order):
+        mission = candidate[2]
         if policy.batch_size is not None and actioned >= policy.batch_size:
             plan.skipped.append((mission.id, "beyond batch size"))
             continue

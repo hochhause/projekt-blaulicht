@@ -486,10 +486,11 @@ def _order(candidates, order: DispatchOrder):
     """Sort (distance, credits, mission) tuples by the chosen strategy."""
     if order is DispatchOrder.SMART:
         # Credits per vehicle needed, descending (index 4 — see plan_dispatches).
-        # group.py's plan_group_dispatches builds plain 3-tuples and rejects
-        # SMART before ever calling here (see GroupConfig.group_policy), so
-        # the exact-5 check below is a belt-and-braces no-op degrade to raw
-        # credits, never expected to actually trigger.
+        # group.py's plan_group_dispatches ALSO builds 5-tuples for SMART now
+        # (Sasha, 2026-09-11 — see _smart_efficiency in app/domain/group.py),
+        # so the exact-5 check below is every candidate list's normal shape
+        # under SMART, not a no-op degrade; a non-SMART order still passes
+        # plain 3-tuples from either module, which fall back to raw credits.
         # ponytail: tuple-shape sniffing, not a typed Candidate — upgrade to a
         # NamedTuple if another field is ever added to either tuple shape.
         return sorted(candidates, key=lambda t: (-(t[4] if len(t) == 5 else t[1]), t[0], t[2].id))

@@ -117,12 +117,12 @@ class GroupConfigTests(unittest.TestCase):
         self.assertTrue(gp.participation)
         self.assertEqual(gp.radius_basis.value, "any")
 
-    def test_smart_order_rejected_falls_back_to_nearest(self):
-        # SMART needs per-candidate requirement resolution plan_group_dispatches
-        # doesn't do -- reject explicitly rather than silently degrade inside
-        # the shared _order() sort (no silent failures on ordering logic).
+    def test_smart_order_maps_through(self):
+        # SMART is supported in group mode too (Sasha, 2026-09-11) --
+        # plan_group_dispatches computes its own per-candidate requirement
+        # estimate (see _smart_efficiency in app/domain/group.py).
         from app.domain.dispatch import DispatchOrder
-        self.assertEqual(GroupConfig(order="smart").group_policy().order, DispatchOrder.NEAREST)
+        self.assertEqual(GroupConfig(order="smart").group_policy().order, DispatchOrder.SMART)
 
     def test_roundtrip_with_members(self):
         cfg = GroupConfig(radius_km=25, credit_max=5000, participation=False,

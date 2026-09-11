@@ -196,6 +196,23 @@ class WebPanelTests(unittest.TestCase):
         self.assertEqual(classify_log("dispatched RTW (#9) → #3"), "log-ok")
         self.assertEqual(classify_log("polled 10 mission(s)"), "log-info")
 
+    def test_classify_log_recognizes_the_new_dispatch_verbs(self):
+        # Sasha, 2026-09-11: "sent to help"/"sent reinforcements" fell
+        # through uncoloured before -- only "dispatched" was recognized.
+        from app.web.app import classify_log
+        self.assertEqual(classify_log("sent to help 2 → #4 'Brand': LF"), "log-ok")
+        self.assertEqual(classify_log("sent reinforcements 1 → #4 'Brand': LF"), "log-ok")
+
+    def test_classify_log_strips_the_group_mode_account_prefix(self):
+        # Group mode prefixes every line with "[#<id>] " -- this made EVERY
+        # group log line fall through uncoloured, since all the rules below
+        # are startswith-based and never saw past the prefix.
+        from app.web.app import classify_log
+        self.assertEqual(classify_log("[#12] dispatched 2 → #4 'Brand': LF, HLF"), "log-ok")
+        self.assertEqual(classify_log("[#12] sent to help 1 → #4 'Brand': LF"), "log-ok")
+        self.assertEqual(classify_log("[#12] FAILED LF (#9) → #4 'Brand' (no crew?)"), "log-err")
+        self.assertEqual(classify_log("[#12] struck out LF (#9): game rejected it (reason)"), "log-err")
+
     def test_compound_log_on_dashboard(self):
         self._login()
         self.client.post("/accounts", data={"label": "nord", "email": "u", "password": "p"})

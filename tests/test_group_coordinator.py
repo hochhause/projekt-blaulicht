@@ -336,6 +336,7 @@ class GroupCoordinatorDispatchVerbLogTests(unittest.TestCase):
         asyncio.run(coordinator.run_cycle())
         joined = "\n".join(lines)
         self.assertIn("dispatched", joined)
+        self.assertIn("dispatched 1 →", joined)  # vehicle count, matching solo's format
         self.assertNotIn("sent to help", joined)
         self.assertNotIn("sent reinforcements", joined)
 

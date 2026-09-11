@@ -8,6 +8,7 @@ form posts); no SPA. All mutating routes require the admin session.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, Request
@@ -26,17 +27,27 @@ _ACCOUNT_COLORS = [
 ]
 
 
+# Group mode prefixes every line with "[#<account id>] " — strip it before
+# classifying so the same rules below (many of them startswith-based) apply
+# equally to solo and group log lines (Sasha, 2026-09-11: group mode's lines
+# were falling through uncoloured entirely because of this prefix).
+_ACCOUNT_TAG = re.compile(r"^\[#\d+\]\s*")
+
+
 def classify_log(message: str) -> str:
     """Map a log line to a colour class (see base.html .log-* rules)."""
-    m = message.strip()
+    m = _ACCOUNT_TAG.sub("", message.strip())
     low = m.lower()
     if m.startswith("FAILED") or "struck out" in low or low.startswith("error"):
         return "log-err"
     if "not enough" in low or "needs struck-out" in low or "missing" in low or low.startswith("short "):
         return "log-warn"
-    if m.startswith("dispatched") or "en route" in low:
+    if m.startswith(("dispatched", "sent to help", "sent reinforcements")) or "en route" in low:
         return "log-ok"
-    if low.startswith(("polled", "plan:", "connected", "connecting", "cycle done", "hilferuf", "transport", "recalled")):
+    if low.startswith((
+        "polled", "plan:", "connected", "connecting", "cycle done", "hilferuf",
+        "transport", "recalled", "sharing", "batch failed", "group:",
+    )):
         return "log-info"
     if low.startswith(("unresolved", "idle")):
         return "log-muted"

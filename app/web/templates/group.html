@@ -33,6 +33,7 @@
           <option value="credits_low" {{ 'selected' if cfg.order == 'credits_low' else '' }}>Least cash first</option>
           <option value="oldest" {{ 'selected' if cfg.order == 'oldest' else '' }}>Oldest first</option>
           <option value="newest" {{ 'selected' if cfg.order == 'newest' else '' }}>Newest first</option>
+          <option value="smart" {{ 'selected' if cfg.order == 'smart' else '' }}>Smart — most total credits from the group's combined fleet</option>
         </select></div>
       <div class="field"><label>Min cash (0 = none)</label><input name="credit_min" type="number" step="1" value="{{ cfg.credit_min }}"></div>
       <div class="field"><label>Max cash (0 = none)</label><input name="credit_max" type="number" step="1" value="{{ cfg.credit_max }}"></div>

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from app.domain.assets import AssetLibrary
 from app.domain.catalog import MissionCatalog
+from app.domain.dispatch import DispatchOrder
 from app.domain.group import GroupPolicy, RadiusBasis, plan_group_dispatches
 
 
@@ -248,6 +249,28 @@ class GroupPlannerTests(unittest.TestCase):
         )
         ba = _by_account(plan)
         self.assertEqual(ba.get(10, {}).get(1), (100,))
+
+    def test_smart_order_beats_credits_high_when_pool_is_shared_in_group_mode(self):
+        # Same knapsack case as solo dispatch's SMART test: pool has exactly
+        # enough for EITHER the one expensive mission OR both cheap ones,
+        # never both. CREDITS_HIGH grabs the expensive one alone; SMART
+        # (credits per vehicle needed) gets both cheap ones for more total.
+        cheap_a = mission(1, 1, average_credits=100)   # firetrucks:1 -> 1 LF
+        cheap_b = mission(2, 1, average_credits=90)    # firetrucks:1 -> 1 LF
+        expensive = mission(3, 2, average_credits=150)  # 2 firetrucks+platform+battalion -> 4 vehicles
+        vehicles = [vehicle(100, LF), vehicle(101, LF), vehicle(102, 2), vehicle(103, 3)]
+
+        greedy = self.plan(
+            [cheap_a, cheap_b, expensive], {10: list(vehicles)},
+            policy=GroupPolicy(radius_km=40, order=DispatchOrder.CREDITS_HIGH, participation=False),
+        )
+        self.assertEqual({gmp.mission_id for gmp in greedy.missions}, {3})
+
+        smart = self.plan(
+            [cheap_a, cheap_b, expensive], {10: list(vehicles)},
+            policy=GroupPolicy(radius_km=40, order=DispatchOrder.SMART, participation=False),
+        )
+        self.assertEqual({gmp.mission_id for gmp in smart.missions}, {1, 2})
 
     # -- solo-mode feature parity (Sasha, 2026-09-11) ---------------------
 

@@ -912,3 +912,74 @@ push/merge/rebuild this round.
   tests in test_runner.py (ALL mode shares a fully-crewable mission too;
   ALL mode still excludes alliance missions). 379 tests pass.
 - Verdict: keep-as-is
+
+## app/domain/group.py, app/domain/dispatch.py, app/core/account_config.py, app/web/templates/group.html — reviewed 2026-09-11, feature parity (SMART order for group mode)
+- User: "a lot of the settings seem missing from group mode, such as smart
+  planning." Investigated: `AccountConfig.dispatch_policy()` fully supported
+  SMART (solo `plan_dispatches`), but `GroupConfig.group_policy()` explicitly
+  rejected `order=smart` and silently fell back to NEAREST (see the
+  2026-09-11 SMART-order entry above) since `plan_group_dispatches` had no
+  per-candidate requirement-resolution estimate to rank by.
+- Implementation: `_smart_efficiency()` (new, group.py) -- same
+  credits-per-vehicle-needed heuristic as solo's inline SMART branch, reusing
+  `_outstanding()` (the SAME requirement derivation `action()` uses for the
+  real dispatch decision, not a separate estimate) plus the same
+  min_fire_personnel ceil-division top-up. A group-wide `avg_fire_crew` is
+  computed once per cycle (mean `planning_personnel` across all firetruck
+  types in the resolver's library) instead of solo's simpler constant, since
+  group mode has no single "this account's fleet" to average over. Both the
+  `begun_c` and `fresh_c` candidate lists now build 5-tuples
+  `(dist, credits, mission, "begun"/"fresh", efficiency)` under SMART
+  (3-tuples otherwise), consumed by the SAME shared `_order()` in
+  dispatch.py solo already used -- no group-specific sort logic added.
+  Removed `GroupConfig.group_policy()`'s SMART-reject guard; added the
+  dropdown option to group.html.
+- Also fixed in the same batch (found while investigating "the group
+  dispatch log messages are weird"): `group_coordinator.py`'s per-account
+  dispatch log line was missing the actual vehicle COUNT
+  (`f"[#{aid}] {verb} → #{gmp.mission_id}..."` never interpolated
+  `len(succeeded)`, unlike solo's equivalent line) -- fixed to
+  `f"[#{aid}] {verb} {len(succeeded)} → #{gmp.mission_id}..."`. And
+  `classify_log()` (web/app.py) only matched solo's un-bracketed log-line
+  vocabulary (`"dispatched "`, `"sent to help "`, etc. as literal prefixes),
+  so every group-mode line -- always prefixed `[#<id>] ...` -- fell through
+  to the default/uncolored CSS class. Fixed by stripping a leading
+  `[#<digits>] ` tag (`_ACCOUNT_TAG` regex) before running the existing
+  classification checks, so solo and group lines share one vocabulary table
+  instead of needing a duplicate bracketed copy.
+- Code review (async): APPROVE, 1 MEDIUM (fixed before commit) + 1 LOW
+  (acknowledged, not blocking). MEDIUM: the comment inside `_order()`'s
+  SMART branch (dispatch.py) still claimed group mode "rejects SMART before
+  ever calling here" and that the 5-tuple check was a "never expected to
+  trigger" no-op -- both now false since group mode genuinely produces and
+  consumes 5-tuples as its normal SMART path. Fixed by rewriting the comment
+  to state group mode now also builds 5-tuples, mirroring solo's shape. LOW:
+  solo's SMART `avg_fire_crew` is a per-account fleet average while group's
+  is a library-wide average across every firetruck type that exists in the
+  data (not just types any member actually owns) -- a pre-existing
+  asymmetry in what "average" means between the two modes, immaterial in
+  practice since the estimate only needs relative ranking, not an exact
+  count (same reasoning already accepted for solo's HLF-derating no-op
+  entry above); not fixed, flagged for awareness only.
+- Stability (1-5): 4 -- 1 new test
+  (`test_smart_order_beats_credits_high_when_pool_is_shared_in_group_mode`,
+  mirrors solo's identical SMART-vs-credits_high scenario) plus the existing
+  `test_smart_order_maps_through` (renamed from the old reject-test, now
+  asserts SMART passes through instead of falling back). 382 tests pass.
+- Verdict: keep-as-is
+- Rationale: closes a real settings-parity gap (group mode's config page
+  offered a SMART option that never should have been silently degraded to
+  NEAREST once the reject guard was removed as part of this fix -- now it's
+  simply gone, replaced by a real implementation) by reusing the exact same
+  requirement-resolution and sort code solo dispatch already relies on,
+  rather than building a second heuristic to maintain.
+
+NOTE: commit only, per the established batching pattern -- no
+push/merge/rebuild this round. Still open, awaiting explicit user direction
+before building: (1) whether group-mode sharing/dispatching should run
+concurrently across members (asyncio.gather) rather than sequentially, and
+if so whether dispatch POSTs themselves should also parallelize across
+accounts (trading away the "one mission fully staffed before moving on"
+guarantee) or only the read/share phases; (2) whether other solo-only
+settings (mission_source scope, parasite/top_up/patient_scope, per-source
+credit bounds) should also be extended to group mode.
