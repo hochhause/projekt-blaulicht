@@ -25,14 +25,20 @@ from enum import Enum
 
 from .coverage import select_coverage
 from .dispatch import (
+    _ELW_SPECIALIST_TYPE_IDS,
+    _SEG_ELW_PREFERRED_PATIENT_THRESHOLD,
+    _SEG_ELW_TYPE_ID,
     DispatchOrder,
+    _add_water_rescue_escort,
     _distance_fn,
     _fire_crew,
     _fire_personnel_topup,
     _order,
     _outstanding,
+    _reserve_vehicle_group,
 )
 from .geo import nearest_km
+from .resolver import _casualties
 
 
 class RadiusBasis(str, Enum):
@@ -86,6 +92,11 @@ class GroupPlan:
     missions: list[GroupMissionPlan] = field(default_factory=list)
     skipped: list[tuple[int, str]] = field(default_factory=list)
     shortfalls: dict[str, int] = field(default_factory=dict)  # class -> #missions short
+    # mission id -> account ids that ALREADY had a vehicle on it BEFORE this
+    # cycle's dispatch (i.e. pre-existing global_assigned participation) — for
+    # the coordinator's "dispatched"/"sent to help"/"sent reinforcements" log
+    # verb (Sasha, 2026-09-11), mirroring solo dispatch's same distinction.
+    participating: dict[int, frozenset[int]] = field(default_factory=dict)
 
     @property
     def total_dispatches(self) -> int:
@@ -177,11 +188,34 @@ def plan_group_dispatches(
                 global_assigned.setdefault(mid, []).append(int(tid))
             participating.setdefault(mid, set()).add(aid)
 
+    plan.participating = {mid: frozenset(aids) for mid, aids in participating.items()}
+
     # Types we own ANYWHERE (any state) — a mission is only partial-startable if
     # every missing type is owned somewhere, so we never begin what we can't finish.
     owned_type_ids = {
         getattr(v, "type_id", None) for vs in vehicles_by_account.values() for v in vs
     }
+
+    # Vehicle-class reservation (Sasha, 2026-09-11) — same rule as solo dispatch
+    # (see _reserve_vehicle_group's docstring): any mission that already has
+    # SOME response and still mentions a vehicle category reserves the WHOLE
+    # type-id group from fresh sends, group-wide. Built as one upfront pass
+    # over EVERY mission before either dispatch pass runs (not inline per
+    # mission), so a fresh mission processed earlier in policy order can't
+    # "beat" an already-open mission evaluated later in the same cycle.
+    # Simplification vs. solo mode: not range/scope-filtered here (group
+    # mode's own "begun" pass already bypasses those filters by design, and
+    # over-reserving is the user's explicitly stated preference for this
+    # feature — a mission we can't actually reach only ever contributes if
+    # it's already revealed something, which is a narrow edge case).
+    reserved_type_ids: set[int] = set()
+    for mission in missions:
+        rtype = (
+            resolver.catalog.get(mission.mission_type_id)
+            if getattr(mission, "mission_type_id", None) is not None else None
+        )
+        _reserve_vehicle_group(reserved_type_ids, mission, rtype, resolver, global_assigned,
+                                patient_governed=False)
 
     def _class_owned(cls: str) -> bool:
         key = "firetrucks" if cls == "firefighters" else cls
@@ -212,16 +246,49 @@ def plan_group_dispatches(
         if not reqs and fire_needed <= 0 and not others_on:
             return "no requirements found"
 
+        # A genuinely FRESH send (not begun by us, nobody else there either)
+        # can't use a reserved class — see the reservation pre-scan above.
+        # Applies to both the coverage/escort candidate pool and the
+        # participation-token pool, so a "spare" pick doesn't spend a
+        # reserved vehicle either.
+        is_fresh_send = not is_begun and getattr(mission, "vehicle_state", 0) == 0
+        call_pool = (
+            [v for v in elig if v.type_id not in reserved_type_ids]
+            if is_fresh_send and reserved_type_ids else elig
+        )
+        token_pool = (
+            [v for v in pool if v.type_id not in reserved_type_ids]
+            if is_fresh_send and reserved_type_ids else pool
+        )
+
         chosen: list[int] = []
         satisfied = True
         shortfall: dict[str, int] = {}
         if reqs and pos is not None:
-            cov = select_coverage(reqs, elig, distance_of=_balanced_distance(pos, building_pos, elig, owner_of))
+            # ELW specialist/preference tiebreak (Sasha, 2026-09-11): SEG-ELW
+            # and ELW2-Drohne are deprioritized for a plain ELW slot unless
+            # the mission's reconciled patient count is heavy enough that
+            # SEG-ELW's automatic patient handling makes it the better pick.
+            count_revealed = getattr(mission, "vehicle_state", 0) >= 1
+            patient_load = _casualties(
+                int(getattr(mission, "patients_count", 0) or 0),
+                int(getattr(mission, "possible_patients_count", 0) or 0),
+                getattr(mtype, "possible_patient", 0) if mtype is not None else 0,
+                count_revealed,
+            )
+            preferred = (
+                frozenset({_SEG_ELW_TYPE_ID})
+                if patient_load >= _SEG_ELW_PREFERRED_PATIENT_THRESHOLD else frozenset()
+            )
+            cov = select_coverage(
+                reqs, call_pool, distance_of=_balanced_distance(pos, building_pos, call_pool, owner_of),
+                specialist_type_ids=_ELW_SPECIALIST_TYPE_IDS, preferred_type_ids=preferred,
+            )
             chosen = list(cov.vehicle_ids)
             satisfied = cov.satisfied
             shortfall = dict(cov.shortfall)
         if fire_needed > 0 and pos is not None:
-            extra, short = _fire_personnel_topup(chosen, elig, resolver, fire_needed, pos, building_pos)
+            extra, short = _fire_personnel_topup(chosen, call_pool, resolver, fire_needed, pos, building_pos)
             chosen += extra
             if short > 0:
                 satisfied = False
@@ -237,6 +304,11 @@ def plan_group_dispatches(
         if not satisfied:
             _note(plan.shortfalls, shortfall.keys())
 
+        # MZB water-rescue escort (Sasha, 2026-09-11): opportunistic, never a
+        # hard requirement — placed after every gating check above so it can
+        # never cause a mission to be skipped or marked unsatisfied.
+        chosen = _add_water_rescue_escort(chosen, call_pool, resolver, pos, building_pos)
+
         # Participation: make sure every member has a vehicle on this mission.
         if policy.participation:
             covered_owners = {owner_of[i] for i in chosen}
@@ -249,7 +321,7 @@ def plan_group_dispatches(
                     continue
                 if policy.max_token_per_account is not None and token_used[aid] >= policy.max_token_per_account:
                     continue
-                spare = _nearest_spare(pool, aid, owner_of, chosen_set, pos, building_pos)
+                spare = _nearest_spare(token_pool, aid, owner_of, chosen_set, pos, building_pos)
                 if spare is not None:
                     chosen.append(spare.id)
                     chosen_set.add(spare.id)

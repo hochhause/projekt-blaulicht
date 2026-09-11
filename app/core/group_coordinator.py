@@ -167,6 +167,8 @@ class GroupCoordinator:
         veh_by_id = {v.id: v for vs in vehicles_by_account.values() for v in vs}
         dispatched = 0
         for gmp in plan.missions:
+            mission_obj = missions_by_id.get(gmp.mission_id)
+            already_participating = plan.participating.get(gmp.mission_id, frozenset())
             senders = [(aid, ids) for aid, ids in gmp.by_account.items() if ids]
             random.shuffle(senders)
             for aid, ids in senders:
@@ -174,10 +176,11 @@ class GroupCoordinator:
                 if member is None:
                     continue
                 ids = list(ids)
+                verb = _dispatch_verb(mission_obj, already_participating, aid)
                 if await member.client.dispatch_many(gmp.mission_id, ids):
                     dispatched += len(ids)
                     names = ", ".join(_name(veh_by_id.get(v), v) for v in ids)
-                    self._log(f"[#{aid}] → #{gmp.mission_id} {gmp.caption!r}: {names}")
+                    self._log(f"[#{aid}] {verb} → #{gmp.mission_id} {gmp.caption!r}: {names}")
                     if self._on_stat is not None:
                         self._on_stat(aid, len(ids), 1)
                     await self._sleep(self._jittered_gap())
@@ -196,7 +199,7 @@ class GroupCoordinator:
                         if await member.client.dispatch(gmp.mission_id, vehicle_id):
                             dispatched += 1
                             sent += 1
-                            self._log(f"[#{aid}] → #{gmp.mission_id} {gmp.caption!r}: {name}")
+                            self._log(f"[#{aid}] {verb} → #{gmp.mission_id} {gmp.caption!r}: {name}")
                         else:
                             self._log(f"[#{aid}] FAILED {name} → #{gmp.mission_id} {gmp.caption!r} (no crew?)")
                             member.strikes.record([str(vehicle_id)], strike_now)
@@ -248,3 +251,17 @@ def _name(vehicle, vehicle_id: int) -> str:
         return f"#{vehicle_id}"
     label = getattr(vehicle, "type_caption", "") or getattr(vehicle, "caption", "")
     return f"{label} (#{vehicle_id})" if label else f"#{vehicle_id}"
+
+
+def _dispatch_verb(mission, participating: frozenset, aid: int) -> str:
+    """Same "dispatched"/"sent to help"/"sent reinforcements" distinction as
+    solo dispatch's ``runner._dispatch_verb`` (Sasha, 2026-09-11): reinforcing
+    if THIS account already had a vehicle on the mission before this cycle
+    (``participating``, from ``GroupPlan.participating``), helping if someone
+    else (another member or an alliance member) already was, else a genuine
+    first-responder send."""
+    if aid in participating:
+        return "sent reinforcements"
+    if getattr(mission, "vehicle_state", 0) >= 1:
+        return "sent to help"
+    return "dispatched"

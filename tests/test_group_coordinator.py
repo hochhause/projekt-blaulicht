@@ -246,5 +246,75 @@ class GroupCoordinatorStrikeTests(unittest.TestCase):
         self.assertEqual(plan.missions_actioned, 1)  # the mission plan itself still counts as actioned
 
 
+class GroupCoordinatorDispatchVerbTests(unittest.TestCase):
+    """Group mode's log verb parity with solo dispatch (Sasha, 2026-09-11):
+    "dispatched" (first vehicles), "sent to help" (someone else already on
+    it), "sent reinforcements" (this account already had a vehicle there)."""
+
+    def test_reinforcements_when_this_account_already_participating(self):
+        from app.core.group_coordinator import _dispatch_verb
+        m = _mission(1)
+        m.vehicle_state = 1
+        self.assertEqual(_dispatch_verb(m, frozenset({1}), 1), "sent reinforcements")
+
+    def test_help_when_someone_else_already_on_it(self):
+        from app.core.group_coordinator import _dispatch_verb
+        m = _mission(1)
+        m.vehicle_state = 1
+        self.assertEqual(_dispatch_verb(m, frozenset(), 1), "sent to help")
+
+    def test_dispatched_when_mission_untouched(self):
+        from app.core.group_coordinator import _dispatch_verb
+        m = _mission(1)  # vehicle_state=0 default
+        self.assertEqual(_dispatch_verb(m, frozenset(), 1), "dispatched")
+
+    def test_reinforcements_takes_precedence_over_help(self):
+        # This account already participating AND vehicle_state shows others
+        # too -- still "reinforcements" from this account's own perspective.
+        from app.core.group_coordinator import _dispatch_verb
+        m = _mission(1)
+        m.vehicle_state = 1
+        self.assertEqual(_dispatch_verb(m, frozenset({1, 2}), 1), "sent reinforcements")
+
+
+class GroupCoordinatorDispatchVerbLogTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        library = AssetLibrary.load(VEHICLES_DIR)
+        catalog = MissionCatalog.from_payload(json.loads(FIXTURE.read_text(encoding="utf-8")))
+        cls.resolver = MissionRequirementResolver(catalog, library)
+
+    def test_log_says_dispatched_for_the_first_vehicles(self):
+        m = _mission(1)  # vehicle_state=0
+        board = AllianceBoard()
+        client = FakeClient([m], board, vehicles=[_vehicle(100)])
+        member = FakeMember(client, self.resolver)
+        lines: list[str] = []
+        coordinator = GroupCoordinator(
+            {1: member}, GroupPolicy(radius_km=40, participation=False),
+            share_enabled=False, dispatch_gap=0.0, on_log=lines.append,
+        )
+        asyncio.run(coordinator.run_cycle())
+        joined = "\n".join(lines)
+        self.assertIn("dispatched", joined)
+        self.assertNotIn("sent to help", joined)
+        self.assertNotIn("sent reinforcements", joined)
+
+    def test_log_says_sent_to_help_when_someone_already_there(self):
+        m = _mission(1)
+        m.vehicle_state = 1  # an ally already responded
+        board = AllianceBoard()
+        client = FakeClient([m], board, vehicles=[_vehicle(100)])
+        member = FakeMember(client, self.resolver)
+        lines: list[str] = []
+        coordinator = GroupCoordinator(
+            {1: member}, GroupPolicy(radius_km=40, participation=False),
+            share_enabled=False, dispatch_gap=0.0, on_log=lines.append,
+        )
+        asyncio.run(coordinator.run_cycle())
+        joined = "\n".join(lines)
+        self.assertIn("sent to help", joined)
+
+
 if __name__ == "__main__":
     unittest.main()

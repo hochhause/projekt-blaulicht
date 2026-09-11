@@ -29,12 +29,13 @@ LF = 0
 FUSTW = 32
 
 
-def mission(mid, mtype, pos=NEAR, is_alliance=True, average_credits=0, vehicle_state=0):
+def mission(mid, mtype, pos=NEAR, is_alliance=True, average_credits=0, vehicle_state=0,
+            missing_text="", patients_count=0, possible_patients_count=0):
     return SimpleNamespace(id=mid, caption=f"M{mid}", mission_type_id=mtype, position=pos,
                            is_alliance=is_alliance, average_credits=average_credits,
-                           vehicle_state=vehicle_state, patients_count=0,
-                           possible_patients_count=0, prisoners_count=0,
-                           possible_prisoners_count=0)
+                           vehicle_state=vehicle_state, patients_count=patients_count,
+                           possible_patients_count=possible_patients_count, prisoners_count=0,
+                           possible_prisoners_count=0, missing_text=missing_text)
 
 
 def vehicle(vid, type_id, building_id=1, fms=2, target_type=None, target_id=None):
@@ -247,6 +248,107 @@ class GroupPlannerTests(unittest.TestCase):
         )
         ba = _by_account(plan)
         self.assertEqual(ba.get(10, {}).get(1), (100,))
+
+    # -- solo-mode feature parity (Sasha, 2026-09-11) ---------------------
+
+    def test_elw_specialist_deprioritized_in_group_mode(self):
+        # Mission type 2: firetrucks:2, platform_trucks:1,
+        # battalion_chief_vehicles:1 -- SEG-ELW (59) held back for a plain
+        # ELW1 (3), same tiebreak as solo dispatch.
+        vehicles = [vehicle(1, LF), vehicle(2, LF), vehicle(3, 2), vehicle(10, 59), vehicle(11, 3)]
+        plan = self.plan([mission(1, 2)], {10: vehicles}, policy=GroupPolicy(radius_km=40, participation=False))
+        ids = _by_account(plan).get(10, {}).get(1, ())
+        self.assertIn(11, ids)
+        self.assertNotIn(10, ids)
+
+    def test_seg_elw_preferred_on_mass_casualty_in_group_mode(self):
+        ambulances = [vehicle(200 + i, 28) for i in range(20)]
+        command = [vehicle(300, 55), vehicle(301, 56)]
+        vehicles = [vehicle(1, LF), vehicle(2, LF), vehicle(3, 2), vehicle(10, 59), vehicle(11, 3)]
+        vehicles += ambulances + command
+        m = mission(1, 2, possible_patients_count=20)
+        plan = self.plan([m], {10: vehicles}, policy=GroupPolicy(radius_km=40, participation=False))
+        ids = _by_account(plan).get(10, {}).get(1, ())
+        self.assertIn(10, ids)
+        self.assertNotIn(11, ids)
+
+    def test_mzb_escort_in_group_mode(self):
+        m = mission(1, 1, missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        vehicles = [vehicle(100, 70), vehicle(101, 63), vehicle(102, 64)]
+        plan = self.plan([m], {10: vehicles}, policy=GroupPolicy(radius_km=40, participation=False))
+        ids = set(_by_account(plan).get(10, {}).get(1, ()))
+        self.assertEqual(ids, {100, 101, 102})
+
+    def test_mzb_dispatch_not_blocked_when_no_escort_available_in_group_mode(self):
+        m = mission(1, 1, missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        plan = self.plan([m], {10: [vehicle(100, 70)]}, policy=GroupPolicy(radius_km=40, participation=False))
+        self.assertEqual(_by_account(plan).get(10, {}).get(1), (100,))
+
+    def test_mzb_escort_can_be_owned_by_a_different_account_in_group_mode(self):
+        # The escort vehicles belong to a DIFFERENT account than the MZB --
+        # confirms per_owner bucketing attributes each correctly rather than
+        # crediting everything to the MZB's owner.
+        m = mission(1, 1, missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        plan = self.plan(
+            [m], {10: [vehicle(100, 70)], 20: [vehicle(101, 63), vehicle(102, 64)]},
+            policy=GroupPolicy(radius_km=40, participation=False),
+        )
+        ba = _by_account(plan)
+        self.assertEqual(ba.get(10, {}).get(1), (100,))
+        self.assertEqual(set(ba.get(20, {}).get(1, ())), {101, 102})
+
+    def test_reservation_blocks_fresh_dispatch_in_group_mode(self):
+        # An already-open mission (vehicle_state=1) still mentions a boat as
+        # needed; a second, genuinely fresh mission also needs one. Only two
+        # boats exist -- one goes to the open mission, but the WHOLE class
+        # stays reserved so the second boat (idle, unclaimed) still can't go
+        # to the fresh mission.
+        ally_started = mission(1, 1, vehicle_state=1,
+                               missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        fresh = mission(2, 1, vehicle_state=0,
+                       missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        vehicles = [vehicle(100, 70), vehicle(101, 70)]
+        plan = self.plan([ally_started, fresh], {10: vehicles},
+                         policy=GroupPolicy(radius_km=40, participation=False))
+        ba = _by_account(plan)
+        self.assertIn(1, ba.get(10, {}))
+        self.assertNotIn(2, ba.get(10, {}))
+
+    def test_reservation_pre_scan_is_not_range_filtered(self):
+        # The already-open mission is OUT OF RANGE for every member (pass 2
+        # would skip it outright as unreachable) -- but the reservation
+        # pre-scan still counts it (a deliberate simplification vs. solo
+        # mode, disclosed in group.py), so an in-range fresh mission needing
+        # the same class is still blocked.
+        ally_started_far = mission(1, 1, pos=FAR, vehicle_state=1,
+                                   missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        fresh = mission(2, 1, pos=NEAR, vehicle_state=0,
+                       missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        plan = self.plan([ally_started_far, fresh], {10: [vehicle(100, 70)]},
+                         policy=GroupPolicy(radius_km=40, participation=False))
+        ba = _by_account(plan)
+        self.assertNotIn(1, ba.get(10, {}))  # too far, never actioned
+        self.assertNotIn(2, ba.get(10, {}))  # still blocked by the far mission's mention
+
+    def test_reservation_blocks_participation_token_pick_in_group_mode(self):
+        # With participation=True, a "spare" token pick must also respect
+        # the reservation -- account B's remaining idle boat (unneeded by
+        # the open mission) must NOT be handed out as B's participation
+        # token for the unrelated fresh mission.
+        ally_started = mission(1, 1, vehicle_state=1,
+                               missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        fresh = mission(2, 1, vehicle_state=0)  # firetrucks:1, unrelated to boats
+        # A gets a SECOND LF (99) so one can serve as A's own participation
+        # token on mission 1 without consuming the LF (100) meant for
+        # mission 2's real need -- isolates the token-pool assertion below.
+        plan = self.plan(
+            [ally_started, fresh],
+            {10: [vehicle(99, LF), vehicle(100, LF)], 20: [vehicle(200, 70), vehicle(201, 70)]},
+            policy=GroupPolicy(radius_km=40, participation=True),
+        )
+        ba = _by_account(plan)
+        self.assertIn(100, ba.get(10, {}).get(2, ()))
+        self.assertNotIn(2, ba.get(20, {}))  # B's remaining boat withheld, not used as a token
 
 
 class FakeGroupClient:

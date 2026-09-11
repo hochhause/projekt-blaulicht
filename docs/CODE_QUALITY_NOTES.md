@@ -746,3 +746,45 @@ push/merge/rebuild this round.
   future refactor that, say, merges same-source Requirement rows before
   coverage matching). 342 tests pass.
 - Verdict: keep-as-is (verification only, no behavior change)
+
+## app/domain/group.py, app/core/group_coordinator.py — reviewed 2026-09-11, feature parity (extend 4 solo-mode features to group mode)
+- User asked for an audit: "have all of the behavioral changes we did today
+  made it into the group mode as well?" Audit found: data/parsing fixes
+  (NBSP normalization, GW-Wasserrettung split, SEG-ELW/ELW2-Drohne
+  eligibility, RTH detection) were automatically shared via the common
+  resolver/asset-library machinery, but 4 newer DECISION-LAYER features
+  built directly into the solo-only code paths were NOT: ELW specialist
+  deprioritization, MZB water-rescue escort, dispatch log verbs, and
+  vehicle-class reservation. User confirmed: "yes extend all changes to
+  group mode."
+- Implementation: `plan_group_dispatches` gained a `GroupPlan.participating`
+  field (mission id -> account ids already on it before this cycle, for the
+  log-verb feature) and a reservation pre-scan (unconditional, NOT
+  range/scope-filtered -- a deliberate v1 simplification since group mode's
+  own "begun" pass already bypasses those filters by design, and
+  over-reserving is the user's stated preference for this feature anyway).
+  `action()`'s nested function gained `is_fresh_send`-gated `call_pool`/
+  `token_pool` (the latter for the participation "spare" token pick too, so
+  a reserved vehicle can't be handed out as a token either), the ELW
+  specialist/preferred tiebreak params on `select_coverage`, and an
+  `_add_water_rescue_escort` call placed after every gating check (same
+  guarantee as solo: can't affect accept/reject). `group_coordinator.py`
+  gained its own `_dispatch_verb` keyed on the per-mission `participating`
+  set instead of solo's per-account `assigned` dict (group mode dispatches
+  per-account-per-mission, so the verb is computed per (mission, sender)
+  pair).
+- Code review (async): APPROVE, no correctness bugs. 3 MEDIUM test-coverage
+  gaps closed: (a) the pre-scan's "not range-filtered" claim was only
+  asserted by comment -- added a test with an out-of-range already-open
+  mission that still reserves for an in-range fresh one; (b) the
+  `token_pool` participation-pick filtering had zero coverage (all
+  prior tests used `participation=False`) -- added a 2-account
+  `participation=True` test confirming a reserved vehicle isn't handed out
+  as a token; (c) MZB-escort-with-multiple-owners was untested -- added a
+  test with the MZB and its escorts owned by different accounts, confirming
+  correct `per_owner` bucketing.
+- Stability (1-5): 4 -- 8 new tests in `test_group.py` (5 initial + 3
+  closing review gaps) plus 6 new tests in `test_group_coordinator.py`
+  (4 direct `_dispatch_verb` unit tests + 2 log-integration tests). 356
+  tests pass.
+- Verdict: keep-as-is
