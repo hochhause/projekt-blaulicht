@@ -144,10 +144,17 @@
   <div class="card" id="logcard">
     <button type="button" class="btn logfs-btn" onclick="toggleLogFull()" title="Fill the window (Esc to exit)">⤢ Maximise</button>
     <h2>Live log — all accounts</h2>
+    <div class="field" style="margin:2px 0 8px;max-width:220px">
+      <label style="font-size:11px">Filter</label>
+      <select id="log-filter">
+        <option value="all">All accounts (compound)</option>
+        {% for f in log_filters %}<option value="{{ f.id }}">{{ f.label }}</option>{% endfor %}
+      </select>
+    </div>
     <p class="muted small" style="margin-top:0">Newest first, auto-refreshing every 5s. Each line is prefixed by its account. Failures and strike-outs are highlighted.</p>
     {% if compound %}
     <div class="logbox">
-      {% for e in compound %}<div class="logline" data-k="{{ e.seq }}"><span class="t">{{ e.ts }}</span> <span class="acct" style="background:{{ e.color }}22;color:{{ e.color }}">{{ e.label }}</span> <span class="{{ e.cls }}">{{ e.message }}</span></div>
+      {% for e in compound %}<div class="logline" data-k="{{ e.seq }}" data-acct="{{ e.filter_id }}"><span class="t">{{ e.ts }}</span> <span class="acct" style="background:{{ e.color }}22;color:{{ e.color }}">{{ e.label }}</span> <span class="{{ e.cls }}">{{ e.message }}</span></div>
       {% endfor %}
     </div>
     {% else %}
@@ -239,6 +246,32 @@
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && card.classList.contains('logfull')) apply(false);
     });
+  })();
+
+  // Compound-vs-per-account log filter. Persisted in sessionStorage so it
+  // survives the 5s auto-refresh (same pattern as the maximise toggle).
+  (function () {
+    var key = 'logfilter:' + location.pathname;
+    var sel = document.getElementById('log-filter');
+    var box = document.querySelector('#logcard .logbox');
+    if (!sel || !box) return;
+    function apply(val) {
+      var rows = box.querySelectorAll('.logline');
+      for (var i = 0; i < rows.length; i++) {
+        rows[i].hidden = !(val === 'all' || rows[i].getAttribute('data-acct') === val);
+      }
+    }
+    sel.addEventListener('change', function () {
+      apply(sel.value);
+      try { sessionStorage.setItem(key, sel.value); } catch (e) {}
+    });
+    try {
+      var saved = sessionStorage.getItem(key);
+      if (saved && sel.querySelector('option[value="' + saved + '"]')) {
+        sel.value = saved;
+        apply(saved);
+      }
+    } catch (e) {}
   })();
 </script>
 {% endblock %}

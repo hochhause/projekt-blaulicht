@@ -983,3 +983,119 @@ accounts (trading away the "one mission fully staffed before moving on"
 guarantee) or only the read/share phases; (2) whether other solo-only
 settings (mission_source scope, parasite/top_up/patient_scope, per-source
 credit bounds) should also be extended to group mode.
+
+## app/core/group_coordinator.py, app/domain/group.py, app/web/app.py + dashboard.html — reviewed 2026-09-12, feature (group-mode concurrency rewrite + same-cycle backfill + per-account log view)
+- User outlined a full concurrency redesign for group mode: concurrent
+  per-member reads, concurrent sharing, concurrent dispatch with each
+  account on its own delay/jitter, and an end-of-cycle "another account
+  covers a failed send if possible" backfill pass. Also asked for a way to
+  view either the compound (merged) log or one account's slice of it.
+- Investigated two premises in the outline before building (per "don't
+  guess live-game facts"): (1) whether missions have a separate cheap
+  "list" endpoint vs. a richer "details" one -- confirmed NO: `/map/
+  missions_json` (`fetch_missions()`) already returns full mission data
+  (missing_text, patients, vehicle_state) in one call; `/missions/{id}`
+  (the OTHER real endpoint the user asked about) exists but is only ever
+  fetched transactionally, immediately before a dispatch POST, purely to
+  grab a fresh CSRF token -- its body is otherwise discarded, never used as
+  a data source. So "one random member fetches all details" was both
+  infeasible (no such bulk endpoint) and undesirable (every member's own
+  fetch is what builds `visible_to` -- the per-account gate that stops a
+  mission being assigned to an account that can't act on it; centralizing
+  the fetch would have silently broken that). (2) how literal "concurrent"
+  should be, given this is a multi-accounting setup already flagged
+  elsewhere as ban-risk if detected -- user confirmed "overlapping but
+  individually jittered" over a literal simultaneous burst.
+- Implementation: `GroupCoordinator.run_cycle` rewritten so every read
+  phase (fleet fetch, first-pass mission fetch for sharing, the share
+  itself, the post-share re-fetch, transport) launches one coroutine per
+  account via a new `_gather_jittered()` helper -- each preceded by its own
+  small random lead-in (`_lead_jitter()`, reusing the existing
+  `dispatch_gap` dial as the jitter ceiling) so accounts overlap in wall
+  time without firing in lockstep. Login (`connect()`) deliberately stays
+  sequential and unstaggered -- it only ever happens ONCE per member for
+  the group's whole lifetime (a no-op on every later cycle), so there's no
+  recurring cost to leaving it alone, and it's the single most
+  scrutiny-sensitive action an account takes. Dispatch itself was
+  restructured from "one mission at a time, cycling through its senders"
+  into one independent async worker per account (`_dispatch_account`),
+  sequential within an account (own gap/jitter between sends) but
+  concurrent across accounts via `asyncio.gather` -- an explicit,
+  user-approved trade against the old "mission fully staffed before moving
+  on" guarantee, justified because an interrupted cycle's shortfall is
+  naturally re-derived and topped up by the next cycle's fresh replan, not
+  lost. New `_backfill()` pass: every vehicle that failed this cycle
+  (confirmed-rejected or plain-failed) gets ONE same-type substitute
+  attempt from whichever member still has a free one, once every account's
+  dispatch worker has finished.
+- Web: `_tag_account_id()` (app.py) parses the existing `[#<id>]` group-mode
+  prefix (already used by `classify_log` for coloring) back out to the real
+  account a line concerns, since every group line lives under one shared
+  `GROUP_KEY` pseudo-account bucket. The dashboard's compound log gained a
+  `filter_id` per row and a dropdown (persisted in sessionStorage,
+  mirroring the existing "maximise log" toggle) to show all accounts or
+  just one. `_account_log()` also merges group-mode lines tagged to an
+  account into that account's own `/accounts/{id}/details` page (previously
+  invisible there entirely, since they never lived under that account's own
+  log bucket), tag stripped since it's redundant on an already-scoped page.
+- Code review (async): WARNING, 2 HIGH + 2 MEDIUM + 1 LOW, both HIGH fixed
+  before commit. HIGH #1: `_backfill` never checked mission visibility
+  before picking a substitute -- could dispatch a vehicle from an account
+  outside `visible_to[mission_id]`, which is a silent no-op at best (the
+  mission isn't in that account's own feed) and directly contradicted the
+  module's own stated invariant. The reviewer proved it via the very test
+  meant to cover backfill (`test_backfill_covers_a_failed_vehicle_with_
+  another_accounts_same_type_vehicle`): the substitute account never
+  actually had the mission in its feed, and only the fake client's
+  not-modeling-visibility masked it. Fixed by threading `visible_to`
+  through to `_backfill` and gating candidates on it (mirroring
+  `plan_group_dispatches`'s own `_visible()` helper exactly); fixed the
+  masking test to pre-share the mission so it's genuinely visible, and
+  added `test_backfill_never_uses_a_vehicle_from_an_account_that_cannot_
+  see_the_mission` as the regression the original test should have been.
+  HIGH #2: `_run_account`'s catch-all `except Exception` around
+  `_dispatch_account` discarded the WHOLE account's accumulated
+  `(dispatched, failures, consumed)` tuple on any exception -- including
+  every vehicle that account had ALREADY genuinely dispatched earlier in
+  its own loop before the error, since `GameClient.dispatch_many`'s
+  token-fetch `get_text()` call is unwrapped and can raise. Losing those
+  ids from `consumed` opened a real double-dispatch window: `_backfill`
+  could later pick an already-busy vehicle as a "substitute" and send it to
+  a second, unrelated mission the same cycle. Fixed by moving exception
+  handling down to per-mission scope INSIDE `_dispatch_account` (both the
+  batch `dispatch_many` call and each per-vehicle retry's `dispatch` call
+  now have their own try/except, logging and continuing rather than
+  propagating) -- the outer `_run_account` catch is now documented as a
+  last-resort net for a genuinely unexpected bug, not the expected-failure
+  path. Added `test_exception_mid_account_dispatch_does_not_lose_earlier_
+  consumed_ids`. MEDIUM (fixed): `building_pos`'s building_id->position
+  merge was duplicated verbatim between `group_coordinator.py` and
+  `plan_group_dispatches` -- extracted the shared
+  `merge_building_positions()` helper into `app/domain/group.py`, called
+  from both. MEDIUM (addressed via the two HIGH fixes' new tests): the
+  reviewer's flagged test-coverage gaps were exactly the two HIGH bugs
+  above, closed by the same tests that lock in the fixes. LOW (fixed): a
+  stale `GroupPlan.missions` field comment in `group.py` still described
+  the old "one mission at a time" sequencing the coordinator no longer
+  does; reworded to describe the current per-account-worker priority
+  ordering.
+- Also proactively wrapped `_backfill`'s own `dispatch()` call in the same
+  per-candidate try/except pattern (not explicitly flagged by the reviewer,
+  same class of bug as HIGH #2) so one substitute's transient failure can't
+  abort backfill for the rest of that cycle's failures list.
+- Stability (1-5): 4 -- 389 tests pass (7 new: 2 backfill tests, the
+  exception-isolation regression, `_tag_account_id`/`_account_log`
+  unit tests, the dashboard filter_id integration test, the per-account
+  details-page merge test). The concurrency restructuring itself has no
+  live-account confirmation yet of actual wall-clock speedup or of the
+  intended "overlapping but individually jittered" request pattern being
+  visibly less bot-like than the old strictly-sequential loop -- both are
+  inherently hard to verify without watching real traffic over several
+  cycles; flagged for a first-live-run sanity check.
+- Verdict: keep-as-is
+- Rationale: both HIGH findings were genuine, reproducible correctness bugs
+  in newly-added code (not stylistic), fixed with regression tests that
+  fail on the pre-fix code and pass after; the DRY finding matches this
+  org's own stated policy and was a trivial, safe extraction with no
+  behavior change (confirmed via the unchanged 43-test group+group_
+  coordinator suite passing identically before and after).

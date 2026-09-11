@@ -224,6 +224,51 @@ class WebPanelTests(unittest.TestCase):
         self.assertIn("nord", r.text)      # account prefix
         self.assertIn("dispatched RTW", r.text)
 
+    def test_tag_account_id_extracts_the_group_prefix(self):
+        # Sasha, 2026-09-12: "add options for viewing compound log or
+        # per-account log" -- needs the real account a group line concerns,
+        # since every group line lives under one shared GROUP_KEY bucket.
+        from app.web.app import _tag_account_id
+        self.assertEqual(_tag_account_id("[#12] dispatched 2 → #4 'Brand': LF"), 12)
+        self.assertIsNone(_tag_account_id("group: 3 account(s), 5 mission(s), 2 idle vehicle(s)"))
+        self.assertIsNone(_tag_account_id("dispatched RTW (#9) → #3 'Unfall'"))  # solo line, no tag
+
+    def test_dashboard_log_rows_carry_a_per_account_filter_id(self):
+        self._login()
+        self.client.post("/accounts", data={"label": "nord", "email": "u", "password": "p"})
+        aid = self.store.list_accounts()[0].id
+        self.log_store.append(aid, "dispatched RTW (#9) → #3 'Unfall'")  # solo line
+        self.log_store.append(0, f"[#{aid}] dispatched 1 → #7 'Brand': LF")  # group line, tagged
+        self.log_store.append(0, "group: 1 account(s), 2 mission(s), 0 idle vehicle(s)")  # group summary, untagged
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(f'data-acct="{aid}"', r.text)   # both the solo line and the tagged group line
+        self.assertIn('data-acct=""', r.text)          # the untagged group summary line has no owner
+        self.assertIn(f'value="{aid}"', r.text)         # the filter dropdown lists this account
+
+    def test_account_details_merges_in_group_lines_tagged_to_it(self):
+        # An account's own details page previously showed NOTHING it did
+        # while running inside a group (every group line lives under the
+        # shared GROUP_KEY bucket, never under the account's own id).
+        self._login()
+        self.client.post("/accounts", data={"label": "n", "email": "u@e.com", "password": "p"})
+        aid = self.store.list_accounts()[0].id
+        self.log_store.append(0, f"[#{aid}] dispatched 1 → #7 'Brand': LF")
+        self.log_store.append(0, "group: 1 account(s), 2 mission(s), 0 idle vehicle(s)")
+        r = self.client.get(f"/accounts/{aid}/details")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Brand", r.text)                       # the tagged line made it in, tag stripped
+        self.assertNotIn(f"[#{aid}]", r.text)
+        self.assertNotIn("group: 1 account(s)", r.text)       # the untagged summary line stays out
+
+    def test_account_log_helper_merges_and_sorts_by_seq(self):
+        from app.web.app import _account_log
+        self.log_store.append(1, "polled 3 mission(s)")           # seq 1, account 1's own
+        self.log_store.append(0, "[#1] dispatched 1 → #7: LF")    # seq 2, tagged to account 1
+        self.log_store.append(2, "polled 5 mission(s)")           # seq 3, a DIFFERENT account
+        rows = _account_log(self.log_store, 1)
+        self.assertEqual([r["message"] for r in rows], ["dispatched 1 → #7: LF", "polled 3 mission(s)"])
+
     def test_username_accepted_as_login_id(self):
         # The account "email" field is just the login id; a username is fine.
         self._login()

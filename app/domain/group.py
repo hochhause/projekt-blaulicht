@@ -87,8 +87,11 @@ class GroupMissionPlan:
 
 @dataclass
 class GroupPlan:
-    # Missions in dispatch order — the coordinator sends them one at a time so
-    # each is fully staffed by all participants before moving on.
+    # Missions in priority order. The coordinator now dispatches each
+    # account's share CONCURRENTLY with every other account's (Sasha,
+    # 2026-09-12 — see app/core/group_coordinator.py's module docstring,
+    # step 7) rather than sending one mission at a time; this order still
+    # decides which mission each account's own worker tackles first.
     missions: list[GroupMissionPlan] = field(default_factory=list)
     skipped: list[tuple[int, str]] = field(default_factory=list)
     shortfalls: dict[str, int] = field(default_factory=dict)  # class -> #missions short
@@ -131,6 +134,19 @@ def _smart_efficiency(mission, mtype, credits, resolver, assigned, text_engine, 
         fire_needed = max(0, min_fire - already)
         vehicles_needed += -(-fire_needed // max(1, int(avg_fire_crew)))  # ceil division
     return credits / max(1, vehicles_needed)
+
+
+def merge_building_positions(buildings_by_account: dict[int, list]) -> dict[int, tuple]:
+    """One building_id -> position map merged across every account's
+    buildings — ids are game-globally unique, so any account's building list
+    resolves a vehicle's position regardless of ownership. Shared by
+    :func:`plan_group_dispatches` and the coordinator's end-of-cycle backfill
+    pass (code review, 2026-09-12: the two used to duplicate this merge)."""
+    return {
+        b.id: b.position
+        for buildings in buildings_by_account.values() for b in buildings
+        if getattr(b, "position", None) and getattr(b, "id", None) is not None
+    }
 
 
 def plan_group_dispatches(
@@ -177,11 +193,7 @@ def plan_group_dispatches(
         aid: [b.position for b in buildings_by_account.get(aid, []) if getattr(b, "position", None)]
         for aid in member_ids
     }
-    building_pos: dict[int, tuple] = {}
-    for aid in member_ids:
-        for b in buildings_by_account.get(aid, []):
-            if getattr(b, "position", None) and getattr(b, "id", None) is not None:
-                building_pos[b.id] = b.position
+    building_pos = merge_building_positions(buildings_by_account)
 
     def _usable(v, aid) -> bool:
         if not getattr(v, "is_available", False):

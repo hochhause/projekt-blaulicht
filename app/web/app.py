@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from ..core.account_config import DEFAULT_CONFIG, AccountConfig, GroupConfig
+from ..core.orchestrator import GROUP_KEY
 from .auth import AdminAuth
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -32,6 +33,39 @@ _ACCOUNT_COLORS = [
 # equally to solo and group log lines (Sasha, 2026-09-11: group mode's lines
 # were falling through uncoloured entirely because of this prefix).
 _ACCOUNT_TAG = re.compile(r"^\[#\d+\]\s*")
+# Same tag, but capturing the id — lets a group-mode line be attributed back
+# to the specific real account it concerns (Sasha, 2026-09-12: "add options
+# for viewing compound log or per-account log"), since every group line is
+# otherwise stored under one shared pseudo-account bucket (GROUP_KEY).
+_ACCOUNT_TAG_ID = re.compile(r"^\[#(\d+)\]")
+
+
+def _tag_account_id(message: str) -> int | None:
+    """The real account id a group-mode log line concerns, or None for a
+    group-wide summary line ("group: 3 account(s)...", "group cycle done...")
+    that isn't about any one member specifically."""
+    m = _ACCOUNT_TAG_ID.match(message.strip())
+    return int(m.group(1)) if m else None
+
+
+def _account_log(log_store, account_id: int) -> list[dict]:
+    """This account's own log entries PLUS any group-mode line that concerns
+    it specifically (a "[#<id>]"-tagged line) — group mode logs everything
+    under one shared GROUP_KEY bucket, so an account's activity while
+    running inside a group would otherwise be invisible on its own details
+    page (Sasha, 2026-09-12). Group-wide summary lines (no tag) are left out
+    here — they belong to no single account; see them via the dashboard's
+    compound feed instead. The tag itself is stripped from the merged-in
+    text since it's redundant on an already-account-scoped page."""
+    if log_store is None:
+        return []
+    rows = [(e.seq, e.ts, e.message) for e in log_store.recent(account_id)]
+    if account_id != GROUP_KEY:
+        for e in log_store.recent(GROUP_KEY):
+            if _tag_account_id(e.message) == account_id:
+                rows.append((e.seq, e.ts, _ACCOUNT_TAG.sub("", e.message)))
+    rows.sort(key=lambda t: t[0], reverse=True)
+    return [{"seq": seq, "ts": ts, "message": msg, "cls": classify_log(msg)} for seq, ts, msg in rows]
 
 
 def classify_log(message: str) -> str:
@@ -123,20 +157,30 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
                 }
             )
         # Compound feed: all accounts' activity, newest first, colour-prefixed.
+        # Each row also carries `filter_id` — the REAL account it concerns,
+        # so the log's account dropdown (see dashboard.html) can show just
+        # one member's slice even though every group-mode line is stored
+        # under one shared GROUP_KEY bucket (Sasha, 2026-09-12: "add options
+        # for viewing compound log or per-account log"). A group-wide
+        # summary line with no "[#<id>]" tag has no single owner and so
+        # never matches a per-account filter — only "All" shows it.
         compound = []
         if log_store is not None:
             label_by_id = {a.id: a.label for a in accounts}
             for aid, entry in log_store.recent_all(120):
+                filter_id = _tag_account_id(entry.message) if aid == GROUP_KEY else aid
                 compound.append(
                     {
                         "seq": entry.seq,
                         "ts": entry.ts,
-                        "label": label_by_id.get(aid) or ("Group" if aid == 0 else f"#{aid}"),
+                        "label": label_by_id.get(aid) or ("Group" if aid == GROUP_KEY else f"#{aid}"),
                         "color": color_by_id.get(aid, "#8697ad"),
                         "cls": classify_log(entry.message),
                         "message": entry.message,
+                        "filter_id": filter_id if filter_id is not None else "",
                     }
                 )
+        log_filters = [{"id": str(a.id), "label": a.label} for a in accounts]
 
         # LEFT panel: per-account "vehicles we struggle to field" (collapsible).
         strike_panels = []
@@ -172,7 +216,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
         return _TEMPLATES.TemplateResponse(
             request,
             "dashboard.html",
-            {"rows": rows, "compound": compound, "strike_panels": strike_panels,
+            {"rows": rows, "compound": compound, "log_filters": log_filters, "strike_panels": strike_panels,
              "stats": stats, "group": group},
         )
 
@@ -242,8 +286,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
         if account is None:
             return RedirectResponse("/", status_code=303)
         state = store.get_state(account_id) or {}
-        raw_log = log_store.recent(account_id) if log_store is not None else []
-        log = [{"seq": e.seq, "ts": e.ts, "message": e.message, "cls": classify_log(e.message)} for e in raw_log]
+        log = _account_log(log_store, account_id)
         cfg = AccountConfig.from_dict(_load_config(store, account_id))
         return _TEMPLATES.TemplateResponse(
             request,

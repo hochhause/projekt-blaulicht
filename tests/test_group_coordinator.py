@@ -256,6 +256,105 @@ class GroupCoordinatorStrikeTests(unittest.TestCase):
         self.assertEqual(stat_calls, [(1, 3, 1)])
         self.assertEqual(plan.missions_actioned, 1)  # the mission plan itself still counts as actioned
 
+    def test_backfill_covers_a_failed_vehicle_with_another_accounts_same_type_vehicle(self):
+        # "if a vehicle could not be sent out another account covers it if
+        # possible" (Sasha, 2026-09-12): A's only firetruck is rejected by
+        # the game; B holds an unused spare of the same type, CAN see the
+        # mission (shared up front here, not left to this cycle's own share
+        # step), and isn't needed anywhere else this cycle -- it should get
+        # sent as a same-cycle substitute, without waiting for the next full
+        # replan.
+        from app.domain.strikes import StrikeTracker
+
+        board = AllianceBoard(propagate=True)
+        mission = _mission(1)  # mission_type_id=1 -> firetrucks:1
+        board.share(mission)  # pre-shared: B can already see it this cycle
+        client_a = FakeClient([mission], board, vehicles=[_vehicle(100, type_id=LF)])
+        client_a.rejections = {100: "Die Besatzung ist nicht ausreichend."}
+        client_b = FakeClient([], board, vehicles=[_vehicle(200, type_id=LF)])
+        member_a = FakeMember(client_a, self.resolver)
+        member_a.strikes = StrikeTracker()
+        member_b = FakeMember(client_b, self.resolver)
+        lines: list[str] = []
+        coordinator = GroupCoordinator(
+            {1: member_a, 2: member_b}, GroupPolicy(radius_km=40, participation=False),
+            share_enabled=False, dispatch_gap=0.0, on_log=lines.append,
+        )
+        asyncio.run(coordinator.run_cycle())
+
+        self.assertTrue(member_a.strikes.is_struck("100", time.time()))
+        self.assertIn((1, [200]), client_b.dispatched)
+        self.assertTrue(any("covered a failed send" in line for line in lines))
+
+    def test_backfill_never_uses_a_vehicle_from_an_account_that_cannot_see_the_mission(self):
+        # HIGH finding (code review, 2026-09-12): dispatching a "substitute"
+        # from an account outside the mission's visible_to set would be a
+        # silent no-op at best (the mission isn't even in that account's own
+        # feed) -- the original backfill test above only passed because the
+        # fake client didn't model visibility at all, masking this gap.
+        from app.domain.strikes import StrikeTracker
+
+        board = AllianceBoard(propagate=False)  # never shared/propagated to B
+        mission = _mission(1)
+        client_a = FakeClient([mission], board, vehicles=[_vehicle(100, type_id=LF)])
+        client_a.rejections = {100: "Die Besatzung ist nicht ausreichend."}
+        client_b = FakeClient([], board, vehicles=[_vehicle(200, type_id=LF)])  # can't see mission 1
+        member_a = FakeMember(client_a, self.resolver)
+        member_a.strikes = StrikeTracker()
+        member_b = FakeMember(client_b, self.resolver)
+        lines: list[str] = []
+        coordinator = GroupCoordinator(
+            {1: member_a, 2: member_b}, GroupPolicy(radius_km=40, participation=False),
+            share_enabled=False, dispatch_gap=0.0, on_log=lines.append,
+        )
+        asyncio.run(coordinator.run_cycle())
+
+        self.assertTrue(member_a.strikes.is_struck("100", time.time()))
+        self.assertEqual(client_b.dispatched, [])
+        self.assertFalse(any("covered a failed send" in line for line in lines))
+
+    def test_exception_mid_account_dispatch_does_not_lose_earlier_consumed_ids(self):
+        # HIGH finding (code review, 2026-09-12): a transient error partway
+        # through one account's send queue must not erase the vehicles it
+        # ALREADY sent this cycle -- the old code let the exception propagate
+        # all the way out to the per-account gather wrapper, which discarded
+        # the whole account's (dispatched, failures, consumed) tuple.
+        from app.domain.strikes import StrikeTracker
+
+        board = AllianceBoard(propagate=True)
+        m1 = _mission(1)
+        m2 = _mission(2)
+        m2.mission_type_id = 1  # same firetrucks:1 requirement as m1
+
+        class FlakyOnSecondCall(FakeClient):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.calls = 0
+
+            async def dispatch_many(self, mission_id, vehicle_ids):
+                self.calls += 1
+                if self.calls == 2:
+                    raise RuntimeError("transient network error")
+                return await super().dispatch_many(mission_id, vehicle_ids)
+
+        client_a = FlakyOnSecondCall([m1, m2], board, vehicles=[
+            _vehicle(100, type_id=LF), _vehicle(101, type_id=LF),
+        ])
+        member_a = FakeMember(client_a, self.resolver)
+        member_a.strikes = StrikeTracker()
+        coordinator = GroupCoordinator(
+            {1: member_a}, GroupPolicy(radius_km=40, participation=False),
+            share_enabled=False, dispatch_gap=0.0,
+        )
+        plan = asyncio.run(coordinator.run_cycle())
+
+        self.assertEqual(plan.missions_actioned, 2)  # both missions were planned for
+        # mission 1 (processed first under NEAREST's mission-id tie-break)
+        # went through for real; mission 2's send blew up transiently and
+        # must not have erased mission 1's already-real dispatch.
+        self.assertEqual(len(client_a.dispatched), 1)
+        self.assertEqual(client_a.dispatched[0][0], 1)
+
     def test_confirmed_rejection_within_an_ok_batch_strikes_immediately(self):
         # The alarm POST succeeds overall (ok=True), but the game explicitly
         # rejected one vehicle within it -- struck out on ONE occurrence
