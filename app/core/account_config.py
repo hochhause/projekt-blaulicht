@@ -172,6 +172,12 @@ class GroupConfig:
             order = DispatchOrder(self.order)
         except ValueError:
             order = DispatchOrder.NEAREST
+        if order is DispatchOrder.SMART:
+            # SMART needs a per-candidate requirement resolution
+            # plan_group_dispatches doesn't do (no group.html option offers
+            # it either) — reject explicitly rather than let it silently
+            # degrade to raw-credits ordering inside the shared _order() sort.
+            order = DispatchOrder.NEAREST
         try:
             basis = RadiusBasis(self.radius_basis)
         except ValueError:

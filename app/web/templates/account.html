@@ -26,6 +26,7 @@
           <option value="credits_low" {{ 'selected' if cfg.order == 'credits_low' else '' }}>Least cash first</option>
           <option value="oldest" {{ 'selected' if cfg.order == 'oldest' else '' }}>Oldest first</option>
           <option value="newest" {{ 'selected' if cfg.order == 'newest' else '' }}>Newest first</option>
+          <option value="smart" {{ 'selected' if cfg.order == 'smart' else '' }}>Smart — most credits per vehicle needed</option>
         </select></div>
       <div class="field"><label>Mission source</label>
         <select name="mission_source">

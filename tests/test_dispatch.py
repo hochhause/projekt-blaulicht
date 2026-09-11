@@ -234,6 +234,53 @@ class DispatchPlannerTests(unittest.TestCase):
         # The 320-credit mission (id 2) is planned before the 170 one.
         self.assertEqual(plan.planned[0].mission_id, 2)
 
+    def test_order_smart_beats_credits_high_when_pool_is_shared(self):
+        # SMART (Sasha, 2026-09-11): rank by credits PER VEHICLE NEEDED, not
+        # raw credits -- the classic knapsack case where one expensive,
+        # vehicle-hungry mission would otherwise starve several cheaper ones
+        # worth more combined. Pool has exactly enough for EITHER the one
+        # expensive mission OR both cheap ones, never both.
+        cheap_a = mission(1, 1, NEAR, average_credits=100)   # firetrucks:1 -> needs 1 LF
+        cheap_b = mission(2, 1, NEAR2, average_credits=90)   # firetrucks:1 -> needs 1 LF
+        expensive = mission(3, 2, NEAR, average_credits=150)  # firetrucks:2+platform:1+battalion:1 -> 4 vehicles
+        pool = [vehicle(100, LF), vehicle(101, LF), vehicle(102, 2), vehicle(103, 3)]
+
+        greedy = plan_dispatches(
+            [cheap_a, cheap_b, expensive], list(pool), [building()], self.resolver,
+            DispatchPolicy(radius_km=40, order=DispatchOrder.CREDITS_HIGH),
+        )
+        self.assertEqual({mp.mission_id for mp in greedy.planned}, {3})     # picks the 150 alone
+
+        smart = plan_dispatches(
+            [cheap_a, cheap_b, expensive], list(pool), [building()], self.resolver,
+            DispatchPolicy(radius_km=40, order=DispatchOrder.SMART),
+        )
+        self.assertEqual({mp.mission_id for mp in smart.planned}, {1, 2})    # picks both cheap ones: 190 > 150
+
+    def test_order_smart_accounts_for_min_fire_personnel_topup(self):
+        # SMART's efficiency estimate must fold in a mission's minimum
+        # firefighter headcount (topped up with EXTRA firetrucks by _plan_one
+        # beyond the base class count) -- not just the base requirement --
+        # or a "1 firetruck" mission with a big personnel floor would rank
+        # artificially efficient. Same avg credits; A needs a big personnel
+        # top-up, B doesn't -> B must be ranked (and thus processed) first.
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        heavy = MissionType(id=50, name="Heavy", average_credits=100,
+                             requirements={"firetrucks": 1}, min_fire_personnel=20)
+        light = MissionType(id=51, name="Light", average_credits=90,
+                             requirements={"firetrucks": 1}, min_fire_personnel=0)
+        resolver = MissionRequirementResolver(
+            MissionCatalog({50: heavy, 51: light}), self.lib_for_engine,
+        )
+        plan = plan_dispatches(
+            [mission(1, 50, NEAR), mission(2, 51, NEAR2)],
+            [vehicle(100 + i, LF) for i in range(10)], [building()], resolver,
+            DispatchPolicy(radius_km=40, order=DispatchOrder.SMART),
+        )
+        self.assertEqual(plan.planned[0].mission_id, 2)  # light (no topup) processed first
+
     def test_batch_size_limits_missions(self):
         missions = [mission(i, 1, NEAR) for i in range(1, 6)]  # 5 firetruck missions
         vehicles = [vehicle(100 + i, LF) for i in range(5)]

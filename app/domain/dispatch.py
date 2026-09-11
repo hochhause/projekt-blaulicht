@@ -42,6 +42,7 @@ class DispatchOrder(str, Enum):
     CREDITS_LOW = "credits_low"    # least cash first
     OLDEST = "oldest"              # longest-open first (by created_at)
     NEWEST = "newest"
+    SMART = "smart"                # most credits per vehicle needed first (Sasha, 2026-09-11)
 
 
 class MissionSource(str, Enum):
@@ -215,6 +216,13 @@ def plan_dispatches(
         return True
 
     pool = [v for v in vehicles if _usable(v)]
+    # Average firetruck crew size, for SMART order's rough min_fire_personnel
+    # estimate below (real per-type data, not a guessed constant).
+    _fire_types = [
+        vt for tid, vt in resolver.library.types.items()
+        if tid in resolver.library.class_map.by_class.get("firetrucks", ())
+    ]
+    avg_fire_crew = (sum(vt.personnel for vt in _fire_types) / len(_fire_types)) if _fire_types else 6.0
     # Vehicles carry no coordinates — a vehicle's position is its building's,
     # used to rank same-role candidates nearest-first.
     building_pos = {
@@ -294,7 +302,31 @@ def plan_dispatches(
         if cmax and credits > cmax:
             plan.skipped.append((mission.id, f"above credit ceiling ({credits})"))
             continue
-        candidates.append((distance, credits, mission, governing))
+        # SMART order ranks by credits PER VEHICLE NEEDED (not raw credits) —
+        # a cheap, well-known knapsack heuristic: one expensive mission that
+        # eats a rare vehicle type can deny several cheaper missions worth
+        # more combined, so rank by "value density" instead of pure value.
+        # Resolved with the SAME requirement derivation + delta the actual
+        # dispatch step uses, so the estimate matches what will really be sent.
+        efficiency = 0.0
+        if policy.order is DispatchOrder.SMART:
+            base = _derive_requirements(mission, resolver, text_engine,
+                                         patient_only=(governing == "patient"))
+            outstanding = _apply_delta(base, assigned, mission.id)
+            vehicles_needed = sum(r.count for r in outstanding)
+            # A mission may ALSO need a minimum firefighter headcount beyond
+            # its class counts (_plan_one tops this up with extra firetrucks
+            # via _fire_personnel_topup) — fold in a rough estimate using the
+            # real average firetruck crew size, so a "1 firetruck" mission
+            # that actually needs 3 for its personnel floor doesn't rank as
+            # artificially efficient.
+            min_fire = int(getattr(mtype, "min_fire_personnel", 0) or 0) if mtype is not None else 0
+            if min_fire and governing != "patient":
+                already = _fire_crew(resolver, (assigned or {}).get(mission.id, []))
+                fire_needed = max(0, min_fire - already)
+                vehicles_needed += -(-fire_needed // max(1, int(avg_fire_crew)))  # ceil division
+            efficiency = credits / max(1, vehicles_needed)
+        candidates.append((distance, credits, mission, governing, efficiency))
 
     candidates = _order(candidates, policy.order)
 
@@ -303,7 +335,7 @@ def plan_dispatches(
     # slot; only once `batch_size` missions have been actioned is the rest
     # deferred as "beyond batch size".
     actioned = priority_batch  # priority useful contributions already count
-    for _distance, _credits, mission, governing in candidates:
+    for _distance, _credits, mission, governing, _efficiency in candidates:
         if policy.batch_size is not None and actioned >= policy.batch_size:
             plan.skipped.append((mission.id, "beyond batch size"))
             continue
@@ -412,6 +444,15 @@ def _to_epoch(ts) -> float | None:
 
 def _order(candidates, order: DispatchOrder):
     """Sort (distance, credits, mission) tuples by the chosen strategy."""
+    if order is DispatchOrder.SMART:
+        # Credits per vehicle needed, descending (index 4 — see plan_dispatches).
+        # group.py's plan_group_dispatches builds plain 3-tuples and rejects
+        # SMART before ever calling here (see GroupConfig.group_policy), so
+        # the exact-5 check below is a belt-and-braces no-op degrade to raw
+        # credits, never expected to actually trigger.
+        # ponytail: tuple-shape sniffing, not a typed Candidate — upgrade to a
+        # NamedTuple if another field is ever added to either tuple shape.
+        return sorted(candidates, key=lambda t: (-(t[4] if len(t) == 5 else t[1]), t[0], t[2].id))
     if order is DispatchOrder.CREDITS_HIGH:
         return sorted(candidates, key=lambda t: (-t[1], t[0], t[2].id))
     if order is DispatchOrder.CREDITS_LOW:

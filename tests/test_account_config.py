@@ -37,6 +37,10 @@ class AccountConfigTests(unittest.TestCase):
         self.assertEqual(dp.parasite_scope.value, "alliance")
         self.assertEqual(dp.patient_scope.value, "both")
 
+    def test_smart_order_maps_through(self):
+        from app.domain.dispatch import DispatchOrder
+        self.assertEqual(AccountConfig(order="smart").dispatch_policy().order, DispatchOrder.SMART)
+
     def test_mode_scopes_roundtrip(self):
         cfg = AccountConfig(parasite_scope="alliance", patient_scope="own")
         again = AccountConfig.from_dict(cfg.to_dict())
@@ -87,6 +91,13 @@ class GroupConfigTests(unittest.TestCase):
         self.assertEqual(gp.radius_km, 40.0)
         self.assertTrue(gp.participation)
         self.assertEqual(gp.radius_basis.value, "any")
+
+    def test_smart_order_rejected_falls_back_to_nearest(self):
+        # SMART needs per-candidate requirement resolution plan_group_dispatches
+        # doesn't do -- reject explicitly rather than silently degrade inside
+        # the shared _order() sort (no silent failures on ordering logic).
+        from app.domain.dispatch import DispatchOrder
+        self.assertEqual(GroupConfig(order="smart").group_policy().order, DispatchOrder.NEAREST)
 
     def test_roundtrip_with_members(self):
         cfg = GroupConfig(radius_km=25, credit_max=5000, participation=False,

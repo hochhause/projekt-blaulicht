@@ -339,3 +339,52 @@ of each module's history if it's revisited.
 - Rationale: kept alive deliberately (still wired through 3 call sites +
   its own tests) since removing it is a wider-blast-radius change than this
   TODO item asked for; downgraded its documented role to match reality.
+
+## app/domain/dispatch.py — reviewed 2026-09-11, ad-hoc feature (SMART order)
+- Feature: `DispatchOrder.SMART` — user request: "sort out whats the most
+  amount of credits i can do with my currently available vehicles without
+  sending to missions he cannot fully saturate." Ranks candidates by
+  credits-per-vehicle-needed (a knapsack-style value-density heuristic)
+  instead of raw distance/credits/age. The "finish already-begun missions
+  first" half of the request needed no new code — the existing unconditional
+  priority pass (begun-missions-first) already does this; SMART only changes
+  ordering within the remaining fresh-mission pool.
+- Stability (1-5): 4 — 306 tests pass incl. 2 new SMART-specific cases
+  (credit-density beats raw-credits ordering; min_fire_personnel top-up folds
+  into the vehicle-needed estimate). The estimate is deliberately approximate
+  (doesn't run the full multi-role coverage matcher per candidate, just sums
+  `Requirement.count` plus a ceil-divided fire-personnel top-up) — a
+  code-reviewer MEDIUM finding confirmed this is an acceptable simplification
+  given `plan_dispatches` already re-resolves requirements for real at actual
+  dispatch time; SMART only needs a *relative* ranking, not an exact count.
+  Not yet confirmed against live play (no way to observe "chose fewer trucks
+  for near-equal credits" without watching several real cycles).
+- Expandability (1-5): 3 — `_order()`'s tuple-shape sniffing
+  (`len(t) == 5`) is a `ponytail:`-flagged deliberate shortcut so the 4
+  existing non-SMART orders (3-tuple in solo mode, unchanged) didn't need a
+  data-shape migration for one new order; flagged for a NamedTuple refactor
+  if a 6th field is ever needed.
+- Maintainability (1-5): 4 — isolated to the SMART branch of the
+  candidate-gathering loop and `_order()`; doesn't touch any other order's
+  code path.
+- Verdict: keep-as-is
+- Rationale: two of the three code-review findings were real bugs fixed
+  before commit (min_fire_personnel omission; group mode silently accepting
+  `order=smart` and no-oping instead of an explicit reject-to-NEAREST) — see
+  `app/core/account_config.py` note below. The third (duplicate resolver
+  calls between ranking and actual dispatch) was explicitly skipped per
+  ponytail/YAGNI, per the reviewer's own "low priority" framing — the ranking
+  pass is O(missions), not O(missions × vehicles), so it's not a hot path.
+
+## app/core/account_config.py — reviewed 2026-09-11, ad-hoc feature (SMART order)
+- Change: `GroupConfig.group_policy()` gained an explicit SMART→NEAREST
+  reject-and-fallback guard, since `plan_group_dispatches` has no per-account
+  requirement resolver to rank by (unlike solo `plan_dispatches`) — letting
+  `order=smart` through would have silently degraded to raw-credits ordering
+  inside the shared `_order()` sort, which is a silent-failure-shaped bug the
+  code reviewer flagged as MEDIUM.
+- Stability (1-5): 5 — one new regression test
+  (`test_smart_order_rejected_falls_back_to_nearest`) locks in the reject
+  behavior; `AccountConfig.dispatch_policy()` needed no equivalent guard
+  since solo mode's SMART path is fully implemented.
+- Verdict: keep-as-is
