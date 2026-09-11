@@ -114,7 +114,7 @@ class MissionRequirementResolver:
         if mtype is None:
             return resolution
 
-        vehicle_reqs, vehicle_unmatched = self._vehicle_requirements(mission, mtype)
+        vehicle_reqs, vehicle_unmatched = self.vehicle_requirements(mission, mtype)
         resolution.requirements.extend(vehicle_reqs)
         resolution.unmatched.extend(vehicle_unmatched)
 
@@ -133,9 +133,13 @@ class MissionRequirementResolver:
             )
         return resolution
 
-    def _vehicle_requirements(self, mission, mtype) -> tuple[list[Requirement], list[str]]:
+    def vehicle_requirements(self, mission, mtype) -> tuple[list[Requirement], list[str]]:
         """Base vehicle-class demand: revealed ``missing_text`` categories when
-        present, else the catalogue's class/chance estimate.
+        present, else the catalogue's class/chance estimate. Public: also
+        called from ``dispatch.py`` for the vehicle-class reservation feature
+        (Sasha, 2026-09-11), which needs the vehicle-only layer (excluding
+        the casualty-count layer :meth:`_casualty_counts` adds) to know what
+        an already-open mission still needs.
 
         Branches on ``revealed``, not "has anything in it": once the game
         hands back a parseable blob, EMPTY ``vehicles``/``personnel`` groups
@@ -243,7 +247,7 @@ class MissionRequirementResolver:
         own ``missing_text`` (a NEF/RTH is only ever revealed via
         ``patients_prisoners[].missing_text``; LNA/OrgL are our own
         incident-command heuristic, never requested by the game) — so this
-        always applies on top of :meth:`_vehicle_requirements`."""
+        always applies on top of :meth:`vehicle_requirements`."""
         counts: dict[str, int] = {}
 
         # Notärzte revealed per patient (patients_prisoners[].missing_text =

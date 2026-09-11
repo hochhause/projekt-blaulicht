@@ -238,7 +238,7 @@ def plan_dispatches(
 
     # PRIORITY PASS — spread/top-up (missions we're on) and, in parasite mode,
     # leech targets. Runs first, bypassing filters/order/batch.
-    handled, priority_batch = _priority_pass(
+    handled, priority_batch, reserved_type_ids = _priority_pass(
         plan, missions, pool, resolver, policy, assigned or {}, building_pos, text_engine
     )
 
@@ -307,6 +307,10 @@ def plan_dispatches(
         if cmax and credits > cmax:
             plan.skipped.append((mission.id, f"above credit ceiling ({credits})"))
             continue
+        # Reservation for any mission we could act on that's already open and
+        # short a vehicle category -- see _reserve_vehicle_group's docstring.
+        _reserve_vehicle_group(reserved_type_ids, mission, mtype, resolver, assigned,
+                                patient_governed=(governing == "patient"))
         # SMART order ranks by credits PER VEHICLE NEEDED (not raw credits) —
         # a cheap, well-known knapsack heuristic: one expensive mission that
         # eats a rare vehicle type can deny several cheaper missions worth
@@ -351,7 +355,18 @@ def plan_dispatches(
             plan.skipped.append((mission.id, "beyond batch size"))
             continue
         allow_partial = (governing == "topup") or (governing == "normal" and policy.partial_starts)
-        outcome = _plan_one(mission, pool, resolver, policy, assigned, building_pos,
+        # A genuinely FRESH send (nobody there yet) can't use a reserved class —
+        # that class is needed to close out a mission that's already open
+        # elsewhere. Anything with vehicle_state >= 1 (help/reinforcement) is
+        # exempt: it's exactly who the reservation exists for. topup missions
+        # are always vehicle_state >= 1 already (enforced above), so they're
+        # naturally exempt without a separate check.
+        is_fresh_send = governing == "normal" and getattr(mission, "vehicle_state", 0) == 0
+        call_pool = (
+            [v for v in pool if v.type_id not in reserved_type_ids]
+            if is_fresh_send and reserved_type_ids else pool
+        )
+        outcome = _plan_one(mission, call_pool, resolver, policy, assigned, building_pos,
                             text_engine, allow_partial=allow_partial,
                             patient_only=(governing == "patient"), shortfalls=plan.shortfalls)
         if isinstance(outcome, str):
@@ -558,14 +573,20 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
     """Handle spread/top-up and parasite missions BEFORE the normal filtered pass.
 
     Bypasses cash/source/category filters, ordering and batch. Returns the set of
-    handled mission ids and how many count toward the batch (useful contributions
-    do; pure leech sends do not).
+    handled mission ids, how many count toward the batch (useful contributions
+    do; pure leech sends do not), and the vehicle TYPE IDS reserved because a
+    mission evaluated here already has some response (vehicle_state >= 1) and
+    still mentions them as needed — see ``reserved_type_ids`` in
+    :func:`plan_dispatches` for the full rationale (unconditional, not gated
+    on whether this pass's own attempt happens to look sufficient).
     """
     handled: set[int] = set()
     batch_used = 0
+    reserved: set[int] = set()
     assigned = assigned or {}
     for mission in missions:
         mid = mission.id
+        mtype = resolver.catalog.get(getattr(mission, "mission_type_id", None))
         on_it = mid in assigned                       # a mission we're already on
         others_on = getattr(mission, "vehicle_state", 0) >= 1
         is_alliance = getattr(mission, "is_alliance", False)
@@ -620,7 +641,11 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
             cset = set(chosen)
             pool[:] = [v for v in pool if v.id not in cset]
             handled.add(mid)
-    return handled, batch_used
+        # Same reservation rule as plan_dispatches' main loop, regardless of
+        # whether OUR OWN attempt above happens to look sufficient this cycle.
+        _reserve_vehicle_group(reserved, mission, mtype, resolver, assigned,
+                                patient_governed=patient_here)
+    return handled, batch_used, reserved
 
 
 def _note_shortfall(shortfalls, classes) -> None:
@@ -871,3 +896,26 @@ def _apply_delta(requirements, assigned, mission_id):
         if new_count > 0:
             reduced.append(replace(requirement, count=new_count))
     return reduced
+
+
+def _reserve_vehicle_group(reserved, mission, mtype, resolver, assigned, patient_governed):
+    """Add *mission*'s outstanding vehicle-category type IDs to *reserved*
+    (in place), if it qualifies (Sasha, 2026-09-11 — see the full rationale
+    in :func:`plan_dispatches`). Shared by :func:`plan_dispatches`' main loop
+    and :func:`_priority_pass` so the two reservation paths can't drift apart.
+
+    Qualifies when: NOT patient-governed (vehicle categories aren't part of
+    patient-only resolution), the mission type is known, and the mission
+    already has some response (``vehicle_state >= 1`` — it's revealed/
+    mentioned something, not just an untouched catalogue estimate).
+    Unconditional beyond that: does NOT check whether the current pool looks
+    numerically sufficient, by design (a vehicle can look available/
+    dispatchable yet keep silently failing to actually crew/tow, so a
+    same-cycle "looks satisfiable" check is exactly the kind of signal that
+    failure mode fools — trust the mission's own revealed need instead).
+    """
+    if patient_governed or mtype is None or getattr(mission, "vehicle_state", 0) < 1:
+        return
+    vreqs, _unmatched = resolver.vehicle_requirements(mission, mtype)
+    for req in _apply_delta(vreqs, assigned, mission.id):
+        reserved.update(req.type_ids)

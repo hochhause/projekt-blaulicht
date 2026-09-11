@@ -872,6 +872,119 @@ class DispatchPlannerTests(unittest.TestCase):
         plan = self.plan([mission(1, 1, NEAR)], [vehicle(100, LF), vehicle(101, 63), vehicle(102, 64)])
         self.assertEqual(plan.planned[0].vehicle_ids, (100,))
 
+    # -- vehicle-class reservation for known shortfalls (Sasha, 2026-09-11) --
+
+    def test_reservation_blocks_fresh_dispatch_when_an_already_open_mission_is_short(self):
+        # Mission 1 (ally-started, vehicle_state=1) still needs a boat; mission
+        # 2 is a completely fresh mission that also needs one, and is CLOSER
+        # (NEAR2 < NEAR) so it's processed first under default NEAREST order.
+        # Without reservation it would steal the only boat; with it, the boat
+        # must be held for the already-open mission instead.
+        ally_started = mission(1, 1, NEAR, vehicle_state=1,
+                                missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        fresh = mission(2, 1, NEAR2, vehicle_state=0,
+                        missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        boat = vehicle(100, 70)
+        plan = self.plan([ally_started, fresh], [boat])
+        planned_ids = {p.mission_id for p in plan.planned}
+        self.assertIn(1, planned_ids)
+        self.assertNotIn(2, planned_ids)
+        skip_reasons = dict(plan.skipped)
+        self.assertTrue(skip_reasons[2].startswith("not enough vehicles"))
+
+    def test_reservation_applies_even_with_surplus_supply(self):
+        # Deliberately UNCONDITIONAL (Sasha, 2026-09-11): reservation isn't
+        # lifted just because the pool happens to look "enough" for everyone
+        # -- a vehicle can look available yet keep silently failing to
+        # actually crew/tow, so a same-cycle "looks satisfiable" count isn't
+        # trusted. As long as mission 1 still MENTIONS a boat as needed, the
+        # WHOLE class stays held back from fresh dispatch, even with 2 boats
+        # on hand for a 1-boat need.
+        ally_started = mission(1, 1, NEAR, vehicle_state=1,
+                                missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        fresh = mission(2, 1, NEAR2, vehicle_state=0,
+                        missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        boats = [vehicle(100, 70), vehicle(101, 70)]
+        plan = self.plan([ally_started, fresh], boats)
+        planned_ids = {p.mission_id for p in plan.planned}
+        self.assertIn(1, planned_ids)
+        self.assertNotIn(2, planned_ids)
+
+    def test_reservation_lifted_once_the_mention_is_gone(self):
+        # Once mission 1's missing_text no longer mentions anything needed
+        # (revealed and fully satisfied -- empty groups), the class is free
+        # for fresh dispatch again.
+        resolved = mission(1, 1, NEAR, vehicle_state=1,
+                            missing_text='{"vehicles":"","personnel":"","other":""}')
+        fresh = mission(2, 1, NEAR2, vehicle_state=0,
+                        missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        plan = self.plan([resolved, fresh], [vehicle(100, 70)])
+        planned_ids = {p.mission_id for p in plan.planned}
+        self.assertIn(2, planned_ids)
+
+    def test_reservation_does_not_apply_to_unrelated_vehicle_classes(self):
+        # The shortfall is for boats; a fresh mission needing an unrelated
+        # class (firetrucks) is completely unaffected.
+        ally_started = mission(1, 1, NEAR, vehicle_state=1,
+                                missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        fresh_unrelated = mission(2, 1, NEAR2, vehicle_state=0)  # plain firetrucks:1
+        plan = self.plan([ally_started, fresh_unrelated], [vehicle(100, LF)])
+        planned_ids = {p.mission_id for p in plan.planned}
+        self.assertIn(2, planned_ids)
+
+    def test_reservation_contributed_via_priority_pass_for_our_own_open_mission(self):
+        # Mission 1 is OUR OWN already-open mission (on_it, via `assigned`) --
+        # handled entirely inside _priority_pass, never reaching the main
+        # loop's own reservation block. A SECOND boat is idle and unclaimed
+        # by mission 1's own dispatch -- reservation must still hold it back
+        # from the fresh mission (not just "whatever's left over").
+        ours = mission(1, 1, NEAR, vehicle_state=1,
+                       missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        fresh = mission(2, 1, NEAR2, vehicle_state=0,
+                        missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        boats = [vehicle(100, 70), vehicle(101, 70)]
+        assigned = {1: [999]}  # an irrelevant already-assigned type -- doesn't satisfy the boat need
+        plan = self.plan([ours, fresh], boats, assigned=assigned)
+        planned_ids = {p.mission_id for p in plan.planned}
+        self.assertIn(1, planned_ids)     # priority pass grabs a boat for our own mission
+        self.assertNotIn(2, planned_ids)  # fresh mission blocked despite an idle second boat
+
+    def test_reservation_accumulates_across_multiple_open_missions(self):
+        # Mission 1 needs a boat, mission 2 needs a GW-Wasserrettung -- both
+        # reservations must coexist in the same cycle without one clobbering
+        # the other.
+        boat_mission = mission(1, 1, NEAR, vehicle_state=1,
+                               missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        gw_mission = mission(2, 1, NEAR2, vehicle_state=1,
+                             missing_text='{"vehicles":null,"personnel":"1 GW-Wasserrettung","other":""}')
+        fresh_boat = mission(3, 1, NEAR, vehicle_state=0,
+                             missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        fresh_gw = mission(4, 1, NEAR2, vehicle_state=0,
+                           missing_text='{"vehicles":null,"personnel":"1 GW-Wasserrettung","other":""}')
+        boat = vehicle(100, 70)
+        gw = vehicle(101, 64)
+        plan = self.plan([boat_mission, gw_mission, fresh_boat, fresh_gw], [boat, gw])
+        planned_ids = {p.mission_id for p in plan.planned}
+        self.assertIn(1, planned_ids)
+        self.assertIn(2, planned_ids)
+        self.assertNotIn(3, planned_ids)
+        self.assertNotIn(4, planned_ids)
+
+    def test_reservation_suppressed_when_assigned_already_covers_the_need(self):
+        # If we've ALREADY sent a matching vehicle (tracked via `assigned`,
+        # from the live vehicle feed) that fully covers the mentioned
+        # category, the outstanding need nets to zero and nothing is
+        # reserved -- even though missing_text hasn't caught up yet.
+        ours = mission(1, 1, NEAR, vehicle_state=1,
+                       missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        fresh = mission(2, 1, NEAR2, vehicle_state=0,
+                        missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        boat_for_fresh = vehicle(100, 70)
+        assigned = {1: [70]}  # a boat already assigned to mission 1
+        plan = self.plan([ours, fresh], [boat_for_fresh], assigned=assigned)
+        planned_ids = {p.mission_id for p in plan.planned}
+        self.assertIn(2, planned_ids)
+
 
 if __name__ == "__main__":
     unittest.main()

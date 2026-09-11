@@ -659,3 +659,71 @@ ONLY unless/until told to push/merge/rebuild.
 
 NOTE: commit only, per the established batching pattern -- no
 push/merge/rebuild this round.
+
+## app/domain/dispatch.py, app/domain/resolver.py — reviewed 2026-09-11, ad-hoc feature (vehicle-class reservation)
+- User: "reinforcements and help is always to be prioritized... if ANY
+  mission mentions some vehicle group as missing (e.g. 'missing a boat' or
+  'missing personnel GW-Wasserrettung'), those vehicles cannot be sent out
+  as [fresh] dispatch anymore, only help or reinforcement until those
+  missing texts have been resolved." Investigated first: the existing
+  priority pass already gives OUR OWN already-open missions first crack at
+  the pool each cycle, but nothing previously prevented a FRESH send
+  elsewhere from consuming a vehicle class an already-open (ours or an
+  ally's) mission still needs -- confirmed via two scoping questions with
+  the user before building: (1) only missions we could actually act on
+  (in range, in scope) count toward reservation; (2) reservation is a
+  BLUNT, WHOLE-CLASS hold, not an exact-count one -- deliberately, per the
+  user's own stated rationale: a vehicle can look available/dispatchable
+  yet keep silently failing to actually crew/tow (missing personnel,
+  missing a trailer tug), so a same-cycle "looks satisfiable" coverage
+  check is exactly the kind of signal that failure mode fools. Trust the
+  mission's own revealed need instead of our own in-cycle guess.
+- Implementation: `_reserve_vehicle_group()` (shared helper) adds a
+  mission's outstanding VEHICLE-CATEGORY type IDs (via the now-public
+  `resolver.vehicle_requirements()` -- excludes the casualty-count layer
+  deliberately, since ambulances/NEF are needed near-constantly and would
+  make reservation absurdly disruptive) to a per-cycle `reserved_type_ids`
+  set, for any actionable mission with `vehicle_state >= 1` that isn't
+  patient-governed. Called from both `_priority_pass` (our own/parasite
+  missions) and `plan_dispatches`' main candidate loop (everyone else),
+  UNCONDITIONALLY -- not gated on whether the current pool numerically
+  looks sufficient. The reservation set is fully built before ANY
+  consumption happens in the candidate-consuming loop, so a fresh mission
+  processed EARLIER in policy order (e.g. NEAREST) still correctly loses
+  out to an already-open mission evaluated later. Only a genuinely fresh
+  send (`governing=="normal"` and `vehicle_state==0` -- what would log as
+  "dispatched", not "sent to help"/"sent reinforcements") gets its pool
+  filtered; help/reinforcement sends always see the full pool.
+- Code review (async): APPROVE. Fixed both MEDIUM findings: (1) DRY
+  duplication between the two call sites -- extracted the shared
+  `_reserve_vehicle_group()` helper so the two reservation paths can't
+  drift apart; (2) a private cross-module method call
+  (`resolver._vehicle_requirements`) -- renamed to public
+  `resolver.vehicle_requirements()` with an updated docstring documenting
+  the new external caller. Closed the 3-part test-coverage gap: added
+  tests for the `_priority_pass` reservation path specifically, multiple
+  open missions reserving different classes simultaneously without
+  clobbering each other, and reservation correctly NOT triggering once
+  `assigned` (from the live vehicle feed, an independent, trusted signal)
+  already nets the outstanding need to zero.
+- Known, accepted, NOT-fixed limitation: parasite mode's ALL aggressiveness
+  can send a fresh vehicle to a completely untouched mission via
+  `_priority_pass`'s parasite branch, which does not currently respect
+  `reserved_type_ids` (that branch uses the full, unfiltered pool). A
+  narrower, opt-in edge case; disclosed, not built around in v1. Also
+  noted but not fixed: the SMART-order efficiency estimate doesn't account
+  for reservation when ranking, so a mission whose only path requires a
+  reserved class can rank artificially high and then get skipped anyway --
+  reviewed and confirmed negligible (a skipped mission costs nothing but
+  one wasted `_plan_one` call; it doesn't consume a batch slot or starve
+  another candidate).
+- Stability (1-5): 4 -- 7 new tests (4 initial + 3 closing the review's
+  gaps) covering the core mechanism, multi-mission accumulation, the
+  `assigned`-netting suppression case, and the priority-pass path
+  specifically. 341 tests pass.
+- Verdict: keep-as-is
+- Rationale: this is an explicit, deliberate over-reservation trade-off
+  the user chose with full awareness of the cost (idle vehicles sitting
+  unused rather than helping a fresh mission) in exchange for a much
+  simpler mental model when manually diagnosing a stuck dispatch -- not a
+  bug to "optimize away" later without checking with them first.
