@@ -153,6 +153,26 @@ class ResolverTests(unittest.TestCase):
         by = {r.source: r.count for r in resolver.resolve_mission(m1).requirements}
         self.assertEqual(by.get("nef"), 1)
 
+    def test_rth_comes_from_patient_need_as_rescue_helicopter_not_nef(self):
+        # Live-verified 2026-09-11: a patient can specifically ask for "RTH"
+        # (the helicopter), not just "NEF" -- must map to the dedicated
+        # rescue_helicopter class (type 31 only) so a plain ground Notarzt
+        # vehicle (also NEF-class, types 29/74) never gets sent in its place.
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=903, name="Med", average_credits=100, requirements={}, chances={})
+        resolver = MissionRequirementResolver(MissionCatalog({903: mt}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=903, patients_count=1, possible_patients_count=1,
+                             prisoners_count=0, possible_prisoners_count=0,
+                             patient_missing=("Wir benötigen: RTH",))
+        res = resolver.resolve_mission(m)
+        by = {r.source: r for r in res.requirements}
+        self.assertIn("rescue_helicopter", by)
+        self.assertEqual(by["rescue_helicopter"].count, 1)
+        self.assertEqual(set(by["rescue_helicopter"].type_ids), {31})
+        self.assertNotIn("nef", by)
+
     def test_two_patients_two_nefs(self):
         from app.domain.catalog import MissionCatalog, MissionType
         from app.domain.resolver import MissionRequirementResolver

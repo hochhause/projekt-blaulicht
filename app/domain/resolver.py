@@ -238,21 +238,31 @@ class MissionRequirementResolver:
         return replace(requirement, count=vehicles_needed)
 
     def _casualty_counts(self, mission, mtype) -> dict[str, int]:
-        """NEF / ambulances / police_cars / incident-command driven by revealed
-        or possible casualty counts. Never comes from ``missing_text`` (a NEF is
-        only ever revealed via ``patients_prisoners[].missing_text``; LNA/OrgL
-        are our own incident-command heuristic, never requested by the game) —
-        so this always applies on top of :meth:`_vehicle_requirements`."""
+        """NEF / RTH / ambulances / police_cars / incident-command driven by
+        revealed or possible casualty counts. Never comes from the mission's
+        own ``missing_text`` (a NEF/RTH is only ever revealed via
+        ``patients_prisoners[].missing_text``; LNA/OrgL are our own
+        incident-command heuristic, never requested by the game) — so this
+        always applies on top of :meth:`_vehicle_requirements`."""
         counts: dict[str, int] = {}
 
         # Notärzte revealed per patient (patients_prisoners[].missing_text =
         # "Wir benötigen: NEF") — the accurate, just-in-time NEF demand.
+        # "Wir benötigen: RTH" is the SAME per-patient signal but specifically
+        # asks for the helicopter (confirmed live 2026-09-11) — mapped to the
+        # dedicated `rescue_helicopter` class (type 31 only), not the broader
+        # `nef` class (29/31/74, incl. ground Notarzt vehicles), so a plain
+        # ground NEF never gets sent in place of the helicopter actually asked for.
+        patient_missing = tuple(pm.lower() for pm in getattr(mission, "patient_missing", ()))
         nef_needed = sum(
-            1 for pm in getattr(mission, "patient_missing", ())
-            if "nef" in pm.lower() or "notarzt" in pm.lower()
+            1 for pm in patient_missing
+            if ("nef" in pm or "notarzt" in pm) and "rth" not in pm and "rettungshubschrauber" not in pm
         )
         if nef_needed:
             counts["nef"] = nef_needed
+        rth_needed = sum(1 for pm in patient_missing if "rth" in pm or "rettungshubschrauber" in pm)
+        if rth_needed:
+            counts["rescue_helicopter"] = rth_needed
 
         # A unit already on the mission means its casualty counts are revealed,
         # so a 0 is real (patients/prisoners already dealt with) rather than hidden.

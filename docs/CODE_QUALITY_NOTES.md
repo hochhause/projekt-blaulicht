@@ -631,3 +631,31 @@ findings from this live-testing session before the next rebuild.
 
 NOTE: per the established pattern this session, this batch is COMMITTED
 ONLY unless/until told to push/merge/rebuild.
+
+## app/domain/resolver.py — reviewed 2026-09-11, live gap (RTH per-patient request undetected)
+- User asked: "does the app know the RTH from 'Wir benötigen: RTH' for
+  patientcare?" Investigated: no. `_casualty_counts`'s per-patient text
+  match only checked "nef"/"notarzt" -- a patient's revealed
+  "Wir benötigen: RTH" matched neither, so that request was silently
+  ignored entirely (no NEF, no helicopter, nothing added).
+- Fix: detect "rth"/"rettungshubschrauber" as a separate signal, mapped to
+  the dedicated `rescue_helicopter` class (type 31 only) rather than the
+  broader `nef` class (29/31/74, includes ground Notarzt vehicles) --
+  RTH-mentioning entries are excluded from the `nef` bucket so the same
+  patient's need isn't double-counted across both.
+- Code review (async): APPROVE, one MEDIUM residual-risk note (accepted,
+  not fixed): substring matching ("rth" in text) is only proven safe
+  against the two patient-need shapes ever observed live
+  ("Wir benötigen: NEF"/"RTH") -- a hypothetical future third shape
+  containing "rth" as an incidental substring of an unrelated word is
+  unproven but not impossible. Not blocking; worth re-checking if a new
+  patient-need string shape is ever observed.
+- Stability (1-5): 5 -- 1 new end-to-end test
+  (`test_rth_comes_from_patient_need_as_rescue_helicopter_not_nef`)
+  confirms the count, the class, AND that it does NOT also land in `nef`;
+  existing NEF tests (`test_nef_comes_from_patient_need_not_chance`,
+  `test_two_patients_two_nefs`) confirmed unaffected. 334 tests pass.
+- Verdict: keep-as-is
+
+NOTE: commit only, per the established batching pattern -- no
+push/merge/rebuild this round.
