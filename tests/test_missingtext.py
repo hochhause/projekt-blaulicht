@@ -265,6 +265,20 @@ class DefaultResolverTests(unittest.TestCase):
         self.assertEqual(req.count, 2)
         self.assertIn(64, req.type_ids)  # GW-W is vehicle type 64
 
+    def test_seg_elw_is_a_generic_elw1_substitute(self):
+        # Confirmed live 2026-09-11: SEG-ELW (59) is "usable as a plain ELW"
+        # in addition to its own dedicated "ELW 1 (SEG)" category.
+        resolver = default_resolver()
+        req = resolver.resolve_line("1 ELW 1")
+        self.assertIn(59, req.type_ids)
+
+    def test_elw2_drohne_is_in_the_drone_category(self):
+        # Type 129 ("ELW2 Drohne") already matched "Drohneneinheit(en)" in
+        # the live table -- this locks that in against regression.
+        resolver = default_resolver()
+        req = resolver.resolve_line("1 Drohneneinheit")
+        self.assertIn(129, req.type_ids)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -33,7 +33,9 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(by_class["firetrucks"].count, 2)
         # Real Vehicle.mscv mappings:
         self.assertEqual(set(by_class["platform_trucks"].type_ids), {2, 85})
-        self.assertEqual(set(by_class["battalion_chief_vehicles"].type_ids), {3, 34, 78})
+        # SEG-ELW (59, "usable as a plain ELW") joins ELW1/ELW2/ELW2-Drohne
+        # as a battalion-chief substitute -- confirmed live 2026-09-11.
+        self.assertEqual(set(by_class["battalion_chief_vehicles"].type_ids), {3, 34, 59, 78})
         self.assertEqual(res.total_vehicles, 2 + 1 + 1)
 
     def test_police_class(self):

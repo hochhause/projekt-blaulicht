@@ -514,3 +514,42 @@ of each module's history if it's revisited.
 NOTE: per explicit instruction, this fix is COMMITTED ONLY -- not pushed,
 not merged to master, not deployed. Batched together with any further
 findings from this live-testing session before the next rebuild.
+
+## data/de/vehicles/Vehicle.mscv, data/reference/lssm-missing-requirements.json — reviewed 2026-09-11, live data gap (ELW substitution)
+- User asked whether ELW2 (mobile command vehicle) and ELW2-Drohne are
+  recognized substitutes for ELW1 (battalion chief vehicle), and mentioned
+  SEG-ELW ("usable as a plain ELW") and ELW2-Drohne ("also serves as a
+  drone"). Investigated both the catalog fallback class map and the live
+  `missing_text` table:
+  - ELW1 (3) / ELW2 (34) / ELW2-Drohne (78, 129) were ALREADY fully
+    interchangeable in both paths -- no gap.
+  - ELW2-Drohne (129) was ALREADY correctly in the live "Drohneneinheit(en)"
+    category (`[125,126,127,128,129]`), but MISSING from the catalog
+    fallback's `Vehicle.mscv` `"drone"` class (`[125,126,127,128]`) -- a
+    real, if minor, inconsistency (only affects the pre-missing_text
+    catalog estimate for an untouched drone-needing mission).
+  - SEG-ELW (59) was ONLY mapped to its own dedicated "ELW 1 (SEG)"
+    category, not to plain "ELW 1"/`battalion_chief_vehicles` -- confirmed
+    by the user as a real gap ("usable as a ELW" too).
+- Fix: added 129 to `Vehicle.mscv`'s `"drone"` class; added 59 to
+  `Vehicle.mscv`'s `"battalion_chief_vehicles"` class AND to the live
+  table's `"ELW 1"` vehicles list, while KEEPING the dedicated "ELW 1
+  (SEG)" -> [59] entry unchanged (SEG-ELW satisfies either need).
+- User flagged a NEXT step explicitly out of scope for this fix: SEG-ELW
+  and ELW2-Drohne are "less preferable" for a GENERIC ELW slot since both
+  have their own special use case (SEG-ELW: preferred on 20+ patient
+  missions per the game's automatic patient-FSM handling; ELW2-Drohne: its
+  drone role). The coverage matcher (`app/domain/coverage.py`) has NO
+  concept of "prefer type A over type B within one requirement's eligible
+  set" today -- `select_coverage`'s tie-break is only
+  (most-requirements-covered, nearest, vehicle id). Implementing a
+  specialization-avoidance preference is a real algorithm change to a
+  shared, heavily-used function, not a data-table edit -- deliberately NOT
+  attempted in this pass; flagged for a follow-up decision.
+- Stability (1-5): 5 -- 3 new regression tests (real committed data), 317
+  tests pass. No code-reviewer subagent dispatched for this one (unlike the
+  NBSP/GW-Wasserrettung fixes): pure array-append changes to already
+  well-tested data files, double-cross-referenced against both user
+  domain confirmation and the .mscv source pattern data before editing --
+  proportionate to the size of the change per ponytail.
+- Verdict: keep-as-is
