@@ -1099,3 +1099,82 @@ credit bounds) should also be extended to group mode.
   org's own stated policy and was a trivial, safe extraction with no
   behavior change (confirmed via the unchanged 43-test group+group_
   coordinator suite passing identically before and after).
+
+## app/game/models.py, app/domain/dispatch.py, app/core/account_config.py, app/web/app.py + account.html/details.html — reviewed 2026-09-12, ad-hoc feature (event-mission tag + mission_source multi-select)
+- User asked: "can you make it that the bot can distinguish between my own,
+  alliance shared (already does) and event." Clarified upfront: shared
+  missions carry "[Verband]" in the caption per the user (though the code
+  already detects alliance-ness structurally via `alliance_shared_at`, not
+  caption text -- no change needed there), while event missions carry
+  "[Event]" -- and "it can fall under my own or other ones depending on who
+  buys/sets up the event," meaning EVENT is an independent, additive tag,
+  not a third exclusive value alongside own/alliance. Asked what the
+  distinction should actually change: user chose "mostly for the setting of
+  what missions to work... a dropdown with multiselect" -- turning the
+  existing single-choice `mission_source` (own/alliance/both) into a
+  multi-select where a mission is worked if it matches ANY selected tag.
+- Implementation: `Mission.is_event` (models.py) -- `"[Event]" in caption`.
+  `MissionSource` (dispatch.py) dropped `BOTH`, gained `EVENT`.
+  `_source_covers()` reworked to `(source: frozenset[MissionSource],
+  is_alliance, is_event) -> bool`: `tag in source or (is_event and EVENT in
+  source)`, where `tag` is OWN or ALLIANCE by `is_alliance` -- so selecting
+  {own, event} covers own missions (any) AND alliance-shared events, but not
+  plain alliance missions, exactly as the user described.
+  `DispatchPolicy.mission_source` is now `frozenset[MissionSource]`
+  (`field(default_factory=...)`, since a frozenset can't be a plain
+  dataclass default) defaulting to `{OWN, ALLIANCE}` (same effective
+  behavior as the old BOTH default). `AccountConfig.mission_source` is now
+  `tuple[str, ...]`; `from_dict()` migrates an old plain-string value
+  ("both"/"own"/"alliance") to the equivalent tuple, a new-format
+  list/tuple passing through untouched; `dispatch_policy()` silently drops
+  any entry that doesn't parse as a `MissionSource` rather than falling
+  back to a default -- an all-empty/all-garbage selection deliberately maps
+  to "normal dispatch works nothing" (a valid setting, e.g. a pure
+  parasite/top-up account), not a silent default reinstatement. Web:
+  `mission_source` form field is now `list[str] = Form(default=[])`;
+  account.html's single `<select>` replaced with three checkboxes
+  (own/alliance/event).
+- Code review (async): APPROVE, 0 CRITICAL/HIGH, 1 MEDIUM + 2 LOW, all
+  fixed before commit. MEDIUM: `details.html`'s Source row rendered the new
+  tuple field with Jinja's bare `str()` (`('own', 'alliance')`, quotes and
+  parens included) instead of following the sibling `allowed_categories`
+  row's established `| join(', ')` + empty-case-label pattern in the SAME
+  file -- fixed to match, with a new fallback label for the empty-selection
+  case ("none (normal dispatch works nothing)"). LOW: `docs/MODES-TODO.md`'s
+  inventory row for `mission_source` still described the old exclusive
+  three-value shape -- reworded to describe the multi-select + the event
+  tag's additive semantics. LOW: no in-UI signal when all three checkboxes
+  are unchecked (a real but fully-intentional state per the code's own
+  comments) -- added a conditional warning paragraph under the checkboxes,
+  shown only when `cfg.mission_source` is empty.
+- Also closed, proactively (not reviewer-flagged, found while fixing the
+  MEDIUM above): neither `account.html` nor `details.html` was rendered by
+  ANY existing test -- `test_config_save_roundtrips` and friends only POST
+  to the config route, never GET the pages back, so a template syntax error
+  in either would have shipped undetected. Added
+  `test_account_config_page_renders_with_mission_source_checkboxes`,
+  `test_account_config_page_warns_when_no_source_is_selected`, and
+  `test_account_details_page_shows_mission_source_as_a_joined_list` to close
+  that gap for both pages going forward, not just for this one field.
+- Live-data note: the `"[Event]"` caption marker is owner-confirmed (not
+  independently probed against a live account this session) --
+  `docs/live-data-model.md` and `docs/MODES-TODO.md` both updated in the
+  same pass so the finding isn't siloed in code comments alone, per the
+  project's own verify-before-shipping convention.
+- Stability (1-5): 5 -- 403 tests pass, including the exact scenario the
+  user described end-to-end through `plan_dispatches`
+  (`test_mission_source_own_plus_event_also_covers_an_alliance_event`), the
+  event-tag-regardless-of-ownership case, the empty-selection-covers-
+  nothing case, the legacy string migration for all three old values plus
+  garbage, and the two new template-rendering regression tests above.
+- Verdict: keep-as-is
+- Rationale: a straightforward, well-scoped extension of an already-
+  established enum/scope pattern (mirrors `ModeScope`'s own off/own/
+  alliance/both shape, just multi-select instead of exclusive); the
+  reviewer's findings were real but cosmetic (display formatting, stale
+  doc, missing UI hint), not correctness bugs in the core `_source_covers`
+  logic, which the reviewer traced through every `(is_alliance, is_event)`
+  combination and found already correct.
+
+NOTE: commit only, per the established batching pattern -- no
+push/merge/rebuild this round without asking first.

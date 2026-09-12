@@ -13,7 +13,7 @@ Status: DRAFT for discussion. Check items off as we settle/implement them.
 ### Per-account (single-account dispatch)
 | Setting | Values | What it does |
 |---|---|---|
-| `mission_source` | both / own / alliance | Which missions **normal** dispatch works. |
+| `mission_source` | multi-select: own / alliance / event | Which missions **normal** dispatch works — event is an independent, additive tag (2026-09-12): an event mission can ALSO be own or alliance-shared, so selecting it covers such a mission even if its own/alliance tag isn't separately selected. |
 | `parasite_scope` | off / own / alliance / both | Leech missions others are already on (priority pass, additive). |
 | `parasite_aggressiveness` | active / all / needed | Added 2026-08-31 (Sasha). How eagerly, WITHIN `parasite_scope`: `active` (default) = only missions someone's already on; `all` = any scope-covered mission, even untouched ones (bypasses cash/category/batch/order filters, same as `active` always has); `needed` = `active` + `missing_text` must actually be revealed (skip missions that are already fully covered). |
 | `top_up_scope` | off / own / alliance / both | Only reinforce **already-begun** missions; partial ok. |

@@ -28,12 +28,26 @@
           <option value="newest" {{ 'selected' if cfg.order == 'newest' else '' }}>Newest first</option>
           <option value="smart" {{ 'selected' if cfg.order == 'smart' else '' }}>Smart — squeeze the most total credits out of my available vehicles</option>
         </select></div>
-      <div class="field"><label>Mission source</label>
-        <select name="mission_source">
-          <option value="both" {{ 'selected' if cfg.mission_source == 'both' else '' }}>Both (own + alliance)</option>
-          <option value="own" {{ 'selected' if cfg.mission_source == 'own' else '' }}>My own only</option>
-          <option value="alliance" {{ 'selected' if cfg.mission_source == 'alliance' else '' }}>Alliance shared only</option>
-        </select></div>
+      <div class="field"><label>Mission source (any selected tag is worked)</label>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;min-height:34px">
+          <label style="display:flex;align-items:center;gap:5px;font-weight:normal;text-transform:none;letter-spacing:0">
+            <input type="checkbox" name="mission_source" value="own" style="width:auto"
+                   {{ 'checked' if 'own' in cfg.mission_source else '' }}> My own</label>
+          <label style="display:flex;align-items:center;gap:5px;font-weight:normal;text-transform:none;letter-spacing:0">
+            <input type="checkbox" name="mission_source" value="alliance" style="width:auto"
+                   {{ 'checked' if 'alliance' in cfg.mission_source else '' }}> Alliance shared</label>
+          <label style="display:flex;align-items:center;gap:5px;font-weight:normal;text-transform:none;letter-spacing:0">
+            <input type="checkbox" name="mission_source" value="event" style="width:auto"
+                   {{ 'checked' if 'event' in cfg.mission_source else '' }}> Event (own or alliance)</label>
+        </div>
+        <p class="muted small" style="margin:2px 0 0">"Event" matches any mission tagged [Event] in-game regardless of
+          who bought it — check it alongside (or instead of) own/alliance to also work alliance-shared events even if
+          "Alliance shared" is off.</p>
+        {% if not cfg.mission_source %}
+        <p class="err small" style="margin:4px 0 0">⚠ No source selected — normal dispatch will work nothing (fine
+          only if you're running parasite/top-up/patient-only instead).</p>
+        {% endif %}
+      </div>
       <div class="field"><label>Own — min cash (0 = none)</label><input name="own_credit_min" type="number" step="1" value="{{ cfg.own_credit_min }}"></div>
       <div class="field"><label>Own — max cash (0 = none)</label><input name="own_credit_max" type="number" step="1" value="{{ cfg.own_credit_max }}"></div>
       <div class="field"><label>Alliance — min cash (0 = none)</label><input name="alliance_credit_min" type="number" step="1" value="{{ cfg.alliance_credit_min }}"></div>

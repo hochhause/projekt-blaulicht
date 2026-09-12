@@ -51,11 +51,19 @@ class DispatchOrder(str, Enum):
 
 
 class MissionSource(str, Enum):
-    """Which missions to work: your own, alliance-shared, or both."""
+    """Which missions to work — an independent tag a mission can carry.
 
-    BOTH = "both"
+    Every mission is exactly one of OWN/ALLIANCE (by ``is_alliance``); EVENT
+    is a SEPARATE, ADDITIVE tag (Sasha, 2026-09-12) — the game marks a
+    cooperative event mission "[Event]" in the caption regardless of who
+    bought/set it up, so an event mission can ALSO be own or alliance-shared.
+    ``DispatchPolicy.mission_source`` is therefore a SET of these (a
+    multi-select, not a single choice) — a mission is worked if it matches
+    ANY selected tag: its own/alliance tag, OR (if it's an event) EVENT."""
+
     OWN = "own"
     ALLIANCE = "alliance"
+    EVENT = "event"
 
 
 class ModeScope(str, Enum):
@@ -98,13 +106,16 @@ def _scope_covers(scope, is_alliance: bool) -> bool:
     return False  # "off" / unknown
 
 
-def _source_covers(source: "MissionSource", is_alliance: bool) -> bool:
-    """True if the normal-dispatch mission_source covers this mission."""
-    if source is MissionSource.OWN:
-        return not is_alliance
-    if source is MissionSource.ALLIANCE:
-        return is_alliance
-    return True  # BOTH
+def _source_covers(source: "frozenset[MissionSource]", is_alliance: bool, is_event: bool) -> bool:
+    """True if the normal-dispatch mission_source selection covers this
+    mission — matches if its own/alliance tag is selected, OR (independently)
+    if it's an event and EVENT is selected. An empty selection deliberately
+    covers nothing (a valid "run no normal dispatch, only special modes"
+    setting), not a silent fallback to "both"."""
+    tag = MissionSource.ALLIANCE if is_alliance else MissionSource.OWN
+    if tag in source:
+        return True
+    return is_event and MissionSource.EVENT in source
 
 
 @dataclass(frozen=True)
@@ -128,8 +139,11 @@ class DispatchPolicy:
     batch_size: int | None = None
     # Only work missions in these game categories (fire, police, …). Empty = all.
     allowed_categories: frozenset[str] = frozenset()
-    # Which missions to work, and an optional separate radius for alliance ones.
-    mission_source: MissionSource = MissionSource.BOTH  # normal full dispatch
+    # Which missions to work (a SET — see MissionSource's docstring), and an
+    # optional separate radius for alliance ones.
+    mission_source: frozenset[MissionSource] = field(
+        default_factory=lambda: frozenset({MissionSource.OWN, MissionSource.ALLIANCE})
+    )
     alliance_radius_km: float | None = None
     # Special modes, each SCOPED independently (off / own / alliance / both) so you
     # can e.g. keep normal dispatch own-only while a mode runs on alliance missions.
@@ -269,7 +283,7 @@ def plan_dispatches(
             governing = "patient"
         elif _scope_covers(policy.top_up_scope, is_alliance):
             governing = "topup"
-        elif _source_covers(policy.mission_source, is_alliance):
+        elif _source_covers(policy.mission_source, is_alliance, getattr(mission, "is_event", False)):
             governing = "normal"
         else:
             plan.skipped.append((mission.id, "out of scope"))

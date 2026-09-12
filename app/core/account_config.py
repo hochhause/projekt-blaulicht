@@ -43,7 +43,12 @@ class AccountConfig:
     order: str = DispatchOrder.NEAREST.value
     batch_size: int | None = 20
     allowed_categories: tuple[str, ...] = ()
-    mission_source: str = MissionSource.BOTH.value
+    # Which missions normal dispatch works — a MULTI-select (Sasha, 2026-09-12):
+    # own / alliance / event are independent tags a mission can carry (an event
+    # mission can ALSO be own or alliance-shared), so this is a set of
+    # MissionSource values, not one exclusive choice. Empty = normal dispatch
+    # works nothing (still a valid setting, e.g. a pure parasite/top-up account).
+    mission_source: tuple[str, ...] = (MissionSource.OWN.value, MissionSource.ALLIANCE.value)
     alliance_radius_km: float | None = None
     # Special modes, each scoped independently: off / own / alliance / both.
     parasite_scope: str = ModeScope.OFF.value
@@ -75,10 +80,16 @@ class AccountConfig:
             order = DispatchOrder(self.order)
         except ValueError:
             order = DispatchOrder.NEAREST
-        try:
-            source = MissionSource(self.mission_source)
-        except ValueError:
-            source = MissionSource.BOTH
+        # Unknown/garbage entries are dropped silently rather than falling
+        # back to a default -- an all-garbage selection ends up empty, which
+        # is itself a valid "work nothing via normal dispatch" setting.
+        _sources = set()
+        for v in self.mission_source:
+            try:
+                _sources.add(MissionSource(v))
+            except ValueError:
+                pass
+        source = frozenset(_sources)
 
         def _scope(value) -> ModeScope:
             try:
@@ -136,6 +147,18 @@ class AccountConfig:
         if not d:
             return cls()
         d = dict(d)
+        # Migrate the old single-choice mission_source (a plain string:
+        # "both"/"own"/"alliance") to the new multi-select tuple (Sasha,
+        # 2026-09-12) so existing accounts keep their prior behavior exactly.
+        # A NEW-format value is already a list/tuple and passes through
+        # untouched below.
+        legacy_source = d.get("mission_source")
+        if isinstance(legacy_source, str):
+            d["mission_source"] = {
+                "both": [MissionSource.OWN.value, MissionSource.ALLIANCE.value],
+                "own": [MissionSource.OWN.value],
+                "alliance": [MissionSource.ALLIANCE.value],
+            }.get(legacy_source, [MissionSource.OWN.value, MissionSource.ALLIANCE.value])
         # Migrate legacy boolean modes to scopes so existing accounts keep working:
         # parasite was alliance-only; top-up / patient-only applied to both sources.
         if "parasite_scope" not in d and d.get("parasite_mode"):
@@ -150,6 +173,8 @@ class AccountConfig:
         values = {k: v for k, v in d.items() if k in known}
         if "allowed_categories" in values:  # JSON stores a list; keep it a tuple
             values["allowed_categories"] = tuple(values["allowed_categories"])
+        if "mission_source" in values:
+            values["mission_source"] = tuple(values["mission_source"])
         return cls(**values)
 
 

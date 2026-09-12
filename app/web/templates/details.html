@@ -24,7 +24,7 @@
      <a href="/accounts/{{ account.id }}">Configure</a> page.</p>
   <table>
     <tr><th>Order</th><td>{{ cfg.order }}</td></tr>
-    <tr><th>Source</th><td>{{ cfg.mission_source }}</td></tr>
+    <tr><th>Source</th><td>{{ cfg.mission_source | join(', ') if cfg.mission_source else 'none (normal dispatch works nothing)' }}</td></tr>
     <tr><th>Radius</th><td>{{ cfg.radius_km }} km{% if cfg.alliance_radius_km %} (alliance {{ cfg.alliance_radius_km }} km){% endif %}</td></tr>
     <tr><th>Own cash</th><td>{{ cfg.own_credit_min }}–{{ cfg.own_credit_max if cfg.own_credit_max else '∞' }}</td></tr>
     <tr><th>Alliance cash</th><td>{{ cfg.alliance_credit_min }}–{{ cfg.alliance_credit_max if cfg.alliance_credit_max else '∞' }}</td></tr>

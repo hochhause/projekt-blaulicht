@@ -35,12 +35,13 @@ FAR = (53.5500, 9.9900)     # Hamburg, ~250 km
 
 
 def mission(mid, mtype, pos, is_alliance=False, average_credits=0, created_at=None, vehicle_state=0,
-            patients_count=0, possible_patients_count=0, missing_text=""):
+            patients_count=0, possible_patients_count=0, missing_text="", is_event=False):
     return SimpleNamespace(
         id=mid, caption=f"M{mid}", mission_type_id=mtype, position=pos,
         is_alliance=is_alliance, average_credits=average_credits, created_at=created_at,
         vehicle_state=vehicle_state, missing_text=missing_text,
         patients_count=patients_count, possible_patients_count=possible_patients_count,
+        is_event=is_event,
     )
 
 
@@ -325,7 +326,7 @@ class DispatchPlannerTests(unittest.TestCase):
         para = mission(1, 3, NEAR, is_alliance=True, vehicle_state=0)
         plan = plan_dispatches(
             [para], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
-            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE, mission_source=MissionSource.OWN),
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE, mission_source=frozenset({MissionSource.OWN})),
         )
         # mission_source OWN filters it out; parasite didn't grab it (vehicle_state 0)
         self.assertEqual(plan.planned, [])
@@ -361,7 +362,7 @@ class DispatchPlannerTests(unittest.TestCase):
             [para], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
             DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
                             parasite_mode=ParasiteAggressiveness.ALL,
-                            mission_source=MissionSource.OWN),
+                            mission_source=frozenset({MissionSource.OWN})),
         )
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].mission_id, 1)
@@ -396,7 +397,7 @@ class DispatchPlannerTests(unittest.TestCase):
             [covered], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
             DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
                             parasite_mode=ParasiteAggressiveness.NEEDED,
-                            mission_source=MissionSource.OWN),
+                            mission_source=frozenset({MissionSource.OWN})),
         )
         self.assertEqual(plan.planned, [])
 
@@ -407,7 +408,7 @@ class DispatchPlannerTests(unittest.TestCase):
             [needy], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
             DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
                             parasite_mode=ParasiteAggressiveness.NEEDED,
-                            mission_source=MissionSource.OWN),
+                            mission_source=frozenset({MissionSource.OWN})),
         )
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].mission_id, 1)
@@ -420,7 +421,7 @@ class DispatchPlannerTests(unittest.TestCase):
         own = mission(1, 1, NEAR, is_alliance=False)
         ally = mission(2, 1, NEAR2, is_alliance=True)
         ally.patients_count = 1
-        policy = DispatchPolicy(radius_km=40, mission_source=MissionSource.OWN,
+        policy = DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.OWN}),
                                 patient_scope=ModeScope.ALLIANCE)
         plan = plan_dispatches(
             [own, ally], [vehicle(100, LF), vehicle(101, 28)],  # LF + RTW(28)
@@ -436,11 +437,55 @@ class DispatchPlannerTests(unittest.TestCase):
         own = mission(1, 1, NEAR, is_alliance=False)
         plan = plan_dispatches(
             [own], [vehicle(100, LF)], [building()], self.resolver,
-            DispatchPolicy(radius_km=40, mission_source=MissionSource.ALLIANCE,
+            DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.ALLIANCE}),
                            patient_scope=ModeScope.ALLIANCE),
         )
         self.assertEqual(plan.planned, [])
         self.assertEqual(plan.skipped, [(1, "out of scope")])
+
+    # -- mission_source multi-select (event tag) -------------------------------
+    def test_mission_source_empty_selection_covers_nothing(self):
+        # An empty selection is a valid "run no normal dispatch" setting, not
+        # a silent fallback to own+alliance (Sasha, 2026-09-12).
+        own = mission(1, 1, NEAR, is_alliance=False)
+        plan = plan_dispatches(
+            [own], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, mission_source=frozenset()),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "out of scope")])
+
+    def test_mission_source_event_tag_covers_regardless_of_alliance_ownership(self):
+        # An event mission can be own OR alliance-shared depending on who
+        # bought it -- selecting only EVENT must cover both, and must NOT
+        # cover a plain (non-event) alliance mission.
+        own_event = mission(1, 1, NEAR, is_alliance=False, is_event=True)
+        alliance_event = mission(2, 1, NEAR2, is_alliance=True, is_event=True)
+        plain_alliance = mission(3, 1, NEAR2, is_alliance=True, is_event=False)
+        plan = plan_dispatches(
+            [own_event, alliance_event, plain_alliance],
+            [vehicle(100, LF), vehicle(101, LF), vehicle(102, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.EVENT})),
+        )
+        planned_ids = {mp.mission_id for mp in plan.planned}
+        self.assertEqual(planned_ids, {1, 2})
+        self.assertIn((3, "out of scope"), plan.skipped)
+
+    def test_mission_source_own_plus_event_also_covers_an_alliance_event(self):
+        # The exact scenario Sasha described: "own" checked, "alliance" NOT
+        # checked, but an alliance-shared event should still be worked
+        # because "event" is an independent, additive tag.
+        own_normal = mission(1, 1, NEAR, is_alliance=False, is_event=False)
+        alliance_event = mission(2, 1, NEAR2, is_alliance=True, is_event=True)
+        alliance_normal = mission(3, 1, NEAR2, is_alliance=True, is_event=False)
+        plan = plan_dispatches(
+            [own_normal, alliance_event, alliance_normal],
+            [vehicle(100, LF), vehicle(101, LF), vehicle(102, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.OWN, MissionSource.EVENT})),
+        )
+        planned_ids = {mp.mission_id for mp in plan.planned}
+        self.assertEqual(planned_ids, {1, 2})
+        self.assertIn((3, "out of scope"), plan.skipped)
 
     # -- top-up / symbiont mode ----------------------------------------------
     def test_top_up_skips_fresh_mission(self):
@@ -612,7 +657,7 @@ class DispatchPlannerTests(unittest.TestCase):
     def test_own_only_filter_skips_alliance(self):
         plan = plan_dispatches(
             [mission(1, 1, NEAR, is_alliance=True)], [vehicle(100, LF)], [building()],
-            self.resolver, DispatchPolicy(radius_km=40, mission_source=MissionSource.OWN),
+            self.resolver, DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.OWN})),
         )
         self.assertEqual(plan.planned, [])
         self.assertEqual(plan.skipped, [(1, "out of scope")])
@@ -620,7 +665,7 @@ class DispatchPlannerTests(unittest.TestCase):
     def test_alliance_only_filter_skips_own(self):
         plan = plan_dispatches(
             [mission(1, 1, NEAR, is_alliance=False)], [vehicle(100, LF)], [building()],
-            self.resolver, DispatchPolicy(radius_km=40, mission_source=MissionSource.ALLIANCE),
+            self.resolver, DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.ALLIANCE})),
         )
         self.assertEqual(plan.planned, [])
         self.assertEqual(plan.skipped, [(1, "out of scope")])

@@ -135,8 +135,76 @@ class WebPanelTests(unittest.TestCase):
         self.assertEqual(cfg["radius_km"], 25)
         self.assertEqual(cfg["own_credit_min"], 100)
         self.assertEqual(cfg["alliance_credit_max"], 8000)
-        self.assertEqual(cfg["mission_source"], "own")
+        self.assertEqual(cfg["mission_source"], ["own"])
         self.assertEqual(cfg["parasite_aggressiveness"], "needed")
+
+    def test_mission_source_checkboxes_roundtrip_as_a_set(self):
+        # mission_source is now a multi-select (Sasha, 2026-09-12: own /
+        # alliance / event are independent tags, not one exclusive choice) --
+        # posting several checked boxes must save all of them.
+        import json
+
+        self._login()
+        self.client.post("/accounts", data={"label": "n", "email": "x@e.com", "password": "p"})
+        aid = self.store.list_accounts()[0].id
+        self.client.post(
+            f"/accounts/{aid}",
+            data={
+                "label": "n", "email": "x@e.com", "password": "",
+                "mission_source": ["own", "event"],
+            },
+        )
+        cfg = json.loads(self.store.get_config(aid))
+        self.assertEqual(sorted(cfg["mission_source"]), ["event", "own"])
+
+    def test_mission_source_no_boxes_checked_saves_empty(self):
+        import json
+
+        self._login()
+        self.client.post("/accounts", data={"label": "n", "email": "x@e.com", "password": "p"})
+        aid = self.store.list_accounts()[0].id
+        self.client.post(
+            f"/accounts/{aid}",
+            data={"label": "n", "email": "x@e.com", "password": ""},  # no mission_source key at all
+        )
+        cfg = json.loads(self.store.get_config(aid))
+        self.assertEqual(cfg["mission_source"], [])
+
+    def test_account_config_page_renders_with_mission_source_checkboxes(self):
+        # account.html isn't rendered by any of the POST-only tests above --
+        # this is the only regression guard against a template error in the
+        # checkbox markup (Sasha, 2026-09-12's own/alliance/event multiselect).
+        self._login()
+        self.client.post("/accounts", data={"label": "n", "email": "x@e.com", "password": "p"})
+        aid = self.store.list_accounts()[0].id
+        r = self.client.get(f"/accounts/{aid}")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('value="event"', r.text)
+        self.assertNotIn("No source selected", r.text)  # default is own+alliance, not empty
+
+    def test_account_config_page_warns_when_no_source_is_selected(self):
+        self._login()
+        self.client.post("/accounts", data={"label": "n", "email": "x@e.com", "password": "p"})
+        aid = self.store.list_accounts()[0].id
+        self.client.post(
+            f"/accounts/{aid}",
+            data={"label": "n", "email": "x@e.com", "password": ""},  # no mission_source checked
+        )
+        r = self.client.get(f"/accounts/{aid}")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("No source selected", r.text)
+
+    def test_account_details_page_shows_mission_source_as_a_joined_list(self):
+        self._login()
+        self.client.post("/accounts", data={"label": "n", "email": "x@e.com", "password": "p"})
+        aid = self.store.list_accounts()[0].id
+        self.client.post(f"/accounts/{aid}", data={
+            "label": "n", "email": "x@e.com", "password": "", "mission_source": ["own", "event"],
+        })
+        r = self.client.get(f"/accounts/{aid}/details")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("own, event", r.text)
+        self.assertNotIn("('own', 'event')", r.text)
 
     def test_settings_page_and_password_change(self):
         self._login()

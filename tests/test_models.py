@@ -68,6 +68,28 @@ class MissionParsingTests(unittest.TestCase):
         m = Mission.from_json({"id": 1, "mtid": "6/ab", "latitude": 47, "longitude": 7})
         self.assertIsNone(m.mission_type_id)  # variant id -> no int base, no crash
 
+    def test_event_mission_detected_from_caption_tag(self):
+        # Sasha, 2026-09-12: cooperative event missions carry "[Event]" in the
+        # caption -- an independent flag, since an event can be own OR
+        # alliance-shared depending on who bought it.
+        from app.game.models import Mission
+
+        own_event = Mission.from_json({"id": 1, "mtid": 1, "latitude": 47, "longitude": 7,
+                                        "caption": "[Event] Waldbrand"})
+        self.assertTrue(own_event.is_event)
+        self.assertFalse(own_event.is_alliance)
+
+        alliance_event = Mission.from_json({
+            "id": 2, "mtid": 1, "latitude": 47, "longitude": 7,
+            "caption": "[Event] Waldbrand", "alliance_shared_at": "2026-09-12T10:00:00Z",
+        })
+        self.assertTrue(alliance_event.is_event)
+        self.assertTrue(alliance_event.is_alliance)
+
+        plain = Mission.from_json({"id": 3, "mtid": 1, "latitude": 47, "longitude": 7,
+                                    "caption": "Verkehrsunfall"})
+        self.assertFalse(plain.is_event)
+
     def test_parses_patient_missing_and_missing_text(self):
         from app.game.models import Mission
 

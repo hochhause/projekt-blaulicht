@@ -112,6 +112,16 @@ class Mission:
         return self.alliance_shared_at is not None
 
     @property
+    def is_event(self) -> bool:
+        """True if this is a cooperative event mission — the game tags these
+        "[Event]" in the caption (Sasha, 2026-09-12), unlike alliance-sharing
+        which is a separate field (`alliance_shared_at`), not a caption
+        marker. An event mission can be own OR alliance-shared depending on
+        who bought/set it up, so this is an INDEPENDENT flag, not a third
+        value of `is_alliance`."""
+        return "[Event]" in self.caption
+
+    @property
     def status(self) -> str:
         """The icon-suffix status: "red" (missing something / untouched),
         "yellow" (something on the way), "green" (fully crewed, about to leave

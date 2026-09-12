@@ -37,6 +37,46 @@ class AccountConfigTests(unittest.TestCase):
         self.assertEqual(dp.parasite_scope.value, "alliance")
         self.assertEqual(dp.patient_scope.value, "both")
 
+    def test_default_mission_source_is_own_and_alliance(self):
+        from app.domain.dispatch import MissionSource
+        dp = DEFAULT_CONFIG.dispatch_policy()
+        self.assertEqual(dp.mission_source, frozenset({MissionSource.OWN, MissionSource.ALLIANCE}))
+
+    def test_legacy_mission_source_string_migrates_to_a_tuple(self):
+        # Old stored configs saved mission_source as a single exclusive
+        # string; must migrate to the equivalent multi-select tuple so
+        # existing accounts keep behaving exactly the same (Sasha, 2026-09-12
+        # added the "event" tag as a third, independent, additive option).
+        from app.domain.dispatch import MissionSource
+        self.assertEqual(AccountConfig.from_dict({"mission_source": "own"}).mission_source, ("own",))
+        self.assertEqual(AccountConfig.from_dict({"mission_source": "alliance"}).mission_source, ("alliance",))
+        both = AccountConfig.from_dict({"mission_source": "both"})
+        self.assertEqual(set(both.mission_source), {"own", "alliance"})
+        self.assertEqual(
+            both.dispatch_policy().mission_source,
+            frozenset({MissionSource.OWN, MissionSource.ALLIANCE}),
+        )
+
+    def test_mission_source_multiselect_roundtrips_and_maps_to_policy(self):
+        from app.domain.dispatch import MissionSource
+        cfg = AccountConfig(mission_source=("own", "event"))
+        again = AccountConfig.from_dict(cfg.to_dict())
+        self.assertEqual(again.mission_source, ("own", "event"))
+        self.assertEqual(
+            again.dispatch_policy().mission_source, frozenset({MissionSource.OWN, MissionSource.EVENT})
+        )
+
+    def test_mission_source_empty_tuple_maps_to_empty_frozenset(self):
+        # A deliberately empty selection means "normal dispatch works
+        # nothing" -- not a silent fallback to a default.
+        cfg = AccountConfig(mission_source=())
+        self.assertEqual(cfg.dispatch_policy().mission_source, frozenset())
+
+    def test_mission_source_unknown_entries_are_dropped_not_defaulted(self):
+        from app.domain.dispatch import MissionSource
+        cfg = AccountConfig(mission_source=("own", "bogus"))
+        self.assertEqual(cfg.dispatch_policy().mission_source, frozenset({MissionSource.OWN}))
+
     def test_smart_order_maps_through(self):
         from app.domain.dispatch import DispatchOrder
         self.assertEqual(AccountConfig(order="smart").dispatch_policy().order, DispatchOrder.SMART)

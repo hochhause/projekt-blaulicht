@@ -24,6 +24,16 @@ pumping_date_start, pumping_date_end, user_id`.
   crewed (runs to completion). Green missions stay in the feed only briefly, then drop out.
 - Counts from one run: `rot 142, gelb 11, gruen 3`.
 
+### Caption tags — `"[Event]"` (CONFIRMED by owner, 2026-09-12)
+Cooperative event missions carry `"[Event]"` in the `caption` string — an INDEPENDENT tag, not tied
+to `alliance_shared_at`: an event mission can be own (nobody's shared it) or alliance-shared,
+depending on who bought/set it up. Alliance detection itself does NOT rely on the caption — that's
+already the `alliance_shared_at` field below; the owner separately mentioned a `"[Verband]"` caption
+marker on their alliance-shared missions, consistent with that field but not what the code keys off.
+`Mission.is_event` matches the substring; `MissionSource.EVENT` is a separate, additive dispatch-
+source tag alongside OWN/ALLIANCE (an event mission matches if EITHER its own/alliance tag or EVENT
+is selected — see `MissionSource`'s docstring in `app/domain/dispatch.py`).
+
 ### `participating` — CONFIRMED
 `True` when **this account currently has vehicles on the mission**; the key is **absent / null**
 otherwise. It's dynamic — **retract all your vehicles and it flips back to false.** So:
