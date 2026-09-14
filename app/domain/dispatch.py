@@ -106,6 +106,67 @@ def _scope_covers(scope, is_alliance: bool) -> bool:
     return False  # "off" / unknown
 
 
+def _infer_own_user_id(missions) -> int | None:
+    """Derive this account's own user id from the mission feed itself
+    (Sasha, 2026-09-14), rather than guessing an unverified API endpoint's
+    key name — a code-review finding on an earlier draft of this fix noted
+    that ``/api/userinfo``'s shape was never independently captured, so a
+    wrong key guess there could silently misclassify every genuinely-own
+    mission, not just the narrow shared-own case this fix targets.
+
+    Self-verifying instead: an UNSHARED mission (``is_alliance`` False, i.e.
+    ``alliance_shared_at is None``) can only ever be one of OUR OWN — the
+    same invariant the pre-fix ``is_alliance`` proxy already relied on
+    correctly for the unshared case — so its ``user_id``, if present, IS
+    this account's id. Returns ``None`` if no unshared mission with a known
+    ``user_id`` is currently visible (self-healing: the caller re-tries next
+    cycle once one appears — a brand-new own mission always starts unshared,
+    so this resolves quickly in practice)."""
+    for m in missions:
+        if not getattr(m, "is_alliance", False):
+            uid = getattr(m, "user_id", None)
+            if uid is not None:
+                return uid
+    return None
+
+
+def _is_own_mission(mission, own_user_id: int | None) -> bool:
+    """True if this account genuinely OWNS the mission, independent of
+    whether it's since been shared to the alliance (Sasha, 2026-09-14).
+
+    ``Mission.is_alliance`` (``alliance_shared_at is not None``) means "has
+    this been shared," NOT "who owns it" — sharing your OWN mission (via
+    Hilferuf, or manually) flips it True from the very next poll even
+    though ownership never changed, which silently dropped it out of an
+    own-only ``mission_source``/mode scope (live-reported bug: mission_source
+    OWN + hilferuf on -> a mission Hilferuf itself just shared stopped being
+    worked).
+
+    Two independent signals, checked in order:
+    1. The caption tag "[Verband]" (Sasha, 2026-09-14: "shared, not mine
+       tend to have [Verband] in the name") — a genuinely foreign, merely
+       alliance-visible mission carries this tag; OUR OWN missions never do,
+       shared or not. A strong, immediate signal that needs no own_user_id
+       at all, so it correctly classifies a foreign mission from cycle one
+       -- same bracketed-tag convention already used for ``Mission.is_event``.
+    2. The mission's ``user_id`` against the account's own id (see
+       :func:`_infer_own_user_id`), when both are known — the deciding
+       signal for OUR OWN missions once shared (which never carry
+       "[Verband]", so signal 1 can't help distinguish shared-but-mine from
+       shared-and-foreign the way it can for a foreign mission).
+
+    Falls back to the original ``not is_alliance`` proxy if neither signal
+    resolves — never worse than the pre-fix behavior, only more accurate as
+    each signal becomes available.
+    """
+    if "[Verband]" in (getattr(mission, "caption", "") or ""):
+        return False
+    mission_user_id = getattr(mission, "user_id", None)
+    if mission_user_id is not None and own_user_id is not None:
+        return mission_user_id == own_user_id
+    return not getattr(mission, "is_alliance", False)
+
+
 def _source_covers(source: "frozenset[MissionSource]", is_alliance: bool, is_event: bool) -> bool:
     """True if the normal-dispatch mission_source selection covers this
     mission — matches if its own/alliance tag is selected, OR (independently)
@@ -222,13 +283,16 @@ def plan_dispatches(
     text_engine=None,
     now: float | None = None,
     strikes=None,
+    own_user_id: int | None = None,
 ) -> DispatchPlan:
     """Plan this cycle's dispatches.
 
     *assigned* maps mission id → type IDs of vehicles already en route (the
     delta). *text_engine* (a RequirementEngine) parses a mission's live
     ``missing_text`` when the structured catalogue has no requirements. *now*
-    (epoch seconds) drives the alliance age-since-shared window.
+    (epoch seconds) drives the alliance age-since-shared window. *own_user_id*
+    (see :func:`_is_own_mission`) tells a genuinely-own mission apart from one
+    merely visible via alliance sharing, even after it's been shared.
     """
     plan = DispatchPlan()
     origins = [b.position for b in buildings if getattr(b, "position", None)]
@@ -267,7 +331,7 @@ def plan_dispatches(
     # PRIORITY PASS — spread/top-up (missions we're on) and, in parasite mode,
     # leech targets. Runs first, bypassing filters/order/batch.
     handled, priority_batch, reserved_type_ids = _priority_pass(
-        plan, missions, pool, resolver, policy, assigned or {}, building_pos, text_engine
+        plan, missions, pool, resolver, policy, assigned or {}, building_pos, text_engine, own_user_id
     )
 
     # Gather in-range, category-allowed missions with their distance, the mission
@@ -276,7 +340,7 @@ def plan_dispatches(
     for mission in missions:
         if mission.id in handled:
             continue  # already actioned in the priority pass
-        is_alliance = getattr(mission, "is_alliance", False)
+        is_alliance = not _is_own_mission(mission, own_user_id)
         # Resolve which treatment this mission gets from the per-mode scopes.
         # Precedence when several cover it: patient > top-up > normal.
         if _scope_covers(policy.patient_scope, is_alliance):
@@ -598,7 +662,8 @@ def _abundance_vehicle(pool, mission_pos, building_pos):
     return min(candidates, key=_distance_fn(mission_pos, building_pos))
 
 
-def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_pos, text_engine):
+def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_pos, text_engine,
+                    own_user_id=None):
     """Handle spread/top-up and parasite missions BEFORE the normal filtered pass.
 
     Bypasses cash/source/category filters, ordering and batch. Returns the set of
@@ -618,7 +683,7 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
         mtype = resolver.catalog.get(getattr(mission, "mission_type_id", None))
         on_it = mid in assigned                       # a mission we're already on
         others_on = getattr(mission, "vehicle_state", 0) >= 1
-        is_alliance = getattr(mission, "is_alliance", False)
+        is_alliance = not _is_own_mission(mission, own_user_id)
         scope_ok = _scope_covers(policy.parasite_scope, is_alliance) and not on_it
         # Aggressiveness (Sasha, 2026-08-31): ACTIVE (default) requires someone
         # already on it, matching the original behavior; ALL drops that

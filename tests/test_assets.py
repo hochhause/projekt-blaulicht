@@ -62,6 +62,17 @@ class AssetLoadingTests(unittest.TestCase):
         self.assertEqual(self.lib.types[90].planning_personnel, 4)
         self.assertEqual(self.lib.types[0].planning_personnel, self.lib.types[0].personnel)
 
+    def test_planning_personnel_ausbildung_override_for_types_with_no_capacity_data(self):
+        # Sasha, 2026-09-14: these support/specialist types have NO extracted
+        # `.personnel` capacity at all (personnel=0) -- without the override,
+        # the "-Ausbildung" headcount-to-vehicle conversion would have
+        # nothing to divide by. Values derived directly from each type's own
+        # .mscv extend-rule thresholds.
+        for tid, expected in ((27, 9), (77, 9), (34, 9), (63, 2), (69, 2), (53, 6), (54, 6)):
+            with self.subTest(tid=tid):
+                self.assertEqual(self.lib.types[tid].personnel, 0)
+                self.assertEqual(self.lib.types[tid].planning_personnel, expected)
+
     def test_trailer_types_flagged(self):
         trailers = {t.id for t in self.lib.types.values() if t.is_trailer}
         # 13 trailer (Anhänger) types confirmed in the DE data.

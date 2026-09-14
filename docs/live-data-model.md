@@ -146,14 +146,34 @@ The `other` group is a **capacity** need (progress bars), not a vehicle count �
 progress bars (driving/missing/selected) and the feed has `water_damage_pump_value` /
 `live_current_water_damage_pump_value` / `pumping_mission_value`.
 
-Per-vehicle capacity IS in our assets → extracted to `data/reference/vehicle-water-pump.json`:
-**22 firetruck types carry `water` + `pump`** (e.g. LF `water 2000 / pump 2000`, HLF `1600 / 2000`,
-type 25 `4000 / 4000`).
+Per-vehicle capacity is extracted to `data/reference/vehicle-water-pump.json`: **39 vehicle types
+carry `water` and/or `pump` and/or `foam`** (e.g. LF `water 2000 / pump 2000 / foam 150`, HLF
+`1600 / 2000 / 150`, SLF (type 167) `water 3500 / foam 5000` — no pump — GTLF (type 121)
+`water 10000 / foam 1500` — no pump).
 
-**Gaps:** (a) dedicated water tankers (GTLF, type 11 …) have **no** capacity in the salvaged `.mscv`
-— need another source (LSSM vehicles API / game data); (b) **foam** (`löschmittel`, in 14 files) is
-not a flat numeric and wasn't extracted. The fill mechanic (how much satisfies the bar) still to
-confirm.
+**Both previously-documented gaps are now closed (Sasha, 2026-09-14):** the user asked the bot to
+research LSSM4's own source for the rest of this data (the CSV they'd started hand-building only
+covered 11 Löschfahrzeuge rows). `LSS-Manager/LSSM-V.4`'s `src/i18n/de_DE/vehicles.ts` (fetched via
+`gh api`, MIT-licensed, actively maintained) turns out to carry `waterTank`/`pumpCapacity`/`foamTank`
+for every vehicle type that has them, including the two previously-missing categories: (a) dedicated
+water tankers (GTLF type 121, PTLF type 166, TLF variants, etc. — types 75/84/96/117/118/119/120/121/
+166/168/169/170 are new in this extraction, several water-only with no pump module at all, confirmed
+by `pumpCapacity` being absent for them, not just unextracted); (b) **foam** (Sonderlöschmittel), now
+present as `foamTank` for every type that has it — SLF (167) is `5000`, matching the user's own
+"5000l stock" figure exactly (the "up to 25000L after modifications" upgrade isn't in this static
+per-type table — a game-side extension mechanic, not reflected here). Every value for the 22
+previously-committed types was cross-checked against this new source and matched **except two**:
+type 25 (TLF 20/40-SL) and type 26 (TLF 16) previously showed `pump` equal to `water` (4000/4000 and
+1800/1800) — both suspiciously identical pairs, looking like an extraction artifact from the old
+`.mscv`-salvage pass — LSSM4's dedicated data gives DIFFERENT, lower pump values (2000 and 1600)
+for both, which is what's now committed. Not independently live-verified either way; flagged here
+per this doc's own confirm-before-shipping convention rather than silently favored.
+
+The still-unresolved question is the fill mechanic (how much of a capacity bar one dispatched
+vehicle actually satisfies, and whether multiple vehicles' capacities simply sum) — not needed for
+the category-text dispatch path below, but would be needed for a future capacity-MATH dispatch
+feature (e.g. converting "Uns fehlt: 3200 l. Wasser" into an exact vehicle count) that hasn't been
+built yet (deferred pending a design decision, tracked separately).
 
 **Live check 2026-08-31 (throwaway account, real alliance, 26 own missions):** `water_damage_pump_value`
 is **NOT** a general fire-mission field — every actual fire mission observed (Reihenhaus in Flammen,

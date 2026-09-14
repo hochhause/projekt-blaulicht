@@ -53,6 +53,13 @@ class Mission:
     caption: str
     alliance_id: int | None = None
     alliance_shared_at: str | None = None
+    # The mission's OWNER (Sasha, 2026-09-14) -- distinct from is_alliance,
+    # which only means "has this been shared," not "who owns it." Compare
+    # against the account's own id (app.domain.dispatch._infer_own_user_id,
+    # derived from an unshared mission's own user_id) to tell a genuinely-own
+    # mission apart from one merely visible via alliance sharing, independent
+    # of whether it's since been shared to the alliance.
+    user_id: int | None = None
     patients_count: int = 0            # patients revealed so far (0 = hidden)
     possible_patients_count: int = 0   # max patients this mission can have
     prisoners_count: int = 0
@@ -88,6 +95,7 @@ class Mission:
             caption=str(_first(d, "caption", "name", default="")),
             alliance_id=_as_int(_first(d, "alliance_id")),
             alliance_shared_at=_first(d, "alliance_shared_at"),
+            user_id=_as_int(_first(d, "user_id")),
             patients_count=_as_int(_first(d, "patients_count")) or 0,
             possible_patients_count=_as_int(_first(d, "possible_patients_count")) or 0,
             prisoners_count=_as_int(_first(d, "prisoners_count")) or 0,

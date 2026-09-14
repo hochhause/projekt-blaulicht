@@ -1,0 +1,12 @@
+Organisation,Kategorie,ID,Fahrzeugtyp,Personal_min,Personal_max,Preis_Credits,Preis_Coins,Ausbildung,Wassertank_l,Pumpleistung_l_min,Sonderloeschmittelbedarf,Besonderes
+Feuerwehr,Löschfahrzeuge,90,HLF 10,1,9,20000,25,,1000,1000,150,
+Feuerwehr,Löschfahrzeuge,30,HLF 20,1,9,20000,25,,1600,2000,150,
+Feuerwehr,Löschfahrzeuge,88,KLF,1,6,5000,25,,500,1000,150,
+Feuerwehr,Löschfahrzeuge,1,LF 10,1,9,5000,25,,1200,1000,150,
+Feuerwehr,Löschfahrzeuge,8,LF 10/6,1,9,5000,25,,600,1000,150,
+Feuerwehr,Löschfahrzeuge,9,LF 16-TS,1,9,5000,25,,,1600,150,
+Feuerwehr,Löschfahrzeuge,0,LF 20,1,9,5000,25,,2000,2000,150,
+Feuerwehr,Löschfahrzeuge,7,LF 20/16,1,9,5000,25,,1600,2000,150,
+Feuerwehr,Löschfahrzeuge,6,LF 8/6,1,9,5000,25,,600,800,150,
+Feuerwehr,Löschfahrzeuge,89,MLF,1,6,5000,25,,1000,1000,150,
+Feuerwehr,Löschfahrzeuge,37,TSF-W,1,6,5000,25,,500,1000,150,

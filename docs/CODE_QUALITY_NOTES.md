@@ -1178,3 +1178,173 @@ credit bounds) should also be extended to group mode.
 
 NOTE: commit only, per the established batching pattern -- no
 push/merge/rebuild this round without asking first.
+
+## app/game/models.py, app/domain/dispatch.py, app/domain/assets.py, app/core/runner.py, data/reference/*.json, data/reference/vehicle-water-pump.json — reviewed 2026-09-14, live bugs (own-vs-alliance reclassification, incomplete gap fix) + data research
+- User ran the bot live for several days and reported two things, diagnosed
+  by reading the container's own 72h logs plus the live sqlite config (the
+  running container turned out to be several commits stale -- flagged
+  separately, not touched here) and tracing the resolver/dispatch code.
+- **Bug 1**: with `mission_source={OWN}` and Hilferuf on, an own mission
+  Hilferuf itself shares stops being worked from the very next cycle.
+  Root cause: `Mission.is_alliance` (`alliance_shared_at is not None`) has
+  always meant "has this been shared," not "who owns it" -- the game sets
+  `alliance_shared_at` the instant ANY sharing happens (Hilferuf or manual),
+  regardless of ownership, and EVERY scope check (`mission_source`,
+  `parasite_scope`/`top_up_scope`/`patient_scope`, the own/alliance credit-
+  bound/radius/age-window branch) keyed off that same flag.
+- Fix: `Mission` gained a `user_id` field (present in the live feed per
+  `docs/live-data-model.md`'s observed-keys list, never parsed before). New
+  `_is_own_mission(mission, own_user_id)` in dispatch.py checks TWO
+  independent signals in order before falling back to the original
+  `not is_alliance` proxy: (1) the caption tag `"[Verband]"` -- user,
+  mid-session: "shared, not mine tend to have [Verband] in the name" --
+  returns definitely-not-ours immediately, needing no id inference at all
+  (mirrors the already-shipped `Mission.is_event` "[Event]" convention);
+  (2) the mission's `user_id` against the account's own id, for the case
+  signal 1 can't help with (OUR OWN missions never carry "[Verband]", shared
+  or not). `own_user_id` itself comes from a NEW `_infer_own_user_id
+  (missions)`: scans the current mission feed for the first UNSHARED
+  mission (which, by the same invariant the old proxy already relied on
+  for the unshared case, can only ever be one of our own) and reads ITS
+  `user_id` as ground truth -- self-verifying, no new network call, cached
+  in `DispatchRunner` once found and re-tried each cycle until it is.
+  Threaded through to `plan_dispatches` and `_priority_pass` (both places
+  independently computed `is_alliance`) as a new parameter.
+- Code review (async), FIRST pass on the initial draft: WARNING, 2 HIGH + 1
+  MEDIUM + 1 LOW, both HIGH fixed by REDESIGNING the sourcing mechanism
+  (not patching around it). HIGH #1: `DispatchRunner._recall_cleared_
+  patient_missions` (the patient-only auto-recall) was a completely separate
+  code path that still computed scope coverage off the raw `is_alliance`
+  flag -- a patient unit sent to a shared-but-owned mission under
+  `patient_scope=OWN` would get dispatched (correctly, post-fix) but then
+  never recalled once cleared, stranding it there indefinitely. Fixed by
+  using `_is_own_mission` there too. HIGH #2 (the more consequential one):
+  the first draft sourced `own_user_id` from a NEW `GameClient.
+  fetch_own_user_id()` built on the previously-unused `fetch_userinfo()`,
+  guessing between a few plausible key names since `/api/userinfo`'s exact
+  shape was never independently captured. The reviewer correctly identified
+  this as WORSE than the bug it fixed in the failure case that matters: a
+  wrong-but-present guessed key would silently misclassify EVERY
+  genuinely-own, never-shared mission (which also carries a `user_id`), not
+  just the narrow shared-own case targeted -- the risky path returns a
+  wrong non-None value, not `None`, contradicting the fix's own "never
+  worse than before" design goal. Resolved by dropping `/api/userinfo`
+  entirely in favor of `_infer_own_user_id`'s self-verifying
+  feed-derivation, which cannot misattribute ownership by construction.
+  MEDIUM (fixed): the tests only exercised `plan_dispatches`' main loop, not
+  `_priority_pass`'s identical `is_alliance` computation for parasite/
+  patient scoping -- closed with 2 parallel tests. LOW (cross-module import
+  of underscore-prefixed helpers) became moot once `/api/userinfo` was
+  removed entirely.
+- Code review, SECOND pass (after adding the `[Verband]` signal and the
+  `-Ausbildung` mapping batch below, since both touch the same ownership
+  logic): APPROVE, 0 CRITICAL/HIGH/MEDIUM, 1 LOW (a test-coverage gap for
+  two DIFFERENT staff-table hits in one `personnel` string -- closed with
+  `test_resolve_personnel_two_different_staff_categories_route_separately`).
+  Confirmed end-to-end: the `[Verband]` short-circuit's blast radius, the
+  `staff`-table ceil-division math against every one of the 5 Ausbildung
+  categories' actual `.mscv` tiers, and that
+  `_AUSBILDUNG_CREW_PER_VEHICLE`'s fallback guard (`not nominal`) can't
+  corrupt a real future personnel value or leak into fire-crew math (none
+  of the 7 affected type ids are members of the `firetrucks` class).
+- **Bug 2**: several live missing_text categories the user listed turned
+  out to already resolve correctly (confirmed via the same 72h log
+  analysis: the "unresolved"/"no requirements found" diagnostic never fired
+  for any of them across 72 hours). Most of the user's list is genuine
+  fleet/vehicle-class-reservation contention (the account logged 1774 idle
+  vehicles the SAME cycle it logged 165 "not enough vehicles" skips --
+  niche-type scarcity under heavy concurrent mission load, the reservation
+  feature working as explicitly designed). One genuine gap found and fixed:
+  `"1 Person mit GW-Gefahrgut-Ausbildung"` (a `personnel`-group
+  qualification phrasing) wasn't mapped -- the reference table only had the
+  plain vehicle name `"GW-Gefahrgut"`.
+- User, after the first fix: "for this and any -ausbildung requirements
+  send a vehicle that has exactly that education guaranteed." Researched
+  every OTHER "-Ausbildung" extend-rule across `data/de/vehicles/*.mscv`
+  (the authoritative per-vehicle crew-qualification source the legacy regex
+  engine already trusts) and found 4 more: GW-Taucher (types 63, 69),
+  GW-Wasserrettung-as-a-CREW-qualification (69 only -- NOT the plain GW-W
+  VEHICLE, type 64, a different mapping entirely), Dekon-P (53, 54), and
+  ELW-2 (34 only -- NOT the broader ELW1/ELW2/drone class [34,78,129],
+  since only type 34's own `.mscv` carries this specific qualification).
+- Implementation, corrected after an initial wrong attempt (caught before
+  commit, not by review): all 5 texts were first added to the JSON's
+  `vehiclesByRequirement` table (same as plain vehicle names), which treats
+  the leading number as a literal, unconverted vehicle count -- WRONG for
+  4 of the 5 categories, whose `.mscv` extend rules are actually tiered
+  (e.g. GW-Taucher: 1-2 persons->1 vehicle, 3-4->2, ...; naively parsing
+  "7 Personen" would have asked for 7 vehicles instead of 2). Reverted
+  entirely and redone: all 5 now live in the JSON's `staff` table instead,
+  routing through the SAME headcount->vehicle ceil-division machinery
+  genuine crew-role texts like "Feuerwehrleute" already use
+  (`_personnel_to_vehicles`, `ceil(count / max(eligible types'
+  planning_personnel))`). Since all 7 affected vehicle types have
+  `personnel == 0` (no crew-capacity data was ever extracted for these
+  support/specialist types), `VehicleType.planning_personnel` (assets.py)
+  gained a `_AUSBILDUNG_CREW_PER_VEHICLE` fallback -- {27:9, 77:9, 34:9,
+  63:2, 69:2, 53:6, 54:6} -- read DIRECTLY off each type's own `.mscv`
+  extend-rule tiers (not guessed), applied only when `personnel` is falsy
+  so it can never override real data. Noted but deliberately not chased
+  further: LSSM4's own `staff.max` for these same 7 types (fetched
+  separately during the data-research work below) disagrees with these
+  divisors (e.g. type 27's `staff.max` is 3, not 9) -- the `.mscv` extend
+  rule was kept as the source of truth since it directly answers "how many
+  vehicles does N persons need," which `staff.max` alone doesn't without an
+  unverified assumption that simple linear ceil-division applies to what
+  might really be more of a binary/oversight-role need. Not independently
+  live-verified; flagged rather than silently reconciled.
+- **Deferred, per explicit user instruction**: two other reported
+  categories ("Uns fehlt: N l. Wasser" / "N l/min Pumpenleistung" / "N
+  Sonderlöschmittel") are capacity-phrased text needing real ceil-division
+  vehicle math against LITER/RATE values, not the category-lookup
+  convention (confirmed genuinely unmapped) -- the actual dispatch-side
+  math is still not built (a real design decision: how a capacity number
+  combines with an existing vehicle-count-based requirement for the same
+  mission, whether multiple vehicles' capacities simply sum, etc.).
+- **Data research** (user, on realizing their own hand-built CSV was
+  incomplete: "Research if you can find the rest in the LSSM API"): found
+  and fetched (via `gh api`, read-only) `LSS-Manager/LSSM-V.4`'s own
+  `src/i18n/de_DE/vehicles.ts` -- the actively-maintained, MIT-licensed
+  source this project's `lssm-missing-requirements.json` was originally
+  derived from. It carries `waterTank`/`pumpCapacity`/`foamTank`/`staff.
+  {min,max}` for every vehicle type that has them. Extracted and
+  cross-validated against the previously-committed `data/reference/
+  vehicle-water-pump.json`: all 22 existing entries matched exactly except
+  two (types 25, 26) whose OLD `pump` value suspiciously equaled `water`
+  -- an apparent extraction artifact from the original `.mscv`-salvage
+  pass -- corrected to LSSM4's distinct, lower values. Expanded from 22 to
+  39 vehicle types, closing BOTH gaps `docs/live-data-model.md` had
+  flagged as open: dedicated water tankers (GTLF, PTLF, several TLF
+  variants -- some confirmed to have NO pump module at all, not just
+  unextracted data) and foam/Sonderlöschmittel capacity (previously
+  undocumented entirely) -- SLF (type 167) reads `foam: 5000`, matching the
+  user's own "5000l stock" figure exactly (their separately-mentioned
+  "up to 25000L after modifications" is a game-side upgrade mechanic not
+  reflected in this static per-type table). This file is NOT read by any
+  code yet -- purely a checked-in data asset, unblocking the still-not-built
+  capacity-math feature above whenever it's taken up.
+- Stability (1-5): 4 -- 423 tests pass (18 new across this whole batch: 4
+  `plan_dispatches`-level ownership tests incl. the credit-bound
+  interaction, 2 `[Verband]`-signal tests, 2 `_priority_pass`-level tests,
+  2 `_infer_own_user_id` unit tests, 1 `Mission.user_id` parsing test, 2
+  `AccountRunner` feed-inference tests, 2 `DispatchRunner` patient-recall
+  ownership tests, 1 `planning_personnel` override test, 3 resolver-level
+  Ausbildung tests incl. the two-different-staff-categories case). No
+  live-account confirmation yet that `_infer_own_user_id`'s core assumption
+  (an unshared mission's `user_id` really is the account's own id) or the
+  `[Verband]`-means-foreign convention hold in every case -- both inferred
+  with high confidence from the field's name/purpose and the user's direct
+  observation respectively, not independently probed this session.
+- Verdict: keep-as-is
+- Rationale: both HIGH findings from the first review pass were genuine,
+  and the second one in particular is a good example of a review catching
+  a fix whose OWN safety argument didn't hold up under a wrong-guess
+  scenario -- worth the extra redesign rather than patching a plausibility
+  check onto the original approach. The Ausbildung mapping's own
+  self-correction (caught before any review, by re-reading the .mscv
+  source against the freshly-written tests) followed the same discipline:
+  ship nothing that contradicts the authoritative data it's supposed to
+  reproduce, even under time pressure from an already-large batch.
+
+NOTE: commit only, per the established batching pattern -- no
+push/merge/rebuild this round without asking first.

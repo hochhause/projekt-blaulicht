@@ -291,6 +291,84 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(by.get("GW-Wasserrettung"), 2)
         self.assertEqual(res.unmatched, [])
 
+    def test_resolve_mission_ausbildung_qualification_texts_resolve_to_their_guaranteed_vehicle(self):
+        # Live-reported (Sasha, 2026-09-14): "1 Person mit
+        # GW-Gefahrgut-Ausbildung" under `personnel` -- a qualification
+        # phrasing, not the plain vehicle name "GW-Gefahrgut" already in the
+        # table -- was previously unmapped and silently dropped, same class
+        # of gap as the GW-Wasserrettung fix above. User: "for this and any
+        # -ausbildung requirements send a vehicle that has exactly that
+        # education guaranteed" -- researched every OTHER "-Ausbildung"
+        # extend-rule across data/de/vehicles/*.mscv (the authoritative
+        # per-vehicle crew-qualification source the regex engine already
+        # trusts) and added the same STAFF-table mapping for each, so the
+        # existing headcount->vehicle ceil-division machinery
+        # (_personnel_to_vehicles, via VehicleType.planning_personnel's new
+        # _AUSBILDUNG_CREW_PER_VEHICLE override) reproduces the SAME tiering
+        # each .mscv's own extend rule specifies -- NOT the vehicle table's
+        # literal-count route, which would ask for e.g. 7 vehicles when the
+        # game only ever needs 2: GW-Taucher (63, 69; 2 crew/vehicle),
+        # GW-Wasserrettung (69 only -- NOT the plain GW-W vehicle, type 64;
+        # 2 crew/vehicle), Dekon-P (53, 54; 6 crew/vehicle), and ELW-2
+        # (34 only -- NOT the broader ELW1/ELW2/drone class [34,78,129],
+        # since only type 34's own .mscv carries this qualification; 9
+        # crew/vehicle, i.e. always just 1).
+        cases = [
+            ("1 Person mit GW-Gefahrgut-Ausbildung", "Person mit GW-Gefahrgut-Ausbildung", 1),
+            ("3 Personen mit GW-Taucher Ausbildung", "Personen mit GW-Taucher Ausbildung", 2),  # ceil(3/2)
+            ("5 Personen mit GW-Wasserrettung Ausbildung", "Personen mit GW-Wasserrettung Ausbildung", 3),  # ceil(5/2)
+            ("7 Personen mit Dekon-P-Ausbildung", "Personen mit Dekon-P-Ausbildung", 2),  # ceil(7/6)
+            ("1 Person mit ELW-2 Ausbildung", "Person mit ELW-2 Ausbildung", 1),
+        ]
+        for personnel_text, source, expected_count in cases:
+            with self.subTest(personnel_text=personnel_text):
+                m = SimpleNamespace(
+                    mission_type_id=2, patients_count=0, possible_patients_count=0,
+                    prisoners_count=0, possible_prisoners_count=0,
+                    missing_text=f'{{"vehicles":null,"personnel":"{personnel_text}","other":""}}',
+                )
+                res = self.resolver.resolve_mission(m)
+                by = {r.source: r.count for r in res.requirements}
+                self.assertEqual(by.get(source), expected_count)
+                self.assertEqual(res.unmatched, [])
+
+    def test_elw2_ausbildung_maps_only_to_the_type_whose_mscv_confirms_it(self):
+        # NOT the broader ELW1/ELW2/drone class -- only type 34's .mscv
+        # carries the crew-qualification extend rule; 78/129 don't.
+        headcount, vehicle = self.resolver._missing.resolve_personnel(
+            "1 Person mit ELW-2 Ausbildung"
+        )
+        self.assertEqual(vehicle.requirements, [])
+        self.assertEqual(len(headcount.requirements), 1)
+        self.assertEqual(headcount.requirements[0].type_ids, frozenset({34}))
+
+    def test_gw_wasserrettung_ausbildung_maps_only_to_69_not_the_plain_gw_w_vehicle(self):
+        # Type 64 is the plain GW-Wasserrettung VEHICLE; the crew-
+        # qualification extend rule lives only in type 69's (GW-Taucher/
+        # Tauchkraftwagen) .mscv, a different vehicle entirely.
+        headcount, vehicle = self.resolver._missing.resolve_personnel(
+            "1 Person mit GW-Wasserrettung Ausbildung"
+        )
+        self.assertEqual(vehicle.requirements, [])
+        self.assertEqual(len(headcount.requirements), 1)
+        self.assertEqual(headcount.requirements[0].type_ids, frozenset({69}))
+
+    def test_resolve_personnel_two_different_staff_categories_route_separately(self):
+        # Code review (2026-09-14, LOW): the existing mixed-chunk precedent
+        # only covers one staff hit + one vehicle-table hit in the same
+        # string -- confirm TWO DIFFERENT staff-table hits (a genuine crew
+        # role plus a new -Ausbildung qualification) don't get collapsed or
+        # cross-contaminated, each keeping its own type_ids/count.
+        headcount, vehicle = self.resolver._missing.resolve_personnel(
+            "8 Feuerwehrmann, 3 Personen mit GW-Taucher Ausbildung"
+        )
+        self.assertEqual(vehicle.requirements, [])
+        self.assertEqual(len(headcount.requirements), 2)
+        by_source = {r.source: r for r in headcount.requirements}
+        self.assertEqual(by_source["Feuerwehrmann"].count, 8)
+        self.assertEqual(by_source["Personen mit GW-Taucher Ausbildung"].count, 3)
+        self.assertEqual(by_source["Personen mit GW-Taucher Ausbildung"].type_ids, frozenset({63, 69}))
+
     def test_resolve_mission_revealed_and_fully_satisfied_is_not_stale_catalogue(self):
         # Revealed blob with EMPTY vehicles/personnel/other means "nothing
         # more needed" (authoritative) — must NOT fall back to the

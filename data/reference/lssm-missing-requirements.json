@@ -1032,6 +1032,54 @@
  "staff": [
   {
    "texts": [
+    "Person mit GW-Gefahrgut-Ausbildung",
+    "Personen mit GW-Gefahrgut-Ausbildung"
+   ],
+   "vehicles": [
+    27,
+    77
+   ]
+  },
+  {
+   "texts": [
+    "Person mit ELW-2 Ausbildung",
+    "Personen mit ELW-2 Ausbildung"
+   ],
+   "vehicles": [
+    34
+   ]
+  },
+  {
+   "texts": [
+    "Person mit GW-Taucher Ausbildung",
+    "Personen mit GW-Taucher Ausbildung"
+   ],
+   "vehicles": [
+    63,
+    69
+   ]
+  },
+  {
+   "texts": [
+    "Person mit GW-Wasserrettung Ausbildung",
+    "Personen mit GW-Wasserrettung Ausbildung"
+   ],
+   "vehicles": [
+    69
+   ]
+  },
+  {
+   "texts": [
+    "Person mit Dekon-P-Ausbildung",
+    "Personen mit Dekon-P-Ausbildung"
+   ],
+   "vehicles": [
+    53,
+    54
+   ]
+  },
+  {
+   "texts": [
     "Feuerwehrmann",
     "Feuerwehrleute"
    ],

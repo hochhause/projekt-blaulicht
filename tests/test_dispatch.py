@@ -11,6 +11,7 @@ from app.domain.dispatch import (
     MissionSource,
     ModeScope,
     ParasiteAggressiveness,
+    _infer_own_user_id,
     assigned_from_vehicles,
     plan_dispatches,
 )
@@ -35,13 +36,15 @@ FAR = (53.5500, 9.9900)     # Hamburg, ~250 km
 
 
 def mission(mid, mtype, pos, is_alliance=False, average_credits=0, created_at=None, vehicle_state=0,
-            patients_count=0, possible_patients_count=0, missing_text="", is_event=False):
+            patients_count=0, possible_patients_count=0, missing_text="", is_event=False,
+            user_id=None, caption=None):
     return SimpleNamespace(
-        id=mid, caption=f"M{mid}", mission_type_id=mtype, position=pos,
+        id=mid, caption=caption if caption is not None else f"M{mid}", mission_type_id=mtype,
+        position=pos,
         is_alliance=is_alliance, average_credits=average_credits, created_at=created_at,
         vehicle_state=vehicle_state, missing_text=missing_text,
         patients_count=patients_count, possible_patients_count=possible_patients_count,
-        is_event=is_event,
+        is_event=is_event, user_id=user_id,
     )
 
 
@@ -486,6 +489,123 @@ class DispatchPlannerTests(unittest.TestCase):
         planned_ids = {mp.mission_id for mp in plan.planned}
         self.assertEqual(planned_ids, {1, 2})
         self.assertIn((3, "out of scope"), plan.skipped)
+
+    # -- own vs alliance reclassification (own_user_id) ------------------------
+    def test_own_mission_shared_to_alliance_stays_own_scoped_when_user_id_matches(self):
+        # Live-reported bug (Sasha, 2026-09-14): mission_source=OWN + hilferuf
+        # on -- a mission Hilferuf itself shares flips is_alliance True from
+        # the next poll, silently dropping it out of an own-only scope even
+        # though it's still ours. own_user_id must keep it own-scoped.
+        shared_but_mine = mission(1, 1, NEAR, is_alliance=True, user_id=42)
+        plan = plan_dispatches(
+            [shared_but_mine], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.OWN})),
+            own_user_id=42,
+        )
+        self.assertEqual([mp.mission_id for mp in plan.planned], [1])
+        self.assertNotIn((1, "out of scope"), plan.skipped)
+
+    def test_genuinely_alliance_mission_still_excluded_from_own_only_scope(self):
+        # A mission actually owned by someone ELSE must still be excluded --
+        # own_user_id must not just blanket-include everything alliance-shared.
+        someone_elses = mission(1, 1, NEAR, is_alliance=True, user_id=999)
+        plan = plan_dispatches(
+            [someone_elses], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.OWN})),
+            own_user_id=42,
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertIn((1, "out of scope"), plan.skipped)
+
+    def test_own_user_id_unknown_falls_back_to_is_alliance_proxy(self):
+        # Without own_user_id (e.g. userinfo fetch failed) or without the
+        # mission carrying user_id, behavior must match the pre-fix proxy
+        # exactly: a shared mission reads as alliance, full stop.
+        shared = mission(1, 1, NEAR, is_alliance=True, user_id=None)
+        plan = plan_dispatches(
+            [shared], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.OWN})),
+            own_user_id=42,  # known, but the mission itself has no user_id
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertIn((1, "out of scope"), plan.skipped)
+
+    def test_verband_caption_tag_classifies_as_alliance_even_without_own_user_id(self):
+        # User (2026-09-14): "shared, not mine tend to have [Verband] in the
+        # name" -- a strong signal that needs no own_user_id inference at
+        # all, so a genuinely foreign mission classifies correctly from the
+        # very first cycle.
+        foreign = mission(1, 1, NEAR, is_alliance=True, caption="[Verband] Waldbrand")
+        plan = plan_dispatches(
+            [foreign], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.OWN})),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertIn((1, "out of scope"), plan.skipped)
+
+    def test_verband_caption_tag_overrides_a_user_id_coincidence(self):
+        # Even if user_id somehow matched (shouldn't happen live, but the
+        # caption tag is the stronger, more direct signal per the user),
+        # "[Verband]" must still win -- it means "not mine" unconditionally.
+        foreign = mission(1, 1, NEAR, is_alliance=True, caption="[Verband] Waldbrand", user_id=42)
+        plan = plan_dispatches(
+            [foreign], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.OWN})),
+            own_user_id=42,
+        )
+        self.assertEqual(plan.planned, [])
+
+    def test_own_mission_shared_still_uses_own_credit_bounds_not_alliance(self):
+        # A genuinely-own mission that's been shared must still be judged by
+        # OWN credit bounds, not alliance ones, now that ownership (not
+        # sharing status) decides which bound applies.
+        shared_but_mine = mission(1, 1, NEAR, is_alliance=True, user_id=42, average_credits=50)
+        plan = plan_dispatches(
+            [shared_but_mine], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, own_credit_min=1000, alliance_credit_min=0),
+            own_user_id=42,
+        )
+        # Below the OWN floor (which now correctly applies) -> filtered, not planned.
+        self.assertEqual(plan.planned, [])
+        self.assertTrue(any(r.startswith("below credit floor") for _, r in plan.skipped))
+
+    def test_priority_pass_parasite_scope_also_respects_true_ownership(self):
+        # Same fix, the OTHER call site (Sasha, 2026-09-14, code review):
+        # _priority_pass computes its own is_alliance for parasite_scope --
+        # a shared-but-owned mission must still count as OWN there too, not
+        # just in plan_dispatches' main loop.
+        shared_but_mine = mission(1, 1, NEAR, is_alliance=True, user_id=42, vehicle_state=1)
+        plan = plan_dispatches(
+            [shared_but_mine], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.OWN,
+                            mission_source=frozenset()),  # normal dispatch off -- isolate parasite
+            own_user_id=42,
+        )
+        self.assertEqual([mp.mission_id for mp in plan.planned], [1])
+
+    def test_priority_pass_parasite_scope_still_excludes_genuine_alliance(self):
+        someone_elses = mission(1, 1, NEAR, is_alliance=True, user_id=999, vehicle_state=1)
+        plan = plan_dispatches(
+            [someone_elses], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.OWN,
+                            mission_source=frozenset()),
+            own_user_id=42,
+        )
+        self.assertEqual(plan.planned, [])
+
+    def test_infer_own_user_id_from_the_first_unshared_mission(self):
+        # An unshared mission can only ever be one of OUR OWN -- the same
+        # invariant the pre-fix is_alliance proxy already relied on for the
+        # unshared case -- so its user_id, if present, IS the account's id.
+        shared = mission(1, 1, NEAR, is_alliance=True, user_id=999)
+        unshared_no_id = mission(2, 1, NEAR, is_alliance=False, user_id=None)
+        unshared_with_id = mission(3, 1, NEAR, is_alliance=False, user_id=42)
+        self.assertEqual(_infer_own_user_id([shared, unshared_no_id, unshared_with_id]), 42)
+
+    def test_infer_own_user_id_none_when_nothing_usable_is_visible(self):
+        shared_only = mission(1, 1, NEAR, is_alliance=True, user_id=999)
+        self.assertIsNone(_infer_own_user_id([shared_only]))
+        self.assertIsNone(_infer_own_user_id([]))
 
     # -- top-up / symbiont mode ----------------------------------------------
     def test_top_up_skips_fresh_mission(self):

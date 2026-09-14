@@ -58,6 +58,27 @@ CAPACITY_DIMENSIONS = ("personnel", "water", "pump")
 # a per-type exception, not a general derating.
 _HALF_CREW_TYPE_IDS = frozenset({30, 90})
 
+# How many "-Ausbildung" (crew-qualification) personnel one vehicle's crew
+# provides, for support/specialist types with NO extracted `.personnel`
+# capacity at all (Sasha, 2026-09-14) -- without this, the general
+# ceil(count/planning_personnel) conversion in
+# MissionRequirementResolver._personnel_to_vehicles would have nothing to
+# divide by and leave a real headcount unconverted. Derived directly from
+# each type's OWN pattern.extend thresholds in its .mscv file (an enumerated
+# rule, not a guess) -- e.g. 63.mscv's "min. ([1-2]) Personen mit GW-Taucher
+# Ausbildung": 1, "min. ([3-4])...": 2, ... is exactly ceil(n/2), so 2 is
+# this type's crew-per-vehicle for that qualification:
+#   27/77 GW-Gefahrgut, 34 ELW-2:      any 0-9 persons -> 1 vehicle (>=9)
+#   63/69 GW-Taucher, 69 GW-Wasserrettung (crew, not the type-64 vehicle):
+#                                       1-2->1, 3-4->2, 5-6->3, (7-8->4 for
+#                                       GW-Taucher only, still consistent)
+#   53/54 Dekon-P:                     1-6->1, 7-12->2
+_AUSBILDUNG_CREW_PER_VEHICLE: dict[int, int] = {
+    27: 9, 77: 9, 34: 9,
+    63: 2, 69: 2,
+    53: 6, 54: 6,
+}
+
 
 @dataclass(frozen=True)
 class ExtendRule:
@@ -123,6 +144,8 @@ class VehicleType:
         nominal = self.personnel
         if self.id in _HALF_CREW_TYPE_IDS:
             return max(1, nominal // 2)
+        if not nominal and self.id in _AUSBILDUNG_CREW_PER_VEHICLE:
+            return _AUSBILDUNG_CREW_PER_VEHICLE[self.id]
         return nominal
 
     @property

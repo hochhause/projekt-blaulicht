@@ -22,7 +22,7 @@ class _C:
     closes = 0
 
 
-def _make_fakes(missions_raise=False):
+def _make_fakes(missions_raise=False, missions=None):
     from app.game.session import LoginResult, LoginStatus
 
     class FakeSession:
@@ -52,7 +52,7 @@ def _make_fakes(missions_raise=False):
         async def fetch_missions(self):
             if missions_raise:
                 raise RuntimeError("boom")
-            return []
+            return missions if missions is not None else []
 
         async def dispatch(self, m, v):
             return True
@@ -99,6 +99,30 @@ class AccountRunnerTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 asyncio.run(runner.run_cycle())
             self.assertEqual(_C.logins, 2)    # reconnected next cycle
+
+    def test_own_user_id_inferred_from_an_unshared_mission_and_cached(self):
+        # Sasha, 2026-09-14: lets the planner tell a genuinely-own mission
+        # apart from one merely alliance-shared, even after it's been
+        # shared. Inferred from the feed itself (an unshared mission can
+        # only be ours) rather than a separate, unverified API call.
+        from types import SimpleNamespace
+        own_unshared = SimpleNamespace(id=1, is_alliance=False, user_id=42, status="unknown")
+        FakeSession, FakeClient = _make_fakes(missions=[own_unshared])
+        with mock.patch("app.core.account_runner.GameSession", FakeSession), \
+             mock.patch("app.core.account_runner.GameClient", FakeClient):
+            runner = self._runner()
+            asyncio.run(runner.run_cycle())
+            self.assertEqual(runner._dispatch._own_user_id, 42)
+
+    def test_own_user_id_stays_none_until_an_unshared_mission_appears(self):
+        # No unshared mission with a known user_id visible yet -- must not
+        # crash, and simply keeps trying next cycle (self-healing).
+        FakeSession, FakeClient = _make_fakes(missions=[])
+        with mock.patch("app.core.account_runner.GameSession", FakeSession), \
+             mock.patch("app.core.account_runner.GameClient", FakeClient):
+            runner = self._runner()
+            asyncio.run(runner.run_cycle())  # must not raise
+            self.assertIsNone(runner._dispatch._own_user_id)
 
     def test_bad_credentials_surface_as_error_not_crash(self):
         # A password_provider that raises (e.g. undecryptable secret) becomes a

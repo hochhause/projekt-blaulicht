@@ -404,6 +404,53 @@ class RunnerTests(unittest.TestCase):
         asyncio.run(runner.run_cycle())
         self.assertEqual(client.recalled, [10])  # NEF recalled; LF untouched
 
+    def test_patient_recall_respects_true_ownership_for_a_shared_own_mission(self):
+        # Sasha, 2026-09-14, code review: patient_scope=OWN must recall from
+        # a mission Hilferuf itself shared just as readily as an unshared
+        # one -- using the SAME ownership-aware classification
+        # plan_dispatches uses, not the raw "has been shared" proxy (which
+        # would otherwise leave a cleared unit stranded forever once the
+        # mission it's on gets shared).
+        async def no_sleep(_):
+            return None
+
+        # An unshared own mission establishes own_user_id=42 via inference.
+        seed = SimpleNamespace(id=1, caption="seed", mission_type_id=1, position=NEAR,
+                                is_alliance=False, user_id=42, vehicle_state=0,
+                                patients_count=0)
+        shared_but_mine = SimpleNamespace(id=5, caption="RD", mission_type_id=1, position=NEAR,
+                                           is_alliance=True, user_id=42,
+                                           patients_count=0, vehicle_state=1)
+        nef = SimpleNamespace(id=10, type_id=29, is_available=False, position=BUILDING,
+                              fms=4, target_type="mission", target_id=5)
+        client = FakeClient([seed, shared_but_mine], [nef], [b()])
+        runner = DispatchRunner(
+            client, self.resolver, DispatchPolicy(radius_km=40, patient_scope=ModeScope.OWN),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.recalled, [10])
+
+    def test_patient_recall_still_excludes_a_genuinely_alliance_mission(self):
+        async def no_sleep(_):
+            return None
+
+        seed = SimpleNamespace(id=1, caption="seed", mission_type_id=1, position=NEAR,
+                                is_alliance=False, user_id=42, vehicle_state=0,
+                                patients_count=0)
+        someone_elses = SimpleNamespace(id=5, caption="RD", mission_type_id=1, position=NEAR,
+                                         is_alliance=True, user_id=999,
+                                         patients_count=0, vehicle_state=1)
+        nef = SimpleNamespace(id=10, type_id=29, is_available=False, position=BUILDING,
+                              fms=4, target_type="mission", target_id=5)
+        client = FakeClient([seed, someone_elses], [nef], [b()])
+        runner = DispatchRunner(
+            client, self.resolver, DispatchPolicy(radius_km=40, patient_scope=ModeScope.OWN),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.recalled, [])
+
     def test_cleanup_recalls_surplus_via_runner(self):
         # Two LFs assigned to a mission that needs one -> cleanup recalls the extra.
         async def no_sleep(_):

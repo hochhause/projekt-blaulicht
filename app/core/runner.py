@@ -24,6 +24,8 @@ from ..domain.dispatch import (
     DispatchPolicy,
     HilferufAggressiveness,
     MissionRequirementResolver,
+    _infer_own_user_id,
+    _is_own_mission,
     assigned_from_vehicles,
     plan_cleanup,
     plan_dispatches,
@@ -166,6 +168,7 @@ class DispatchRunner:
         vehicle_cap: int = 0,
         transport_enabled: bool = True,
         transport_only: bool = False,
+        own_user_id: int | None = None,
     ) -> None:
         self._client = client
         self._resolver = resolver
@@ -173,6 +176,16 @@ class DispatchRunner:
         self._text_engine = text_engine
         self._strikes = strikes
         self._vehicle_cap = vehicle_cap
+        # This account's own id — lets plan_dispatches (and patient-recall,
+        # below) tell a genuinely-own mission apart from one merely visible
+        # via alliance sharing, even after it's been shared (Sasha,
+        # 2026-09-14). Inferred lazily from the mission feed itself the
+        # first cycle an unshared own mission is visible (see
+        # _infer_own_user_id in dispatch.py) and cached here from then on —
+        # accepting it here too just lets a caller (or a test) seed it
+        # directly. None until inferred — every consumer then falls back to
+        # the pre-existing is_alliance proxy, unchanged from before this fix.
+        self._own_user_id = own_user_id
         self._transport_enabled = transport_enabled
         self._transport_only = transport_only
         # Buildings change rarely; the runner may be handed a cached list to
@@ -273,6 +286,12 @@ class DispatchRunner:
         missions = await self._client.fetch_missions()
         buildings = await self._buildings_for_cycle()
 
+        # Own id, inferred from the feed itself and cached once found (it
+        # never changes) — see _infer_own_user_id's docstring for why this
+        # beats guessing an unverified API endpoint's key name.
+        if self._own_user_id is None:
+            self._own_user_id = _infer_own_user_id(missions)
+
         idle = sum(1 for v in vehicles if getattr(v, "is_available", False))
         self._log(f"polled {len(missions)} mission(s), {idle} idle vehicle(s)")
 
@@ -285,7 +304,7 @@ class DispatchRunner:
         plan = plan_dispatches(
             missions, vehicles, buildings, self._resolver, self._policy,
             assigned=assigned, text_engine=self._text_engine, now=now,
-            strikes=self._strikes,
+            strikes=self._strikes, own_user_id=self._own_user_id,
         )
         report = CycleReport(plan=plan, mission_status_counts=status_counts)
 
@@ -445,11 +464,17 @@ class DispatchRunner:
         from ..domain.dispatch import _scope_covers
 
         scope = getattr(self._policy, "patient_scope", None)
-        # Only recall from missions the patient mode actually governs.
+        # Only recall from missions the patient mode actually governs. Uses
+        # the SAME ownership-aware classification plan_dispatches does
+        # (code review, 2026-09-14) -- a Hilferuf-shared own mission must be
+        # recalled-from/left-alone consistently with how it was DISPATCHED
+        # to, not by the raw "has been shared" proxy, or a patient unit sent
+        # under patient_scope=OWN could sit stranded on a cleared mission
+        # forever once it's shared (excluded here, included there).
         patients_by_mid = {
             m.id: int(getattr(m, "patients_count", 0) or 0)
             for m in missions
-            if _scope_covers(scope, getattr(m, "is_alliance", False))
+            if _scope_covers(scope, not _is_own_mission(m, self._own_user_id))
         }
         on_scene = {
             getattr(v, "target_id", None)

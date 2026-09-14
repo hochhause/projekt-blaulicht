@@ -62,6 +62,14 @@ class MissionParsingTests(unittest.TestCase):
         m = Mission.from_json({"id": 1, "mtid": 1, "latitude": 47, "longitude": 7})
         self.assertFalse(m.is_alliance)
 
+    def test_user_id_parsed_for_ownership_detection(self):
+        from app.game.models import Mission
+
+        m = Mission.from_json({"id": 1, "mtid": 1, "latitude": 47, "longitude": 7, "user_id": 42})
+        self.assertEqual(m.user_id, 42)
+        absent = Mission.from_json({"id": 1, "mtid": 1, "latitude": 47, "longitude": 7})
+        self.assertIsNone(absent.user_id)
+
     def test_overlay_mtid_tolerated(self):
         from app.game.models import Mission
 
