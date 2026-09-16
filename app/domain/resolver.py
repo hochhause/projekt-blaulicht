@@ -293,10 +293,25 @@ class MissionRequirementResolver:
 
         # Incident command scales with casualty load and is provided by US —
         # missions never request LNA/OrgL explicitly. Applies in EVERY mode: an
-        # LNA above 5 patients, an OrgL above 10.
-        if patients > 5:
+        # LNA above 5 patients, an OrgL above 10. Deliberately NOT conservative
+        # here (Sasha, 2026-09-16): threshold against the mission's MAX POSSIBLE
+        # patient count, not just the currently-revealed one, so incident
+        # command shows up proactively for a scene that COULD turn into a
+        # mass-casualty event instead of arriving late once enough patients
+        # have already been individually confirmed. EXCEPT when patients are
+        # authoritatively confirmed gone (`patients` is 0 here BECAUSE
+        # count_revealed made it so, not because nothing's revealed yet) --
+        # then the ceiling is stale and re-escalating command staff onto an
+        # already-resolved scene makes no sense; matches `patients`' own
+        # revealed-zero-is-authoritative rule above.
+        if count_revealed and patients == 0:
+            max_patients = 0
+        else:
+            ceiling = int(getattr(mission, "possible_patients_count", 0) or mtype.possible_patient or 0)
+            max_patients = max(patients, ceiling)
+        if max_patients > 5:
             counts["kdow_lna"] = max(counts.get("kdow_lna", 0), 1)
-        if patients > 10:
+        if max_patients > 10:
             counts["kdow_orgl"] = max(counts.get("kdow_orgl", 0), 1)
         return counts
 
@@ -325,9 +340,15 @@ class MissionRequirementResolver:
             n = int(mtype.requirements.get(cls, 0)) + (1 if cls in mtype.chances else 0)
             if n:
                 counts[cls] = n
-        if patients > 5:
+        # Not conservative here either (Sasha, 2026-09-16) — threshold against
+        # the mission's max possible patient count, matching _casualty_counts,
+        # so incident command is sized to the scene's worst case rather than
+        # only the patients already confirmed on site.
+        max_patients = int(getattr(mission, "possible_patients_count", 0) or mtype.possible_patient or 0)
+        max_patients = max(max_patients, patients)
+        if max_patients > 5:
             counts["kdow_lna"] = 1
-        if patients > 10:
+        if max_patients > 10:
             counts["kdow_orgl"] = 1
 
         for cls, n in counts.items():

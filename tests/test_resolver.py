@@ -118,6 +118,43 @@ class ResolverTests(unittest.TestCase):
         by = {r.source: r.count for r in res.requirements}
         self.assertEqual(by.get("ambulances"), 2)
 
+    def test_resolve_mission_lna_orgl_use_max_possible_not_revealed(self):
+        # Begun mission (revealed count authoritative for ambulances) with only
+        # 2 patients confirmed so far, but the mission COULD have up to 12 --
+        # LNA/OrgL must be sized to the worst case (12), not the 2 currently
+        # on scene, so incident command shows up proactively rather than only
+        # once enough patients have individually been confirmed (Sasha, 2026-09-16).
+        m = SimpleNamespace(mission_type_id=1, patients_count=2, possible_patients_count=12,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=1)
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertEqual(by.get("ambulances"), 2)   # ambulances still track revealed
+        self.assertEqual(by.get("kdow_lna"), 1)     # but LNA/OrgL track the max
+        self.assertEqual(by.get("kdow_orgl"), 1)
+
+    def test_resolve_mission_no_lna_orgl_when_patients_confirmed_cleared(self):
+        # Begun mission with patients AUTHORITATIVELY confirmed gone (0 revealed,
+        # vehicle_state=1) -- the possible-max ceiling is stale for a resolved
+        # scene, so no incident command should be re-escalated onto it, even
+        # though the type's ceiling is well above both thresholds.
+        m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=20,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=1)
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertIsNone(by.get("ambulances"))
+        self.assertNotIn("kdow_lna", by)
+        self.assertNotIn("kdow_orgl", by)
+
+    def test_resolve_mission_no_lna_orgl_when_max_possible_low(self):
+        # Max possible is small -> no incident command, even though it's the
+        # unrevealed/pre-arrival branch that would otherwise send for the max.
+        m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=3,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=0)
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertNotIn("kdow_lna", by)
+        self.assertNotIn("kdow_orgl", by)
+
 
     # -- patient-only mode -----------------------------------------------------
     def test_patient_only_transports_all_and_drops_non_patient(self):
@@ -145,6 +182,16 @@ class ResolverTests(unittest.TestCase):
         m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=5,
                             prisoners_count=0, possible_prisoners_count=0, vehicle_state=1)
         self.assertEqual(self.resolver.resolve_patient_only(m).requirements, [])
+
+    def test_patient_only_lna_orgl_use_max_possible_not_on_site_count(self):
+        # Only 2 patients on scene right now, but the mission could reach 12 --
+        # incident command should size to the worst case, matching resolve_mission.
+        m = SimpleNamespace(mission_type_id=1, patients_count=2, possible_patients_count=12,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=1)
+        by = {r.source: r.count for r in self.resolver.resolve_patient_only(m).requirements}
+        self.assertEqual(by.get("ambulances"), 2)   # ambulances still track on-site count
+        self.assertEqual(by.get("kdow_lna"), 1)
+        self.assertEqual(by.get("kdow_orgl"), 1)
 
     def test_patient_only_excludes_end_patient_missions(self):
         # Hitzschlag-style: the patient only appears at the end, so on-site count
