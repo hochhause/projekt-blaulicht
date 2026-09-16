@@ -253,24 +253,6 @@ class MissionRequirementResolver:
         always applies on top of :meth:`vehicle_requirements`."""
         counts: dict[str, int] = {}
 
-        # Notärzte revealed per patient (patients_prisoners[].missing_text =
-        # "Wir benötigen: NEF") — the accurate, just-in-time NEF demand.
-        # "Wir benötigen: RTH" is the SAME per-patient signal but specifically
-        # asks for the helicopter (confirmed live 2026-09-11) — mapped to the
-        # dedicated `rescue_helicopter` class (type 31 only), not the broader
-        # `nef` class (29/31/74, incl. ground Notarzt vehicles), so a plain
-        # ground NEF never gets sent in place of the helicopter actually asked for.
-        patient_missing = tuple(pm.lower() for pm in getattr(mission, "patient_missing", ()))
-        nef_needed = sum(
-            1 for pm in patient_missing
-            if ("nef" in pm or "notarzt" in pm) and "rth" not in pm and "rettungshubschrauber" not in pm
-        )
-        if nef_needed:
-            counts["nef"] = nef_needed
-        rth_needed = sum(1 for pm in patient_missing if "rth" in pm or "rettungshubschrauber" in pm)
-        if rth_needed:
-            counts["rescue_helicopter"] = rth_needed
-
         # A unit already on the mission means its casualty counts are revealed,
         # so a 0 is real (patients/prisoners already dealt with) rather than hidden.
         count_revealed = getattr(mission, "vehicle_state", 0) >= 1
@@ -282,6 +264,53 @@ class MissionRequirementResolver:
         )
         if patients:
             counts["ambulances"] = patients
+
+        # Notärzte revealed per patient (patients_prisoners[].missing_text =
+        # "Wir benötigen: NEF") — the accurate, just-in-time NEF demand.
+        # "Wir benötigen: RTH" is the SAME per-patient signal but specifically
+        # asks for the helicopter (confirmed live 2026-09-11) — mapped to the
+        # dedicated `rescue_helicopter` class (type 31 only), not the broader
+        # `nef` class (29/31/74, incl. ground Notarzt vehicles), so a plain
+        # ground NEF never gets sent in place of the helicopter actually asked for.
+        patient_missing = tuple(pm.lower() for pm in getattr(mission, "patient_missing", ()))
+        nef_revealed = sum(
+            1 for pm in patient_missing
+            if ("nef" in pm or "notarzt" in pm) and "rth" not in pm and "rettungshubschrauber" not in pm
+        )
+        rth_needed = sum(1 for pm in patient_missing if "rth" in pm or "rettungshubschrauber" in pm)
+        if rth_needed:
+            # RTH stays strictly reveal-driven (Sasha, 2026-09-16): fast
+            # (flying) and expensive, so only send one once a patient
+            # actually asks for it — unlike NEF below, no proactive heuristic.
+            counts["rescue_helicopter"] = rth_needed
+
+        # NEF generosity (Sasha, 2026-09-16): "a NEF always needs a RTW too,"
+        # so this never exceeds `patients` (the ambulance count above). A
+        # patient already getting an RTH is excluded from the pool below —
+        # the helicopter's own Notarzt already covers them, so they don't
+        # also need a ground NEF. Below 5 patients, pair EVERY remaining
+        # patient with a NEF — small incidents stay maximally safe, and the
+        # absolute NEF cost is low anyway. At 5+ patients (mission scale,
+        # counting the RTH-covered ones too), throttle down so a mass-
+        # casualty incident doesn't empty the whole regional NEF fleet: take
+        # the mission type's own historical NEF-need chance
+        # (``mtype.chances["nef"]``, a 0-100 percentage) as the expected
+        # count, then send a NEF for half of the remaining (not statistically
+        # expected to need one) patients anyway, as a safety margin. Never
+        # goes below whatever was explicitly revealed.
+        nef_pool = max(patients - rth_needed, 0)
+        if not nef_pool:
+            heuristic_nef = 0
+        elif patients < 5:
+            heuristic_nef = nef_pool
+        else:
+            expected = min(round(patients * mtype.chances.get("nef", 0) / 100), nef_pool)
+            remaining = max(nef_pool - expected, 0)
+            heuristic_nef = expected + ceil(remaining / 2)
+        nef_needed = max(nef_revealed, heuristic_nef)
+        if nef_needed:
+            counts["nef"] = nef_needed
+
         prisoners = _casualties(
             getattr(mission, "prisoners_count", 0),
             getattr(mission, "possible_prisoners_count", 0),
@@ -336,6 +365,13 @@ class MissionRequirementResolver:
             return resolution
 
         counts: dict[str, int] = {"ambulances": patients}
+        # NOT extending the NEF-generosity heuristic here (Sasha's rule,
+        # 2026-09-16, applied in _casualty_counts instead) — deliberately.
+        # Patient-only governing NEVER allows a partial send (dispatch.py's
+        # `allow_partial = (governing == "topup") or (governing == "normal"
+        # and policy.partial_starts)` — "patient" is neither), so demanding a
+        # NEF here would risk blocking the RTW too whenever NEFs are scarce,
+        # the opposite of "safe side". Kept to the original, narrower rule.
         for cls in ("nef", "rescue_helicopter"):
             n = int(mtype.requirements.get(cls, 0)) + (1 if cls in mtype.chances else 0)
             if n:

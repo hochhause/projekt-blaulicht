@@ -252,6 +252,63 @@ class ResolverTests(unittest.TestCase):
         by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
         self.assertEqual(by.get("nef"), 2)
 
+    # -- NEF generosity (Sasha, 2026-09-16) -------------------------------------
+    def test_nef_pairs_every_patient_below_five_with_no_reveal_at_all(self):
+        # Below 5 patients, EVERY ambulance is paired with a NEF, even with no
+        # "Wir benötigen: NEF" reveal and a 0% modeled chance.
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=910, name="Med", average_credits=100, requirements={}, chances={})
+        resolver = MissionRequirementResolver(MissionCatalog({910: mt}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=910, patients_count=4, possible_patients_count=4,
+                             prisoners_count=0, possible_prisoners_count=0, patient_missing=())
+        by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("ambulances"), 4)
+        self.assertEqual(by.get("nef"), 4)
+
+    def test_nef_throttled_at_five_or_more_using_the_type_chance(self):
+        # Sasha's own worked example: 10 patients, 40% modeled NEF chance ->
+        # 4 expected + half of the remaining 6 (3) = 7.
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=911, name="MCI", average_credits=100, requirements={}, chances={"nef": 40})
+        resolver = MissionRequirementResolver(MissionCatalog({911: mt}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=911, patients_count=10, possible_patients_count=10,
+                             prisoners_count=0, possible_prisoners_count=0, patient_missing=())
+        by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("nef"), 7)
+
+    def test_nef_half_of_all_patients_when_type_has_no_modeled_chance(self):
+        # 0% modeled chance -> "expected" is 0, so half of ALL patients still
+        # get a NEF anyway once the mission reaches mass-casualty scale.
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=912, name="MCI", average_credits=100, requirements={}, chances={})
+        resolver = MissionRequirementResolver(MissionCatalog({912: mt}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=912, patients_count=6, possible_patients_count=6,
+                             prisoners_count=0, possible_prisoners_count=0, patient_missing=())
+        by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("nef"), 3)
+
+    def test_nef_pool_excludes_patients_already_covered_by_rth(self):
+        # A patient already getting the helicopter's own Notarzt doesn't also
+        # need a ground NEF -- only the OTHER patients count toward the
+        # below-5 pairing.
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=913, name="Med", average_credits=100, requirements={}, chances={})
+        resolver = MissionRequirementResolver(MissionCatalog({913: mt}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=913, patients_count=3, possible_patients_count=3,
+                             prisoners_count=0, possible_prisoners_count=0,
+                             patient_missing=("Wir benötigen: RTH",))
+        by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("rescue_helicopter"), 1)
+        self.assertEqual(by.get("nef"), 2)   # 3 patients - 1 RTH-covered = 2
+
     def test_lna_added_in_normal_mode_above_five_patients(self):
         # Point: the LNA/OrgL rule works in EVERY mode, not just patient-only.
         m = SimpleNamespace(mission_type_id=1, patients_count=6, possible_patients_count=6,
@@ -469,7 +526,10 @@ class ResolverTests(unittest.TestCase):
         by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
         self.assertEqual(by.get("ELW 1"), 1)
         self.assertEqual(by.get("ambulances"), 3)
-        self.assertEqual(by.get("nef"), 1)
+        # Below 5 patients every ambulance is paired with a NEF (Sasha,
+        # 2026-09-16) -- the explicit "Wir benötigen: NEF" reveal (1) is
+        # superseded by the generosity heuristic (3), not the other way round.
+        self.assertEqual(by.get("nef"), 3)
 
     def test_resolve_mission_unmatched_missing_text_category_reported(self):
         m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,

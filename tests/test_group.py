@@ -285,10 +285,13 @@ class GroupPlannerTests(unittest.TestCase):
         self.assertNotIn(10, ids)
 
     def test_seg_elw_preferred_on_mass_casualty_in_group_mode(self):
+        # 0% modeled NEF chance for this mission type -> half of all 20
+        # patients, 10 NEFs, on top of the ambulances (Sasha, 2026-09-16).
         ambulances = [vehicle(200 + i, 28) for i in range(20)]
+        nefs = [vehicle(400 + i, 29) for i in range(10)]
         command = [vehicle(300, 55), vehicle(301, 56)]
         vehicles = [vehicle(1, LF), vehicle(2, LF), vehicle(3, 2), vehicle(10, 59), vehicle(11, 3)]
-        vehicles += ambulances + command
+        vehicles += ambulances + nefs + command
         m = mission(1, 2, possible_patients_count=20)
         plan = self.plan([m], {10: vehicles}, policy=GroupPolicy(radius_km=40, participation=False))
         ids = _by_account(plan).get(10, {}).get(1, ())

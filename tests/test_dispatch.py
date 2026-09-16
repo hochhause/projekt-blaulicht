@@ -970,15 +970,18 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertNotIn(10, plan.planned[0].vehicle_ids)  # SEG-ELW held back
 
     def test_seg_elw_preferred_on_mass_casualty_mission(self):
-        # 20+ patients also layers on an ambulance-per-patient requirement
-        # plus incident-command scaling (always-on, unrelated to this
-        # feature) -- supply enough ambulances (28), an LNA (55) and OrgL
-        # (56) so the mission stays satisfiable and the ELW pick is isolated
-        # to just the SEG-ELW-vs-plain-ELW1 choice being tested.
+        # 20+ patients also layers on an ambulance-per-patient requirement,
+        # a NEF-generosity requirement (0% modeled chance here -> half of all
+        # 20 patients, 10 NEFs -- Sasha, 2026-09-16), plus incident-command
+        # scaling (always-on, unrelated to this feature) -- supply enough
+        # ambulances (28), NEFs (29), an LNA (55) and OrgL (56) so the
+        # mission stays satisfiable and the ELW pick is isolated to just the
+        # SEG-ELW-vs-plain-ELW1 choice being tested.
         m = mission(1, 2, NEAR, possible_patients_count=20)
         ambulances = [vehicle(200 + i, 28) for i in range(20)]
+        nefs = [vehicle(400 + i, 29) for i in range(10)]
         command = [vehicle(300, 55), vehicle(301, 56)]
-        vehicles = self._mission2_support() + ambulances + command + [vehicle(10, 59), vehicle(11, 3)]
+        vehicles = self._mission2_support() + ambulances + nefs + command + [vehicle(10, 59), vehicle(11, 3)]
         plan = self.plan([m], vehicles)
         self.assertTrue(plan.planned[0].satisfied)
         self.assertIn(10, plan.planned[0].vehicle_ids)   # SEG-ELW preferred
