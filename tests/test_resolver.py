@@ -132,6 +132,19 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(by.get("kdow_lna"), 1)     # but LNA/OrgL track the max
         self.assertEqual(by.get("kdow_orgl"), 1)
 
+    def test_lna_from_explicit_patient_reveal_even_below_threshold(self):
+        # Confirmed live 2026-09-21 (mission #519 "Hüpfburgunfall"): a patient
+        # can explicitly ask for an LNA via "Wir benötigen: LNA", the same
+        # per-patient mechanism as NEF/RTH -- honored even with only 1
+        # patient, well below the 5-patient threshold, and does NOT add an
+        # OrgL (that's still threshold-only, never explicitly revealed).
+        m = SimpleNamespace(mission_type_id=1, patients_count=1, possible_patients_count=1,
+                            prisoners_count=0, possible_prisoners_count=0, vehicle_state=0,
+                            patient_missing=("Wir benötigen: LNA",))
+        by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("kdow_lna"), 1)
+        self.assertNotIn("kdow_orgl", by)
+
     def test_resolve_mission_no_lna_orgl_when_patients_confirmed_cleared(self):
         # Begun mission with patients AUTHORITATIVELY confirmed gone (0 revealed,
         # vehicle_state=1) -- the possible-max ceiling is stale for a resolved

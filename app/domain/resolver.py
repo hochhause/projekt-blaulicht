@@ -104,9 +104,11 @@ class MissionRequirementResolver:
         Layered on top, always, regardless of which source above applied
         (neither one carries these): patients → one ambulance each, prisoners →
         one police car each (revealed count if any, else the mission's max
-        possible), a Notarzt per patient that's asked for one, and incident
-        command scaling with casualty load (an LNA above 5 patients, an OrgL
-        above 10).
+        possible), a Notarzt per patient that's asked for one (or a NEF/RTW
+        pair proactively — see :meth:`_casualty_counts`), and incident
+        command scaling with casualty load (an LNA above 5 possible patients,
+        an OrgL above 10 — or an LNA immediately if a patient explicitly asks
+        for one, confirmed live 2026-09-21).
         """
         resolution = Resolution()
         mtid = getattr(mission, "mission_type_id", None)
@@ -246,11 +248,15 @@ class MissionRequirementResolver:
 
     def _casualty_counts(self, mission, mtype) -> dict[str, int]:
         """NEF / RTH / ambulances / police_cars / incident-command driven by
-        revealed or possible casualty counts. Never comes from the mission's
-        own ``missing_text`` (a NEF/RTH is only ever revealed via
-        ``patients_prisoners[].missing_text``; LNA/OrgL are our own
-        incident-command heuristic, never requested by the game) — so this
-        always applies on top of :meth:`vehicle_requirements`."""
+        revealed or possible casualty counts. Mostly independent of the
+        mission's own ``missing_text`` (NEF/RTH/LNA are revealed per-patient
+        via ``patients_prisoners[].missing_text``, a completely separate
+        field from ``missing_text`` itself) — so this always applies on top
+        of :meth:`vehicle_requirements`. LNA/OrgL are primarily OUR OWN
+        incident-command heuristic (by patient-count threshold, below), but
+        the game can ALSO explicitly ask for an LNA per-patient (confirmed
+        live 2026-09-21, mission #519 "Hüpfburgunfall": "Wir benötigen: LNA")
+        — that reveal is honored too, taking the max with the threshold."""
         counts: dict[str, int] = {}
 
         # A unit already on the mission means its casualty counts are revealed,
@@ -278,6 +284,11 @@ class MissionRequirementResolver:
             if ("nef" in pm or "notarzt" in pm) and "rth" not in pm and "rettungshubschrauber" not in pm
         )
         rth_needed = sum(1 for pm in patient_missing if "rth" in pm or "rettungshubschrauber" in pm)
+        # A patient can also explicitly ask for an LNA (confirmed live
+        # 2026-09-21, "Wir benötigen: LNA") — independent of the patient-count
+        # threshold below, an incident commander is a single per-SCENE role,
+        # not one-per-patient, so this is a plain yes/no signal, not a count.
+        lna_revealed = any("lna" in pm for pm in patient_missing)
         if rth_needed:
             # RTH stays strictly reveal-driven (Sasha, 2026-09-16): fast
             # (flying) and expensive, so only send one once a patient
@@ -338,7 +349,7 @@ class MissionRequirementResolver:
         else:
             ceiling = int(getattr(mission, "possible_patients_count", 0) or mtype.possible_patient or 0)
             max_patients = max(patients, ceiling)
-        if max_patients > 5:
+        if max_patients > 5 or lna_revealed:
             counts["kdow_lna"] = max(counts.get("kdow_lna", 0), 1)
         if max_patients > 10:
             counts["kdow_orgl"] = max(counts.get("kdow_orgl", 0), 1)
