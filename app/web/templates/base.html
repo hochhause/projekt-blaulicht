@@ -51,6 +51,20 @@
     .log-ok{color:var(--ok)} .log-warn{color:var(--amber)} .log-err{color:var(--crit);font-weight:600}
     .log-info{color:var(--blau)} .log-muted{color:var(--muted)}
     .acct{font-weight:700;border-radius:4px;padding:0 5px}
+    /* mission breakdown */
+    details.breakdown-group{margin-top:14px}
+    details.breakdown-group summary{cursor:pointer;font-family:var(--mono);font-size:13px;
+      letter-spacing:.04em;padding:8px 0;list-style:none}
+    details.breakdown-group summary::-webkit-details-marker{display:none}
+    details.breakdown-group summary::before{content:"\25b8  ";color:var(--muted)}
+    details.breakdown-group[open] summary::before{content:"\25be  "}
+    .pill.live-red{--sw:var(--crit)} .pill.live-yellow{--sw:var(--amber)}
+    .pill.live-green{--sw:var(--ok)} .pill.live-unknown{--sw:var(--muted)}
+    .pill.bot-fully-staffed{--sw:var(--ok)}
+    .pill.bot-not-enough-vehicles{--sw:var(--amber)}
+    .pill.bot-no-requirements-found{--sw:var(--crit)}
+    .pill.bot-out-of-scope{--sw:var(--muted)}
+    .pill.bot-other{--sw:var(--muted)}
   </style>
   {% block head %}{% endblock %}
 </head>

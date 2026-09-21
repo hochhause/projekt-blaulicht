@@ -130,7 +130,7 @@ def _infer_own_user_id(missions) -> int | None:
     return None
 
 
-def _is_own_mission(mission, own_user_id: int | None) -> bool:
+def is_own_mission(mission, own_user_id: int | None) -> bool:
     """True if this account genuinely OWNS the mission, independent of
     whether it's since been shared to the alliance (Sasha, 2026-09-14).
 
@@ -291,7 +291,7 @@ def plan_dispatches(
     delta). *text_engine* (a RequirementEngine) parses a mission's live
     ``missing_text`` when the structured catalogue has no requirements. *now*
     (epoch seconds) drives the alliance age-since-shared window. *own_user_id*
-    (see :func:`_is_own_mission`) tells a genuinely-own mission apart from one
+    (see :func:`is_own_mission`) tells a genuinely-own mission apart from one
     merely visible via alliance sharing, even after it's been shared.
     """
     plan = DispatchPlan()
@@ -340,7 +340,7 @@ def plan_dispatches(
     for mission in missions:
         if mission.id in handled:
             continue  # already actioned in the priority pass
-        is_alliance = not _is_own_mission(mission, own_user_id)
+        is_alliance = not is_own_mission(mission, own_user_id)
         # Resolve which treatment this mission gets from the per-mode scopes.
         # Precedence when several cover it: patient > top-up > normal.
         if _scope_covers(policy.patient_scope, is_alliance):
@@ -683,7 +683,7 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
         mtype = resolver.catalog.get(getattr(mission, "mission_type_id", None))
         on_it = mid in assigned                       # a mission we're already on
         others_on = getattr(mission, "vehicle_state", 0) >= 1
-        is_alliance = not _is_own_mission(mission, own_user_id)
+        is_alliance = not is_own_mission(mission, own_user_id)
         scope_ok = _scope_covers(policy.parasite_scope, is_alliance) and not on_it
         # Aggressiveness (Sasha, 2026-08-31): ACTIVE (default) requires someone
         # already on it, matching the original behavior; ALL drops that

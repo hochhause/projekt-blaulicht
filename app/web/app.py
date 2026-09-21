@@ -68,6 +68,20 @@ def _account_log(log_store, account_id: int) -> list[dict]:
     return [{"seq": seq, "ts": ts, "message": msg, "cls": classify_log(msg)} for seq, ts, msg in rows]
 
 
+_BREAKDOWN_CATEGORIES = ("own", "verband", "event")
+
+
+def _grouped_mission_breakdown(store, account_id: int) -> dict[str, list[dict]]:
+    """This account's latest-cycle mission breakdown (Sasha, 2026-09-22),
+    grouped by category for the details page's collapsible sections — always
+    all three keys (own/verband/event) so the template doesn't need to guess
+    which sections exist, even when a group is empty this cycle."""
+    grouped: dict[str, list[dict]] = {c: [] for c in _BREAKDOWN_CATEGORIES}
+    for row in store.mission_breakdown(account_id):
+        grouped.setdefault(row["category"], []).append(row)
+    return grouped
+
+
 def classify_log(message: str) -> str:
     """Map a log line to a colour class (see base.html .log-* rules)."""
     m = _ACCOUNT_TAG.sub("", message.strip())
@@ -299,6 +313,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
                 "last_error": state.get("last_error"),
                 "log": log,
                 "cfg": cfg,
+                "mission_breakdown": _grouped_mission_breakdown(store, account_id),
             },
         )
 

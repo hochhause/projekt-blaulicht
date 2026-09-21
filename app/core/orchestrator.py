@@ -321,6 +321,9 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
             status_counts = getattr(report, "mission_status_counts", None)
             if status_counts is not None:
                 store.set_mission_status(aid, status_counts)
+            breakdown = getattr(report, "mission_breakdown", None)
+            if breakdown is not None:
+                store.set_mission_breakdown(aid, breakdown)
 
         return AccountWorker(account_id, runner, timing, on_state=on_state, on_cycle=on_cycle)
 

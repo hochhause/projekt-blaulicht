@@ -25,7 +25,7 @@ from ..domain.dispatch import (
     HilferufAggressiveness,
     MissionRequirementResolver,
     _infer_own_user_id,
-    _is_own_mission,
+    is_own_mission,
     assigned_from_vehicles,
     plan_cleanup,
     plan_dispatches,
@@ -41,6 +41,24 @@ _REASON_DETAIL = re.compile(r"\s*[:(].*$")
 
 def _summary_key(reason: str) -> str:
     return _REASON_DETAIL.sub("", reason).strip()
+
+
+def _bucket_skip_reason(reason: str) -> tuple[str, str]:
+    """Map a raw dispatch skip reason to one of the panel's named bot-status
+    buckets (Sasha, 2026-09-22: "fully staffed, out of scope, no requirements
+    found, not enough vehicles or any other") — the exact reason is always
+    kept as the explanation too, so nothing is lost even when bucketed as
+    "other" (e.g. "out of range", "category filtered", "shared too
+    recently/long ago", credit bounds, batch size, top-up not begun)."""
+    if reason == "out of scope":
+        return "out of scope", reason
+    if reason == "already covered":
+        return "fully staffed", reason
+    if reason in ("no requirements found", "no patients on site"):
+        return "no requirements found", reason
+    if reason.startswith("not enough vehicles"):
+        return "not enough vehicles", reason
+    return "other", reason
 
 
 def _vehicle_name(vehicle, vehicle_id: int) -> str:
@@ -106,6 +124,12 @@ class CycleReport:
     # cumulative tally like shortfalls. Empty in transport-only mode (no
     # mission poll that cycle).
     mission_status_counts: dict[str, int] = field(default_factory=dict)
+    # Per-mission breakdown for the panel's "mission breakdown" view (Sasha,
+    # 2026-09-22): one row per mission actually considered this cycle, each
+    # {mission_id, caption, category (own/verband/event), live_status
+    # (red/yellow/green/unknown), bot_status, explanation}. A snapshot, same
+    # lifecycle as mission_status_counts.
+    mission_breakdown: list[dict] = field(default_factory=list)
 
     def summary(self) -> str:
         return (
@@ -272,6 +296,45 @@ class DispatchRunner:
             await self._timing.sleep(self._timing.dispatch_gap())
         return done
 
+    def _mission_breakdown(self, missions, plan: DispatchPlan) -> list[dict]:
+        """Per-mission bot verdict for the panel's mission-breakdown view
+        (Sasha, 2026-09-22): one row per mission actually considered this
+        cycle — its live status (red/yellow/green, from `Mission.status`),
+        the bot's own status bucket, and why. Category (own/verband/event)
+        uses the SAME ownership classification `plan_dispatches` itself used
+        (`is_own_mission`), not the raw `is_alliance` flag, so this view
+        never disagrees with what the dispatcher actually did — event takes
+        priority over alliance/own, matching `_source_covers`'s precedence."""
+        planned_by_id = {mp.mission_id: mp for mp in plan.planned}
+        skipped_by_id = dict(plan.skipped)
+        rows: list[dict] = []
+        for m in missions:
+            mp = planned_by_id.get(m.id)
+            reason = skipped_by_id.get(m.id)
+            if mp is not None:
+                if mp.satisfied:
+                    bot_status = "fully staffed"
+                    explanation = f"{len(mp.vehicle_ids)} vehicle(s) sent"
+                else:
+                    missing = ", ".join(f"{cls} x{n}" for cls, n in mp.shortfall.items())
+                    bot_status = "not enough vehicles"
+                    explanation = f"sent {len(mp.vehicle_ids)}, still short: {missing}"
+            elif reason is not None:
+                bot_status, explanation = _bucket_skip_reason(reason)
+            else:
+                continue  # not actually considered this cycle (shouldn't normally happen)
+            is_alliance = not is_own_mission(m, self._own_user_id)
+            category = "event" if getattr(m, "is_event", False) else ("verband" if is_alliance else "own")
+            rows.append({
+                "mission_id": m.id,
+                "caption": getattr(m, "caption", "") or "(no caption)",
+                "category": category,
+                "live_status": getattr(m, "status", "unknown"),
+                "bot_status": bot_status,
+                "explanation": explanation,
+            })
+        return rows
+
     async def run_cycle(self) -> CycleReport:
         """Run one cycle: transport (Sprechwünsche) first, then poll → plan →
         dispatch (skipped in transport-only mode)."""
@@ -306,7 +369,10 @@ class DispatchRunner:
             assigned=assigned, text_engine=self._text_engine, now=now,
             strikes=self._strikes, own_user_id=self._own_user_id,
         )
-        report = CycleReport(plan=plan, mission_status_counts=status_counts)
+        report = CycleReport(
+            plan=plan, mission_status_counts=status_counts,
+            mission_breakdown=self._mission_breakdown(missions, plan),
+        )
 
         # Show why missions were (or weren't) actionable — the key diagnostic.
         reasons = Counter(_summary_key(reason) for _mid, reason in plan.skipped)
@@ -474,7 +540,7 @@ class DispatchRunner:
         patients_by_mid = {
             m.id: int(getattr(m, "patients_count", 0) or 0)
             for m in missions
-            if _scope_covers(scope, not _is_own_mission(m, self._own_user_id))
+            if _scope_covers(scope, not is_own_mission(m, self._own_user_id))
         }
         on_scene = {
             getattr(v, "target_id", None)

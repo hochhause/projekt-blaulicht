@@ -47,4 +47,32 @@
   <p class="muted">No activity yet — start the account and let a cycle run.</p>
   {% endif %}
 </div>
+
+<div class="card">
+  <h2>Mission breakdown</h2>
+  <p class="muted" style="margin-top:0;font-size:13px">Per-mission verdict from the latest cycle. <b>Live</b> is the game's own icon status; <b>Bot</b> is why the dispatcher did (or didn't) act.</p>
+  {% for category, label in [('own', 'Own'), ('verband', 'Verband'), ('event', 'Event')] %}
+    {% set rows = mission_breakdown[category] %}
+    <details class="breakdown-group" {% if rows %}open{% endif %}>
+      <summary>{{ label }} <span class="muted">({{ rows | length }})</span></summary>
+      {% if rows %}
+      <table>
+        <thead><tr><th>Mission</th><th>Live</th><th>Bot</th><th>Why</th></tr></thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r.caption }} <span class="muted">#{{ r.mission_id }}</span></td>
+            <td><span class="pill live-{{ r.live_status }}">{{ r.live_status }}</span></td>
+            <td><span class="pill bot-{{ r.bot_status | replace(' ', '-') }}">{{ r.bot_status }}</span></td>
+            <td class="muted" style="font-size:13px">{{ r.explanation }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted" style="font-size:13px">No {{ label | lower }} missions this cycle.</p>
+      {% endif %}
+    </details>
+  {% endfor %}
+</div>
 {% endblock %}

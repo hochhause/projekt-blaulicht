@@ -65,6 +65,19 @@ CREATE TABLE IF NOT EXISTS mission_status (
     count      INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (account_id, status)
 );
+-- Per-mission bot verdict for the panel's "mission breakdown" view, per
+-- account — a snapshot overwritten every cycle (same lifecycle as
+-- mission_status, unlike the cumulative shortfall table).
+CREATE TABLE IF NOT EXISTS mission_breakdown (
+    account_id  INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    mission_id  INTEGER NOT NULL,
+    caption     TEXT NOT NULL DEFAULT '',
+    category    TEXT NOT NULL,
+    live_status TEXT NOT NULL,
+    bot_status  TEXT NOT NULL,
+    explanation TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (account_id, mission_id)
+);
 """
 
 
@@ -270,6 +283,34 @@ class Store:
             "SELECT status, count FROM mission_status WHERE account_id = ?", (account_id,)
         )
         return {r["status"]: r["count"] for r in rows}
+
+    # -- mission breakdown snapshot ------------------------------------------
+    def set_mission_breakdown(self, account_id: int, rows) -> None:
+        """Overwrite the mission-breakdown snapshot for an account — the
+        CURRENT cycle's per-mission bot verdict, not a cumulative tally
+        (same "overwrite every cycle" pattern as `set_mission_status`).
+        *rows* is an iterable of dicts with mission_id/caption/category/
+        live_status/bot_status/explanation (see DispatchRunner._mission_breakdown)."""
+        with self._lock:
+            self._conn.execute("DELETE FROM mission_breakdown WHERE account_id = ?", (account_id,))
+            for r in rows:
+                self._conn.execute(
+                    "INSERT INTO mission_breakdown "
+                    "(account_id, mission_id, caption, category, live_status, bot_status, explanation) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (account_id, int(r["mission_id"]), str(r.get("caption", "")),
+                     str(r["category"]), str(r["live_status"]), str(r["bot_status"]),
+                     str(r.get("explanation", ""))),
+                )
+            self._conn.commit()
+
+    def mission_breakdown(self, account_id: int) -> list[dict]:
+        rows = self._all(
+            "SELECT mission_id, caption, category, live_status, bot_status, explanation "
+            "FROM mission_breakdown WHERE account_id = ? ORDER BY mission_id",
+            (account_id,),
+        )
+        return [dict(r) for r in rows]
 
     # -- app settings ------------------------------------------------------
     def set_setting(self, key: str, value: str) -> None:

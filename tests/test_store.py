@@ -137,6 +137,31 @@ class StoreTests(unittest.TestCase):
         aid = self.store.add_account("x", "x@e.com")
         self.assertEqual(self.store.mission_status(aid), {})
 
+    def test_mission_breakdown_is_a_snapshot_not_cumulative(self):
+        aid = self.store.add_account("x", "x@e.com")
+        row1 = {"mission_id": 1, "caption": "M1", "category": "own",
+                "live_status": "red", "bot_status": "fully staffed", "explanation": "1 vehicle(s) sent"}
+        self.store.set_mission_breakdown(aid, [row1])
+        self.assertEqual(self.store.mission_breakdown(aid), [row1])
+        # A second cycle's snapshot REPLACES the first entirely.
+        row2 = {"mission_id": 2, "caption": "M2", "category": "verband",
+                "live_status": "yellow", "bot_status": "out of scope", "explanation": "out of scope"}
+        self.store.set_mission_breakdown(aid, [row2])
+        self.assertEqual(self.store.mission_breakdown(aid), [row2])
+
+    def test_mission_breakdown_scoped_per_account(self):
+        a1 = self.store.add_account("a", "a@e.com")
+        a2 = self.store.add_account("b", "b@e.com")
+        row = {"mission_id": 1, "caption": "M1", "category": "own",
+               "live_status": "red", "bot_status": "fully staffed", "explanation": "1 vehicle(s) sent"}
+        self.store.set_mission_breakdown(a1, [row])
+        self.assertEqual(len(self.store.mission_breakdown(a1)), 1)
+        self.assertEqual(self.store.mission_breakdown(a2), [])
+
+    def test_mission_breakdown_empty_when_unset(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.assertEqual(self.store.mission_breakdown(aid), [])
+
 
 if __name__ == "__main__":
     unittest.main()

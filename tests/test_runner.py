@@ -127,6 +127,53 @@ class RunnerTests(unittest.TestCase):
         report = asyncio.run(self._runner(client).run_cycle())
         self.assertEqual(report.mission_status_counts, {"red": 2, "yellow": 1, "green": 1})
 
+    # -- mission breakdown (Sasha, 2026-09-22) ----------------------------
+    def test_cycle_reports_mission_breakdown_fully_staffed(self):
+        missions = [m(1, 1, status="red")]
+        client = FakeClient(missions, [v(100, 0)], [b()])  # type 1 needs 1 firetruck; LF supplied
+        report = asyncio.run(self._runner(client).run_cycle())
+        self.assertEqual(len(report.mission_breakdown), 1)
+        row = report.mission_breakdown[0]
+        self.assertEqual(row["mission_id"], 1)
+        self.assertEqual(row["category"], "own")
+        self.assertEqual(row["live_status"], "red")
+        self.assertEqual(row["bot_status"], "fully staffed")
+
+    def test_cycle_reports_mission_breakdown_not_enough_vehicles(self):
+        # Type 2 needs firetrucks:2 + platform_trucks:1 + battalion_chief_vehicles:1;
+        # a single LF comes nowhere near that, and partial_starts defaults off.
+        missions = [m(2, 2, status="red")]
+        client = FakeClient(missions, [v(100, 0)], [b()])
+        report = asyncio.run(self._runner(client).run_cycle())
+        row = report.mission_breakdown[0]
+        self.assertEqual(row["bot_status"], "not enough vehicles")
+        self.assertIn("short", row["explanation"])
+
+    def test_cycle_reports_mission_breakdown_out_of_scope(self):
+        missions = [m(1, 1, status="red")]
+        client = FakeClient(missions, [v(100, 0)], [b()])
+        runner = DispatchRunner(
+            client, self.resolver, DispatchPolicy(radius_km=40, mission_source=frozenset()),
+            timing=RunnerTiming(between_dispatches=0, sleep=lambda _: asyncio.sleep(0)),
+        )
+        report = asyncio.run(runner.run_cycle())
+        row = report.mission_breakdown[0]
+        self.assertEqual(row["bot_status"], "out of scope")
+        self.assertEqual(row["explanation"], "out of scope")
+
+    def test_cycle_reports_mission_breakdown_category_verband_and_event(self):
+        # Category uses the SAME ownership classification plan_dispatches
+        # itself used, not the raw is_alliance flag -- event takes priority.
+        verband = SimpleNamespace(id=10, caption="[Verband] X", mission_type_id=1, position=NEAR,
+                                   status="yellow", vehicle_state=0, is_alliance=True)
+        event = SimpleNamespace(id=11, caption="[Event] Y", mission_type_id=1, position=NEAR,
+                                 status="green", vehicle_state=0, is_alliance=False, is_event=True)
+        client = FakeClient([verband, event], [v(100, 0), v(101, 0)], [b()])
+        report = asyncio.run(self._runner(client).run_cycle())
+        by_id = {r["mission_id"]: r for r in report.mission_breakdown}
+        self.assertEqual(by_id[10]["category"], "verband")
+        self.assertEqual(by_id[11]["category"], "event")
+
     def test_cycle_with_nothing_to_do(self):
         client = FakeClient([], [v(100, 0)], [b()])
         report = asyncio.run(self._runner(client).run_cycle())

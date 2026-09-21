@@ -238,6 +238,26 @@ class WebPanelTests(unittest.TestCase):
         self.assertIn("Brand", r.text)
         self.assertIn("4", r.text)  # dispatched total
 
+    def test_details_page_shows_mission_breakdown_grouped_by_category(self):
+        self._login()
+        self.client.post("/accounts", data={"label": "n", "email": "u@e.com", "password": "p"})
+        aid = self.store.list_accounts()[0].id
+        self.store.set_mission_breakdown(aid, [
+            {"mission_id": 1, "caption": "Brennender Container", "category": "own",
+             "live_status": "red", "bot_status": "fully staffed", "explanation": "1 vehicle(s) sent"},
+            {"mission_id": 2, "caption": "[Verband] Verkehrsunfall", "category": "verband",
+             "live_status": "yellow", "bot_status": "not enough vehicles",
+             "explanation": "sent 1, still short: nef x1"},
+        ])
+        r = self.client.get(f"/accounts/{aid}/details")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Mission breakdown", r.text)
+        self.assertIn("Brennender Container", r.text)
+        self.assertIn("[Verband] Verkehrsunfall", r.text)
+        self.assertIn("fully staffed", r.text)
+        self.assertIn("not enough vehicles", r.text)
+        self.assertIn("No event missions this cycle.", r.text)  # empty group still shown
+
     def test_dashboard_shows_live_mission_status_breakdown(self):
         self._login()
         self.client.post("/accounts", data={"label": "n", "email": "u@e.com", "password": "p"})
