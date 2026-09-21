@@ -78,6 +78,17 @@ CREATE TABLE IF NOT EXISTS mission_breakdown (
     explanation TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (account_id, mission_id)
 );
+-- Last time we actually dispatched >=1 vehicle to a mission, per account --
+-- UNLIKE mission_breakdown, this ACCUMULATES across cycles (a mission's
+-- last-interaction time must survive cycles where nothing new was sent to
+-- it); pruned per-account each cycle for missions no longer in the live
+-- feed, so it can't grow unbounded over the account's lifetime.
+CREATE TABLE IF NOT EXISTS mission_interaction (
+    account_id        INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    mission_id        INTEGER NOT NULL,
+    last_interacted_at REAL NOT NULL,
+    PRIMARY KEY (account_id, mission_id)
+);
 """
 
 
@@ -311,6 +322,42 @@ class Store:
             (account_id,),
         )
         return [dict(r) for r in rows]
+
+    # -- mission interaction timestamps ---------------------------------------
+    def record_mission_interactions(self, account_id: int, interactions, live_mission_ids) -> None:
+        """Upsert *interactions* (mission_id -> unix timestamp of the last
+        cycle we sent it >=1 vehicle), then prune any recorded mission no
+        longer in *live_mission_ids* (this cycle's full considered set) --
+        once a mission leaves the feed it'll never need "time since" shown
+        again, so keeping its row forever would grow this table unbounded."""
+        with self._lock:
+            for mission_id, ts in dict(interactions).items():
+                self._conn.execute(
+                    "INSERT INTO mission_interaction (account_id, mission_id, last_interacted_at) "
+                    "VALUES (?, ?, ?) ON CONFLICT(account_id, mission_id) "
+                    "DO UPDATE SET last_interacted_at = excluded.last_interacted_at",
+                    (account_id, int(mission_id), float(ts)),
+                )
+            live_ids = list(live_mission_ids)
+            if live_ids:
+                placeholders = ",".join("?" for _ in live_ids)
+                self._conn.execute(
+                    f"DELETE FROM mission_interaction WHERE account_id = ? "
+                    f"AND mission_id NOT IN ({placeholders})",
+                    (account_id, *live_ids),
+                )
+            else:
+                self._conn.execute(
+                    "DELETE FROM mission_interaction WHERE account_id = ?", (account_id,)
+                )
+            self._conn.commit()
+
+    def mission_interactions(self, account_id: int) -> dict[int, float]:
+        rows = self._all(
+            "SELECT mission_id, last_interacted_at FROM mission_interaction WHERE account_id = ?",
+            (account_id,),
+        )
+        return {r["mission_id"]: r["last_interacted_at"] for r in rows}
 
     # -- app settings ------------------------------------------------------
     def set_setting(self, key: str, value: str) -> None:

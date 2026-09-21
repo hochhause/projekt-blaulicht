@@ -324,6 +324,12 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
             breakdown = getattr(report, "mission_breakdown", None)
             if breakdown is not None:
                 store.set_mission_breakdown(aid, breakdown)
+                # Record any fresh dispatches' timestamps and prune interaction
+                # rows for missions no longer in this cycle's considered set
+                # (see mission_interaction's own "prune every cycle" docstring).
+                interactions = getattr(report, "mission_interactions", None) or {}
+                live_ids = {row["mission_id"] for row in breakdown}
+                store.record_mission_interactions(aid, interactions, live_ids)
 
         return AccountWorker(account_id, runner, timing, on_state=on_state, on_cycle=on_cycle)
 

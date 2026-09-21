@@ -116,6 +116,25 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(report.dispatched, 1)
         self.assertEqual(report.failed, 0)
 
+    def test_cycle_records_mission_interaction_timestamp_on_dispatch(self):
+        # Sasha, 2026-09-22: "how long since we last interacted with that
+        # mission" -- recorded whenever we actually send >=1 vehicle.
+        client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
+        before = time.time()
+        report = asyncio.run(self._runner(client).run_cycle())
+        self.assertIn(1, report.mission_interactions)
+        self.assertGreaterEqual(report.mission_interactions[1], before)
+
+    def test_cycle_records_no_interaction_when_nothing_sent(self):
+        # Out of scope -> nothing dispatched -> no interaction recorded.
+        client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
+        runner = DispatchRunner(
+            client, self.resolver, DispatchPolicy(radius_km=40, mission_source=frozenset()),
+            timing=RunnerTiming(between_dispatches=0, sleep=lambda _: asyncio.sleep(0)),
+        )
+        report = asyncio.run(runner.run_cycle())
+        self.assertEqual(report.mission_interactions, {})
+
     def test_cycle_reports_mission_status_breakdown(self):
         # TODO.md P4: surface live icon status. A snapshot of THIS cycle's
         # missions by Mission.status, for the dashboard.

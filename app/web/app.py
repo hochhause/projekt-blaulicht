@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, Request
@@ -71,13 +72,41 @@ def _account_log(log_store, account_id: int) -> list[dict]:
 _BREAKDOWN_CATEGORIES = ("own", "verband", "event")
 
 
+def _format_ago(seconds: float | None) -> str:
+    """Human "time since" for the mission breakdown's last-interaction
+    column (Sasha, 2026-09-22). ``None`` (never dispatched to, per the
+    account's recorded history) reads as "never", not "0s ago"."""
+    if seconds is None:
+        return "never"
+    seconds = max(0, int(seconds))
+    if seconds < 5:
+        return "just now"
+    if seconds < 60:
+        return f"{seconds}s ago"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    return f"{hours // 24}d ago"
+
+
 def _grouped_mission_breakdown(store, account_id: int) -> dict[str, list[dict]]:
     """This account's latest-cycle mission breakdown (Sasha, 2026-09-22),
     grouped by category for the details page's collapsible sections — always
     all three keys (own/verband/event) so the template doesn't need to guess
-    which sections exist, even when a group is empty this cycle."""
+    which sections exist, even when a group is empty this cycle. Each row
+    also gets `last_interaction_ago` — how long since we last actually
+    dispatched a vehicle to it, from the durable per-mission record (distinct
+    from the breakdown itself, which is only a per-cycle snapshot)."""
+    interactions = store.mission_interactions(account_id)
+    now = time.time()
     grouped: dict[str, list[dict]] = {c: [] for c in _BREAKDOWN_CATEGORIES}
     for row in store.mission_breakdown(account_id):
+        row = dict(row)
+        ts = interactions.get(row["mission_id"])
+        row["last_interaction_ago"] = _format_ago(now - ts if ts is not None else None)
         grouped.setdefault(row["category"], []).append(row)
     return grouped
 

@@ -50,7 +50,7 @@
 
 <div class="card">
   <h2>Mission breakdown</h2>
-  <p class="muted" style="margin-top:0;font-size:13px">Per-mission verdict from the latest cycle. <b>Live</b> is the game's own icon status (red = nothing on scene/en route yet, yellow = something's on the way, green = fully crewed); <b>Bot</b> is why the dispatcher did (or didn't) act. A <b>red</b> row the bot calls <b>fully staffed</b> or <b>already covered</b> is always shown regardless of the filters below. "Fully staffed" means we just NOW dispatched enough vehicles this cycle — red here is an expected artifact (the live status was polled before we acted, so it hasn't caught up yet; it should turn yellow next cycle). "Already covered" means we sent <i>nothing</i> this cycle because our own records say it's already fully assigned from a PREVIOUS cycle — that mission has had time to register with the game already, so red here means the bot missed something real: either its assigned-vehicle tracking is stale, or its requirement estimate is incomplete. Worth investigating either way.</p>
+  <p class="muted" style="margin-top:0;font-size:13px">Per-mission verdict from the latest cycle. <b>Live</b> is the game's own icon status (red = nothing on scene/en route yet, yellow = something's on the way, green = fully crewed); <b>Bot</b> is why the dispatcher did (or didn't) act. A <b>red</b> row the bot calls <b>fully staffed</b> or <b>already covered</b> is always shown regardless of the filters below. "Fully staffed" means we just NOW dispatched enough vehicles this cycle — red here is an expected artifact (the live status was polled before we acted, so it hasn't caught up yet; it should turn yellow next cycle). "Already covered" means we sent <i>nothing</i> this cycle because our own records say it's already fully assigned from a PREVIOUS cycle — that mission has had time to register with the game already, so red here means the bot missed something real: either its assigned-vehicle tracking is stale, or its requirement estimate is incomplete. Worth investigating either way. <b>Last sent</b> is how long since we actually dispatched a vehicle to that mission — "never" if this account hasn't yet.</p>
   <div class="chk-row" style="margin-bottom:10px">
     <label class="chk"><input type="checkbox" id="hideGreen"> Hide green</label>
     <label class="chk"><input type="checkbox" id="hideFullyStaffed"> Hide fully staffed / already covered</label>
@@ -61,7 +61,7 @@
       <summary>{{ label }} <span class="muted" data-count>({{ rows | length }})</span></summary>
       {% if rows %}
       <table>
-        <thead><tr><th>Mission</th><th>Live</th><th>Bot</th><th>Why</th></tr></thead>
+        <thead><tr><th>Mission</th><th>Live</th><th>Bot</th><th>Why</th><th>Last sent</th></tr></thead>
         <tbody>
           {% for r in rows %}
           <tr data-live="{{ r.live_status }}" data-bot="{{ r.bot_status }}">
@@ -69,6 +69,7 @@
             <td><span class="pill live-{{ r.live_status }}">{{ r.live_status }}</span></td>
             <td><span class="pill bot-{{ r.bot_status | replace(' ', '-') }}">{{ r.bot_status }}</span></td>
             <td class="muted" style="font-size:13px">{{ r.explanation }}</td>
+            <td class="muted" style="font-size:13px">{{ r.last_interaction_ago }}</td>
           </tr>
           {% endfor %}
         </tbody>

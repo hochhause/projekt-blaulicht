@@ -7,6 +7,7 @@ handlers in a worker thread, so it also guards the store's cross-thread safety.
 """
 
 import os
+import time
 import unittest
 
 try:
@@ -277,6 +278,23 @@ class WebPanelTests(unittest.TestCase):
         self.assertIn('id="hideFullyStaffed"', r.text)
         self.assertIn('data-live="red"', r.text)
         self.assertIn('data-bot="fully staffed"', r.text)
+
+    def test_details_page_shows_last_interaction_timer(self):
+        self._login()
+        self.client.post("/accounts", data={"label": "n", "email": "u@e.com", "password": "p"})
+        aid = self.store.list_accounts()[0].id
+        self.store.set_mission_breakdown(aid, [
+            {"mission_id": 1, "caption": "Dispatched", "category": "own",
+             "live_status": "yellow", "bot_status": "fully staffed", "explanation": "1 vehicle(s) sent"},
+            {"mission_id": 2, "caption": "Untouched", "category": "own",
+             "live_status": "red", "bot_status": "not enough vehicles", "explanation": "short 1"},
+        ])
+        self.store.record_mission_interactions(aid, {1: time.time() - 90}, live_mission_ids={1, 2})
+        r = self.client.get(f"/accounts/{aid}/details")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Last sent", r.text)
+        self.assertIn("1m ago", r.text)   # mission 1, dispatched 90s ago
+        self.assertIn("never", r.text)    # mission 2, no interaction recorded
 
     def test_dashboard_shows_live_mission_status_breakdown(self):
         self._login()

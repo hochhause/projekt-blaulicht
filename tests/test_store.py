@@ -162,6 +162,41 @@ class StoreTests(unittest.TestCase):
         aid = self.store.add_account("x", "x@e.com")
         self.assertEqual(self.store.mission_breakdown(aid), [])
 
+    def test_mission_interactions_round_trip_and_update(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.store.record_mission_interactions(aid, {1: 100.0}, live_mission_ids={1})
+        self.assertEqual(self.store.mission_interactions(aid), {1: 100.0})
+        # A later cycle updates the SAME mission's timestamp, not a new row.
+        self.store.record_mission_interactions(aid, {1: 200.0}, live_mission_ids={1})
+        self.assertEqual(self.store.mission_interactions(aid), {1: 200.0})
+
+    def test_mission_interactions_persist_across_cycles_with_no_new_dispatch(self):
+        # Unlike mission_breakdown, a mission's interaction timestamp must
+        # survive a cycle where nothing new was sent to it, as long as it's
+        # still in the live feed.
+        aid = self.store.add_account("x", "x@e.com")
+        self.store.record_mission_interactions(aid, {1: 100.0}, live_mission_ids={1})
+        self.store.record_mission_interactions(aid, {}, live_mission_ids={1})
+        self.assertEqual(self.store.mission_interactions(aid), {1: 100.0})
+
+    def test_mission_interactions_pruned_once_mission_leaves_the_feed(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.store.record_mission_interactions(aid, {1: 100.0, 2: 150.0}, live_mission_ids={1, 2})
+        # Mission 2 is no longer considered this cycle -> its record is dropped.
+        self.store.record_mission_interactions(aid, {}, live_mission_ids={1})
+        self.assertEqual(self.store.mission_interactions(aid), {1: 100.0})
+
+    def test_mission_interactions_scoped_per_account(self):
+        a1 = self.store.add_account("a", "a@e.com")
+        a2 = self.store.add_account("b", "b@e.com")
+        self.store.record_mission_interactions(a1, {1: 100.0}, live_mission_ids={1})
+        self.assertEqual(self.store.mission_interactions(a1), {1: 100.0})
+        self.assertEqual(self.store.mission_interactions(a2), {})
+
+    def test_mission_interactions_empty_when_unset(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.assertEqual(self.store.mission_interactions(aid), {})
+
 
 if __name__ == "__main__":
     unittest.main()

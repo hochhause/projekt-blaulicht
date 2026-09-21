@@ -144,6 +144,13 @@ class CycleReport:
     # (red/yellow/green/unknown), bot_status, explanation}. A snapshot, same
     # lifecycle as mission_status_counts.
     mission_breakdown: list[dict] = field(default_factory=list)
+    # mission_id -> this cycle's `now` (unix time), for every mission we
+    # actually sent at least one vehicle to this cycle (Sasha, 2026-09-22:
+    # "how long since we last interacted with that mission"). Unlike
+    # mission_breakdown, the orchestrator persists this as an ACCUMULATING
+    # record across cycles, not an overwrite -- a mission's last-interaction
+    # time must survive cycles where nothing new was sent to it.
+    mission_interactions: dict[int, float] = field(default_factory=dict)
 
     def summary(self) -> str:
         return (
@@ -487,6 +494,8 @@ class DispatchRunner:
             # Tick the counters per mission, not only at cycle end.
             if self._on_stat is not None and sent:
                 self._on_stat(sent, 1)
+            if sent:
+                report.mission_interactions[mid] = now
 
         hilferuf_mode = getattr(self._policy, "hilferuf_mode", HilferufAggressiveness.OFF)
         if hilferuf_mode is not HilferufAggressiveness.OFF:
