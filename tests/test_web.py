@@ -258,6 +258,26 @@ class WebPanelTests(unittest.TestCase):
         self.assertIn("not enough vehicles", r.text)
         self.assertIn("No event missions this cycle.", r.text)  # empty group still shown
 
+    def test_details_page_mission_breakdown_has_filter_controls_and_row_data(self):
+        # Sasha, 2026-09-22: filter checkboxes to hide green/fully-staffed
+        # rows, but a red+fully-staffed row must carry data the client-side
+        # filter can recognize and never hide -- that combination is exactly
+        # what the filters exist to help find (timing artifact or a real
+        # resolver-estimate gap), not noise to sweep away.
+        self._login()
+        self.client.post("/accounts", data={"label": "n", "email": "u@e.com", "password": "p"})
+        aid = self.store.list_accounts()[0].id
+        self.store.set_mission_breakdown(aid, [
+            {"mission_id": 1, "caption": "Suspicious", "category": "own",
+             "live_status": "red", "bot_status": "fully staffed", "explanation": "1 vehicle(s) sent"},
+        ])
+        r = self.client.get(f"/accounts/{aid}/details")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('id="hideGreen"', r.text)
+        self.assertIn('id="hideFullyStaffed"', r.text)
+        self.assertIn('data-live="red"', r.text)
+        self.assertIn('data-bot="fully staffed"', r.text)
+
     def test_dashboard_shows_live_mission_status_breakdown(self):
         self._login()
         self.client.post("/accounts", data={"label": "n", "email": "u@e.com", "password": "p"})

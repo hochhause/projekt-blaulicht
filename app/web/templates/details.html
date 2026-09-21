@@ -50,17 +50,21 @@
 
 <div class="card">
   <h2>Mission breakdown</h2>
-  <p class="muted" style="margin-top:0;font-size:13px">Per-mission verdict from the latest cycle. <b>Live</b> is the game's own icon status; <b>Bot</b> is why the dispatcher did (or didn't) act.</p>
+  <p class="muted" style="margin-top:0;font-size:13px">Per-mission verdict from the latest cycle. <b>Live</b> is the game's own icon status; <b>Bot</b> is why the dispatcher did (or didn't) act. A <b>red</b> mission the bot calls <b>fully staffed</b> is always shown regardless of the filters below — either it was just crewed this very cycle (the live status was polled before we acted, so it hasn't caught up yet) or the bot's own requirement estimate is missing something real; either way it's worth a look.</p>
+  <div class="chk-row" style="margin-bottom:10px">
+    <label class="chk"><input type="checkbox" id="hideGreen"> Hide green</label>
+    <label class="chk"><input type="checkbox" id="hideFullyStaffed"> Hide fully staffed</label>
+  </div>
   {% for category, label in [('own', 'Own'), ('verband', 'Verband'), ('event', 'Event')] %}
     {% set rows = mission_breakdown[category] %}
-    <details class="breakdown-group" {% if rows %}open{% endif %}>
-      <summary>{{ label }} <span class="muted">({{ rows | length }})</span></summary>
+    <details class="breakdown-group" data-cat="{{ category }}" {% if rows %}open{% endif %}>
+      <summary>{{ label }} <span class="muted" data-count>({{ rows | length }})</span></summary>
       {% if rows %}
       <table>
         <thead><tr><th>Mission</th><th>Live</th><th>Bot</th><th>Why</th></tr></thead>
         <tbody>
           {% for r in rows %}
-          <tr>
+          <tr data-live="{{ r.live_status }}" data-bot="{{ r.bot_status }}">
             <td>{{ r.caption }} <span class="muted">#{{ r.mission_id }}</span></td>
             <td><span class="pill live-{{ r.live_status }}">{{ r.live_status }}</span></td>
             <td><span class="pill bot-{{ r.bot_status | replace(' ', '-') }}">{{ r.bot_status }}</span></td>
@@ -69,10 +73,63 @@
           {% endfor %}
         </tbody>
       </table>
+      <p class="muted" data-empty-note style="font-size:13px;display:none">Nothing to show — hidden by the filters above.</p>
       {% else %}
       <p class="muted" style="font-size:13px">No {{ label | lower }} missions this cycle.</p>
       {% endif %}
     </details>
   {% endfor %}
 </div>
+<script>
+  (function () {
+    var hideGreenBox = document.getElementById('hideGreen');
+    var hideStaffedBox = document.getElementById('hideFullyStaffed');
+    if (!hideGreenBox || !hideStaffedBox) return; // no breakdown rows on this render
+    var KEY = 'breakdownFilters';
+
+    function load() {
+      try { return JSON.parse(sessionStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+    }
+    function save(state) {
+      try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+    }
+
+    function apply() {
+      var hideGreen = hideGreenBox.checked;
+      var hideStaffed = hideStaffedBox.checked;
+      document.querySelectorAll('details.breakdown-group').forEach(function (group) {
+        var visible = 0;
+        var rows = group.querySelectorAll('tbody tr');
+        rows.forEach(function (row) {
+          var live = row.getAttribute('data-live');
+          var bot = row.getAttribute('data-bot');
+          // A red-but-fully-staffed row is never hidden by the "fully staffed"
+          // filter — that combination is exactly what's worth investigating
+          // (see the card's own explanation above), so filtering it away
+          // would defeat the point of looking for problems.
+          var hide = (hideGreen && live === 'green') ||
+                     (hideStaffed && bot === 'fully staffed' && live !== 'red');
+          row.hidden = hide;
+          if (!hide) visible++;
+        });
+        var countEl = group.querySelector('[data-count]');
+        if (countEl) countEl.textContent = '(' + visible + ' of ' + rows.length + ')';
+        var emptyNote = group.querySelector('[data-empty-note]');
+        if (emptyNote) emptyNote.style.display = (rows.length && visible === 0) ? '' : 'none';
+      });
+    }
+
+    var state = load();
+    hideGreenBox.checked = !!state.hideGreen;
+    hideStaffedBox.checked = !!state.hideFullyStaffed;
+    apply();
+
+    [hideGreenBox, hideStaffedBox].forEach(function (box) {
+      box.addEventListener('change', function () {
+        save({ hideGreen: hideGreenBox.checked, hideFullyStaffed: hideStaffedBox.checked });
+        apply();
+      });
+    });
+  })();
+</script>
 {% endblock %}
