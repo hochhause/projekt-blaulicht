@@ -132,6 +132,66 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(by.get("kdow_lna"), 1)     # but LNA/OrgL track the max
         self.assertEqual(by.get("kdow_orgl"), 1)
 
+    def test_tragehilfe_single_reveal_adds_one_firetruck(self):
+        # Confirmed live 2026-09-21: "Wir benötigen: Tragehilfe (z.B. durch
+        # ein LF)" -- an ambulance crew needing a fire crew's help carrying a
+        # patient out of a building. Any LF/HLF satisfies it (Sasha: "just
+        # deploy any lf, hlf, or such vehicle"), mapped to `firetrucks`.
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=920, name="Med", average_credits=100, requirements={}, chances={})
+        resolver = MissionRequirementResolver(MissionCatalog({920: mt}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=920, patients_count=1, possible_patients_count=1,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            patient_missing=("Wir benötigen: Tragehilfe (z.B. durch ein LF)",))
+        by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("firetrucks"), 1)
+
+    def test_tragehilfe_explicit_count_suffix(self):
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=921, name="Med", average_credits=100, requirements={}, chances={})
+        resolver = MissionRequirementResolver(MissionCatalog({921: mt}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=921, patients_count=2, possible_patients_count=2,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            patient_missing=("Wir benötigen: Tragehilfe (z.B. durch ein LF) x2",))
+        by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("firetrucks"), 2)
+
+    def test_tragehilfe_repeated_entries_sum(self):
+        # If the game instead reveals one entry per affected patient (the
+        # same shape as two patients each independently asking for a NEF),
+        # count each occurrence rather than relying on an "xN" suffix.
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=922, name="Med", average_credits=100, requirements={}, chances={})
+        resolver = MissionRequirementResolver(MissionCatalog({922: mt}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=922, patients_count=2, possible_patients_count=2,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            patient_missing=("Wir benötigen: Tragehilfe (z.B. durch ein LF)",
+                                              "Wir benötigen: Tragehilfe (z.B. durch ein LF)"))
+        by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("firetrucks"), 2)
+
+    def test_tragehilfe_layers_as_separate_row_on_base_firetruck_requirement(self):
+        # Fixture type 1 already needs 1 firetruck as a base requirement;
+        # Tragehilfe adds a SEPARATE row rather than replacing it -- same
+        # max-not-sum multi-role precedent as the police_cars/prisoners case
+        # (test_prisoner_count_above_base_police_requirement_sends_the_larger_count).
+        m = SimpleNamespace(mission_type_id=1, patients_count=1, possible_patients_count=1,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            patient_missing=("Wir benötigen: Tragehilfe (z.B. durch ein LF) x2",))
+        res = self.resolver.resolve_mission(m)
+        firetruck_reqs = [r for r in res.requirements if r.source == "firetrucks"]
+        self.assertEqual(len(firetruck_reqs), 2)  # base (1) + casualty layer (2)
+        pool = [SimpleNamespace(id=i, type_id=0) for i in range(1, 3)]
+        cov = select_coverage(firetruck_reqs, pool)
+        self.assertTrue(cov.satisfied)
+        self.assertEqual(len(cov.vehicle_ids), 2)  # max(1, 2), not 1+2
+
     def test_lna_from_explicit_patient_reveal_even_below_threshold(self):
         # Confirmed live 2026-09-21 (mission #519 "Hüpfburgunfall"): a patient
         # can explicitly ask for an LNA via "Wir benötigen: LNA", the same

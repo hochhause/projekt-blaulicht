@@ -18,6 +18,7 @@ the static catalogue does not carry.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from math import ceil
 
@@ -284,6 +285,25 @@ class MissionRequirementResolver:
             if ("nef" in pm or "notarzt" in pm) and "rth" not in pm and "rettungshubschrauber" not in pm
         )
         rth_needed = sum(1 for pm in patient_missing if "rth" in pm or "rettungshubschrauber" in pm)
+
+        # A patient can also ask for a fire crew's "carrying help" getting
+        # them out of a building (confirmed live 2026-09-21, "Wir benötigen:
+        # Tragehilfe (z.B. durch ein LF) x2") — any LF/HLF satisfies it
+        # (Sasha: "just deploy any lf, hlf, or such vehicle"), mapped to the
+        # same `firetrucks` class the base catalogue requirement already
+        # uses, so a fire truck already being sent for another reason covers
+        # this too (coverage.py's max-not-sum multi-role semantics, same
+        # precedent as the police_cars/prisoners case above). A trailing
+        # "xN" is an explicit count; otherwise each matching entry counts once.
+        tragehilfe_needed = 0
+        for pm in patient_missing:
+            if "tragehilfe" not in pm:
+                continue
+            count_suffix = re.search(r"x\s*(\d+)\s*$", pm)
+            tragehilfe_needed += int(count_suffix.group(1)) if count_suffix else 1
+        if tragehilfe_needed:
+            counts["firetrucks"] = tragehilfe_needed
+
         # A patient can also explicitly ask for an LNA (confirmed live
         # 2026-09-21, "Wir benötigen: LNA") — independent of the patient-count
         # threshold below, an incident commander is a single per-SCENE role,
