@@ -50,10 +50,10 @@
 
 <div class="card">
   <h2>Mission breakdown</h2>
-  <p class="muted" style="margin-top:0;font-size:13px">Per-mission verdict from the latest cycle. <b>Live</b> is the game's own icon status; <b>Bot</b> is why the dispatcher did (or didn't) act. A <b>red</b> mission the bot calls <b>fully staffed</b> is always shown regardless of the filters below — either it was just crewed this very cycle (the live status was polled before we acted, so it hasn't caught up yet) or the bot's own requirement estimate is missing something real; either way it's worth a look.</p>
+  <p class="muted" style="margin-top:0;font-size:13px">Per-mission verdict from the latest cycle. <b>Live</b> is the game's own icon status (red = nothing on scene/en route yet, yellow = something's on the way, green = fully crewed); <b>Bot</b> is why the dispatcher did (or didn't) act. A <b>red</b> row the bot calls <b>fully staffed</b> or <b>already covered</b> is always shown regardless of the filters below. "Fully staffed" means we just NOW dispatched enough vehicles this cycle — red here is an expected artifact (the live status was polled before we acted, so it hasn't caught up yet; it should turn yellow next cycle). "Already covered" means we sent <i>nothing</i> this cycle because our own records say it's already fully assigned from a PREVIOUS cycle — that mission has had time to register with the game already, so red here means the bot missed something real: either its assigned-vehicle tracking is stale, or its requirement estimate is incomplete. Worth investigating either way.</p>
   <div class="chk-row" style="margin-bottom:10px">
     <label class="chk"><input type="checkbox" id="hideGreen"> Hide green</label>
-    <label class="chk"><input type="checkbox" id="hideFullyStaffed"> Hide fully staffed</label>
+    <label class="chk"><input type="checkbox" id="hideFullyStaffed"> Hide fully staffed / already covered</label>
   </div>
   {% for category, label in [('own', 'Own'), ('verband', 'Verband'), ('event', 'Event')] %}
     {% set rows = mission_breakdown[category] %}
@@ -103,12 +103,12 @@
         rows.forEach(function (row) {
           var live = row.getAttribute('data-live');
           var bot = row.getAttribute('data-bot');
-          // A red-but-fully-staffed row is never hidden by the "fully staffed"
-          // filter — that combination is exactly what's worth investigating
-          // (see the card's own explanation above), so filtering it away
-          // would defeat the point of looking for problems.
+          // A red row is never hidden by the "fully staffed / already
+          // covered" filter, whichever of the two it is — see the card's own
+          // explanation above for why each of those combinations, paired
+          // with red, is worth investigating rather than noise to filter away.
           var hide = (hideGreen && live === 'green') ||
-                     (hideStaffed && bot === 'fully staffed' && live !== 'red');
+                     (hideStaffed && (bot === 'fully staffed' || bot === 'already covered') && live !== 'red');
           row.hidden = hide;
           if (!hide) visible++;
         });

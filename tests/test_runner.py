@@ -149,6 +149,21 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(row["bot_status"], "not enough vehicles")
         self.assertIn("short", row["explanation"])
 
+    def test_cycle_reports_mission_breakdown_already_covered_distinct_from_fully_staffed(self):
+        # Sasha, 2026-09-22: "already covered" (nothing dispatched THIS
+        # cycle -- our own tracking says a vehicle from a PREVIOUS cycle
+        # already satisfies it) must be its own bucket, not folded into
+        # "fully staffed" (which means we just now dispatched this cycle).
+        already_assigned = SimpleNamespace(id=200, type_id=0, is_available=False,
+                                            position=BUILDING, target_type="mission", target_id=1)
+        missions = [m(1, 1, status="red")]  # type 1 needs 1 firetruck; already met
+        client = FakeClient(missions, [already_assigned], [b()])
+        report = asyncio.run(self._runner(client).run_cycle())
+        self.assertEqual(client.dispatched, [])  # nothing sent this cycle
+        row = report.mission_breakdown[0]
+        self.assertEqual(row["bot_status"], "already covered")
+        self.assertEqual(row["explanation"], "already covered")
+
     def test_cycle_reports_mission_breakdown_out_of_scope(self):
         missions = [m(1, 1, status="red")]
         client = FakeClient(missions, [v(100, 0)], [b()])

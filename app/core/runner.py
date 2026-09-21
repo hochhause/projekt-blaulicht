@@ -49,11 +49,25 @@ def _bucket_skip_reason(reason: str) -> tuple[str, str]:
     found, not enough vehicles or any other") — the exact reason is always
     kept as the explanation too, so nothing is lost even when bucketed as
     "other" (e.g. "out of range", "category filtered", "shared too
-    recently/long ago", credit bounds, batch size, top-up not begun)."""
+    recently/long ago", credit bounds, batch size, top-up not begun).
+
+    "already covered" gets its OWN bucket, deliberately separate from "fully
+    staffed" (Sasha, 2026-09-22): the two make very different claims. "fully
+    staffed" means we just NOW dispatched enough vehicles this cycle — paired
+    with a red live status that's an expected artifact (the live status was
+    polled before we acted, so a mission that had zero vehicles before this
+    cycle always still shows red in this same row). "already covered" means
+    we sent NOTHING this cycle because our own tracking says it's already
+    fully assigned from a PREVIOUS cycle — that mission has had a full cycle
+    or more to register with the game already, so if it's STILL red, that's
+    not a timing artifact at all: either our assigned-vehicle tracking is
+    stale or the bot's requirement estimate is missing something real. Kept
+    visually distinct so that distinction is never buried in the explanation
+    text alone."""
     if reason == "out of scope":
         return "out of scope", reason
     if reason == "already covered":
-        return "fully staffed", reason
+        return "already covered", reason
     if reason in ("no requirements found", "no patients on site"):
         return "no requirements found", reason
     if reason.startswith("not enough vehicles"):
