@@ -18,14 +18,70 @@ the static catalogue does not carry.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import replace
+from functools import lru_cache
 from math import ceil
+from pathlib import Path
 
 from .assets import AssetLibrary
 from .catalog import MissionCatalog
 from .missingtext import MissingTextResolver, default_resolver, parse_missing_text
 from .requirements import Requirement, Resolution
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_CAPACITY_TABLE_PATH = _REPO_ROOT / "data" / "reference" / "vehicle-water-pump.json"
+
+# Sonderlöschmittel (foam/powder) resupply: SLF (type 167) is the only
+# vehicle worth tracking for this (Sasha, 2026-09-22: "is the only one
+# holding close to that much" — the "foam" values other types carry in
+# vehicle-water-pump.json, 150-750L, are each vehicle's own consumption NEED
+# ("Sonderloeschmittelbedarf" per the user's own CSV column), not a
+# meaningful supply to redistribute). Deliberately NOT derived from the
+# capacity table's "foam" keys generically — that would wrongly include
+# every ordinary LF's tiny Bedarf value.
+_SONDERLOESCHMITTEL_TYPE_IDS = frozenset({167})
+
+# Water/pump eligible types: exactly the set Sasha listed (2026-09-22) —
+# ordinary Löschfahrzeuge/Tanklöschfahrzeuge plus GTLF (type 121, a dedicated
+# water tanker with no pump). Deliberately excludes the OTHER exotic
+# dedicated tankers/AB-modules also present in vehicle-water-pump.json
+# (PTLF, AB-Wasser/Schaum, etc., up to 20000L/15000 L/min) — Sasha's own
+# table didn't include them, and letting them into the eligible set would
+# badly skew the "fewest vehicles" ceil-division estimate for a typical
+# fleet that doesn't own one (same reasoning as excluding the small
+# Sonderlöschmittel trailer above, mirrored at the other end of the scale).
+_WATER_PUMP_TYPE_IDS = frozenset({
+    0, 1, 6, 7, 8, 9, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 30, 37, 87, 88, 89, 90, 121,
+})
+
+# A raw `other`-group chunk boundary, same convention as missingtext.py's
+# _SPLIT_RE (duplicated rather than imported — keeps modules decoupled per
+# this project's own precedent of avoiding cross-module private access).
+_OTHER_CHUNK_SPLIT_RE = re.compile(r",\s*(?=\d+\s)")
+
+# Capacity-phrased `other`-group entries — a raw liter/rate NUMBER, not a
+# vehicle count (confirmed live: "Uns fehlt: N Sonderlöschmittel" / "N l.
+# Wasser" / "N l/min Pumpenleistung") — need real ceil-division vehicle math
+# against data/reference/vehicle-water-pump.json instead of the plain
+# category-lookup convention every other `other`-group entry uses (confirmed
+# NOT needed for Feuerlöschpumpe/Schmutzwasserpumpe, 2026-08-31 — those ARE
+# plain category text despite `other`'s general "capacity" framing).
+_CAPACITY_PATTERNS = (
+    (re.compile(r"^(\d+)\s*sonderlöschmittel", re.IGNORECASE), "foam"),
+    (re.compile(r"^(\d+)\s*l\.?\s*wasser", re.IGNORECASE), "water"),
+    (re.compile(r"^(\d+)\s*l\s*/\s*min\s*pumpenleistung", re.IGNORECASE), "pump"),
+)
+
+
+@lru_cache(maxsize=1)
+def _default_capacity_table() -> dict[int, dict[str, int]]:
+    """Per-vehicle-type water/pump/foam capacity, from the repo's committed
+    (and user-cross-checked, 2026-09-22) reference data. Cached: static
+    reference data, identical for every account and every mission."""
+    raw = json.loads(_CAPACITY_TABLE_PATH.read_text(encoding="utf-8"))
+    return {int(tid): caps for tid, caps in raw.items()}
 
 
 def _casualties(revealed: int, possible_live: int, possible_type: int,
@@ -54,6 +110,7 @@ class MissionRequirementResolver:
         catalog: MissionCatalog,
         library: AssetLibrary,
         missing_resolver: MissingTextResolver | None = None,
+        capacity_table: dict[int, dict[str, int]] | None = None,
     ) -> None:
         self._catalog = catalog
         self._library = library
@@ -64,6 +121,10 @@ class MissionRequirementResolver:
         # (the authoritative remaining need, docs/live-data-model.md) — defaults
         # to the repo's committed mapping so every caller gets it for free.
         self._missing = missing_resolver if missing_resolver is not None else default_resolver()
+        # Water/pump/foam capacity per vehicle type, for the capacity-phrased
+        # `other`-group entries (see _CAPACITY_PATTERNS) — same default-unless-
+        # injected pattern as `missing_resolver` above.
+        self._capacity = capacity_table if capacity_table is not None else _default_capacity_table()
 
     def resolve(self, mission_type_id: int) -> Resolution:
         """Resolve base requirements for a mission type.
@@ -161,22 +222,21 @@ class MissionRequirementResolver:
                 reqs.extend(sub.requirements)
                 unmatched.extend(sub.unmatched)
             if groups.other:
-                # `other` is documented as a CAPACITY dimension (progress
-                # bars), but live-verified 2026-08-31: the entries actually
-                # seen there ("Feuerlöschpumpe (z. B. LF)", "Schmutzwasserpumpe")
-                # are the SAME category-text shape as `vehicles` — already
-                # correctly mapped in the LSSM table (Feuerlöschpumpe -> almost
-                # the whole Löschfahrzeug set; Schmutzwasserpumpe -> only the
-                # two dedicated SW types) — so the same category resolver
-                # handles them with no capacity math needed. The numeric
-                # water_damage_pump_value / live_current_* fields on the feed
-                # entry are a separate, apparently-informational signal for
-                # the mission page's progress bars, not something dispatch
-                # needs to compute independently once the category text names
-                # the right vehicle.
-                sub = self._missing.resolve(groups.other)
-                reqs.extend(sub.requirements)
-                unmatched.extend(sub.unmatched)
+                # `other` is a CAPACITY dimension (progress bars) in general,
+                # but most entries actually seen there ("Feuerlöschpumpe (z.
+                # B. LF)", "Schmutzwasserpumpe", live-verified 2026-08-31) are
+                # plain CATEGORY text — the same shape as `vehicles`, already
+                # correctly mapped in the LSSM table, no capacity math needed.
+                # Sonderlöschmittel/Wasser/Pumpenleistung entries ARE genuine
+                # liter/rate NUMBERS though (confirmed live 2026-09-21/22) —
+                # split those out for ceil-division vehicle math first, then
+                # run whatever's left through the normal category resolver.
+                capacity_reqs, remaining_other = self._split_capacity_entries(groups.other)
+                reqs.extend(capacity_reqs)
+                if remaining_other:
+                    sub = self._missing.resolve(remaining_other)
+                    reqs.extend(sub.requirements)
+                    unmatched.extend(sub.unmatched)
             if groups.personnel:
                 # `personnel` entries are usually a HEADCOUNT ("12
                 # Feuerwehrleute"), unlike `vehicles` entries which already
@@ -246,6 +306,63 @@ class MissionRequirementResolver:
             return requirement
         vehicles_needed = max(1, ceil(requirement.count / max(crews)))
         return replace(requirement, count=vehicles_needed)
+
+    def _split_capacity_entries(self, raw_other: str) -> tuple[list[Requirement], str]:
+        """Pull Sonderlöschmittel/Wasser/Pumpenleistung liter/rate NUMBERS out
+        of a raw ``other``-group string, converting each via ceil-division
+        vehicle math (see :meth:`_capacity_to_requirement`). Returns
+        ``(capacity_requirements, leftover_text)`` — *leftover_text* is
+        whatever chunks didn't match a capacity pattern, still needing the
+        normal category-lookup resolution."""
+        text = (raw_other or "").strip()
+        if not text:
+            return [], ""
+        reqs: list[Requirement] = []
+        leftover: list[str] = []
+        for chunk in _OTHER_CHUNK_SPLIT_RE.split(text):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            for pattern, kind in _CAPACITY_PATTERNS:
+                m = pattern.match(chunk)
+                if not m:
+                    continue
+                req = self._capacity_to_requirement(kind, int(m.group(1)))
+                if req is not None:
+                    reqs.append(req)
+                break
+            else:
+                leftover.append(chunk)
+        return reqs, ", ".join(leftover)
+
+    def _capacity_to_requirement(self, kind: str, needed_units: int) -> Requirement | None:
+        """*kind* liters (``water``/``foam``) or L/min (``pump``) needed ->
+        a vehicle-count Requirement, ceil-dividing by the LARGEST per-vehicle
+        capacity among eligible types (same "fewest vehicles, might not have
+        that exact type" optimism as :meth:`_personnel_to_vehicles` — a
+        same-cycle guess that's corrected next cycle via the mission's own
+        revealed need if it doesn't pan out, per the vehicle-class-reservation
+        feature's established precedent). Sasha, 2026-09-22: the SW/GW-L2-
+        Wasser "25% more water, stacks additively" mechanic is deliberately
+        NOT modeled here — it needs real per-pool math the current count-
+        based coverage algorithm (coverage.py) can't express safely; a known
+        simplification, not an oversight."""
+        if needed_units <= 0:
+            return None
+        eligible = _SONDERLOESCHMITTEL_TYPE_IDS if kind == "foam" else _WATER_PUMP_TYPE_IDS
+        type_ids = frozenset(tid for tid in eligible if (self._capacity.get(tid, {}).get(kind) or 0) > 0)
+        capacities = [self._capacity.get(tid, {}).get(kind, 0) for tid in type_ids]
+        capacities = [c for c in capacities if c > 0]
+        if not capacities:
+            return None
+        vehicles_needed = max(1, ceil(needed_units / max(capacities)))
+        source = {"foam": "sonderloeschmittel", "water": "wasser", "pump": "pumpenleistung"}[kind]
+        return Requirement(
+            source=source,
+            type_ids=type_ids,
+            count=vehicles_needed,
+            matchless_type_ids=type_ids & self._matchless,
+        )
 
     def _casualty_counts(self, mission, mtype) -> dict[str, int]:
         """NEF / RTH / ambulances / police_cars / incident-command driven by

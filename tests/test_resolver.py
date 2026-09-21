@@ -604,6 +604,63 @@ class ResolverTests(unittest.TestCase):
         # superseded by the generosity heuristic (3), not the other way round.
         self.assertEqual(by.get("nef"), 3)
 
+    # -- Capacity math: Sonderlöschmittel / Wasser / Pumpenleistung (Sasha, 2026-09-22) --
+    def test_sonderloeschmittel_single_slf_covers_it(self):
+        # Confirmed live 2026-09-21, mission #519 "Hüpfburgunfall": "Uns
+        # fehlt: 1950 Sonderlöschmittel" -- SLF (type 167) carries 5000L,
+        # the only vehicle worth tracking for this per Sasha.
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"","other":"1950 Sonderlöschmittel"}')
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r for r in res.requirements}
+        self.assertIn("sonderloeschmittel", by)
+        self.assertEqual(by["sonderloeschmittel"].count, 1)
+        self.assertEqual(set(by["sonderloeschmittel"].type_ids), {167})
+
+    def test_sonderloeschmittel_needs_multiple_slf(self):
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"","other":"12000 Sonderlöschmittel"}')
+        by = {r.source: r for r in self.resolver.resolve_mission(m).requirements}
+        self.assertEqual(by["sonderloeschmittel"].count, 3)  # ceil(12000 / 5000)
+
+    def test_wasser_capacity_converts_to_vehicle_count(self):
+        # Scoped to Sasha's own table (2026-09-22): max water among those is
+        # 10000L (GTLF, type 121) -- NOT the full reference file's 20000L
+        # outlier from a type Sasha never listed.
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"","other":"3200 l. Wasser"}')
+        by = {r.source: r for r in self.resolver.resolve_mission(m).requirements}
+        self.assertIn("wasser", by)
+        self.assertEqual(by["wasser"].count, 1)  # ceil(3200 / 10000)
+        self.assertIn(121, by["wasser"].type_ids)
+        # The exotic dedicated tankers Sasha didn't list must never appear.
+        self.assertNotIn(166, by["wasser"].type_ids)
+        self.assertNotIn(120, by["wasser"].type_ids)
+
+    def test_pumpenleistung_capacity_converts_to_vehicle_count(self):
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"","other":"3500 l/min Pumpenleistung"}')
+        by = {r.source: r for r in self.resolver.resolve_mission(m).requirements}
+        self.assertIn("pumpenleistung", by)
+        self.assertEqual(by["pumpenleistung"].count, 2)  # ceil(3500 / 2000)
+        self.assertNotIn(121, by["pumpenleistung"].type_ids)  # GTLF has no pump
+
+    def test_capacity_entry_coexists_with_plain_category_entry_in_other_group(self):
+        # A capacity-phrased entry and a plain category entry can appear
+        # together in the same `other` group -- both must resolve correctly.
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"",'
+                                         '"other":"1950 Sonderlöschmittel, 1 Feuerlöschpumpe (z. B. LF)"}')
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertEqual(by.get("sonderloeschmittel"), 1)
+        self.assertEqual(by.get("Feuerlöschpumpe (z. B. LF)"), 1)
+
     def test_resolve_mission_unmatched_missing_text_category_reported(self):
         m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
                             prisoners_count=0, possible_prisoners_count=0,

@@ -169,11 +169,21 @@ type 25 (TLF 20/40-SL) and type 26 (TLF 16) previously showed `pump` equal to `w
 for both, which is what's now committed. Not independently live-verified either way; flagged here
 per this doc's own confirm-before-shipping convention rather than silently favored.
 
-The still-unresolved question is the fill mechanic (how much of a capacity bar one dispatched
-vehicle actually satisfies, and whether multiple vehicles' capacities simply sum) — not needed for
-the category-text dispatch path below, but would be needed for a future capacity-MATH dispatch
-feature (e.g. converting "Uns fehlt: 3200 l. Wasser" into an exact vehicle count) that hasn't been
-built yet (deferred pending a design decision, tracked separately).
+**Built 2026-09-22** (`MissionRequirementResolver._split_capacity_entries`/`_capacity_to_requirement`
+in `app/domain/resolver.py`): capacity-phrased `other`-group entries ("Uns fehlt: N Sonderlöschmittel"
+/ "N l. Wasser" / "N l/min Pumpenleistung", confirmed live 2026-09-21/22) convert to a vehicle count
+via `ceil(need / max_capacity_among_eligible_types)` — the SAME "fewest vehicles, might not have that
+exact type, self-corrects next cycle via the mission's own revealed need" optimism `_personnel_to_vehicles`
+already uses for headcounts. Eligible types are deliberately SCOPED, not the full 39-type
+`vehicle-water-pump.json` table: Sonderlöschmittel → SLF (type 167) ONLY (Sasha: "is the only one
+holding close to that much" — every other type's `foam` value is that vehicle's own small consumption
+NEED, not a meaningful supply); Wasser/Pumpenleistung → exactly the 23 types Sasha's own table listed
+(ordinary Löschfahrzeuge/Tanklöschfahrzeuge + GTLF), excluding the OTHER exotic dedicated
+tankers/AB-modules also in the reference file (up to 20000L/15000 L/min) that would badly skew the
+ceil-division estimate for a fleet that doesn't own one. Deliberately NOT modeled: the SW/GW-L2-Wasser
+"25% more water, stacks additively" mechanic (Sasha, 2026-09-22) — real per-pool math the current
+count-based coverage algorithm (`coverage.py`) can't express safely; a known simplification, not an
+oversight, left for a future iteration if it turns out to matter in practice.
 
 **Live check 2026-08-31 (throwaway account, real alliance, 26 own missions):** `water_damage_pump_value`
 is **NOT** a general fire-mission field — every actual fire mission observed (Reihenhaus in Flammen,
