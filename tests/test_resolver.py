@@ -725,6 +725,41 @@ class ResolverTests(unittest.TestCase):
         self.assertIn("Feuerwehrleute", by)
         self.assertEqual(res.unmatched, [])
 
+    # -- found via a systematic .mscv sweep, 2026-10-01 -------------------------
+    def test_polizisten_headcount_converts_via_confirmed_fustw_capacity(self):
+        # Every type in the "Polizisten" staff-table entry has
+        # personnel=0/planning_personnel=0 in AssetLibrary -- without this
+        # dedicated conversion, _personnel_to_vehicles' defensive fallback
+        # would request 5 literal vehicles instead of ceil(5/2)=3 FuStW
+        # (confirmed via type 32's own .mscv extend-rule tiers: 1-2->1,
+        # 3-4->2, 5-6->3, ...).
+        m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"5 Polizisten","other":""}')
+        by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("polizisten"), 3)
+
+    def test_polizisten_nx_format_also_converts(self):
+        m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"10x Polizisten","other":""}')
+        by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("polizisten"), 5)  # ceil(10/2)
+
+    def test_schaum_is_an_alternate_sonderloeschmittel_phrasing(self):
+        # Confirmed directly in SLF's (type 167) own .mscv extend-rule text
+        # as an alternate spelling of the same foam need "N Sonderlöschmittel"
+        # already covers for the same type -- not live-confirmed in a real
+        # mission yet, but authoritative straight from the vehicle's own
+        # definition.
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"","other":"1950 l. Schaum"}')
+        by = {r.source: r for r in self.resolver.resolve_mission(m).requirements}
+        self.assertIn("sonderloeschmittel", by)
+        self.assertEqual(by["sonderloeschmittel"].count, 1)
+        self.assertEqual(set(by["sonderloeschmittel"].type_ids), {167})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -89,9 +89,29 @@ _CARE_HELPER_PATTERN = re.compile(r"^(\d+)x?\s+(betreuungshelfer|verpflegungshel
 # plain category text despite `other`'s general "capacity" framing).
 _CAPACITY_PATTERNS = (
     (re.compile(r"^(\d+)\s*sonderlöschmittel", re.IGNORECASE), "foam"),
+    # "N l. Schaum" — confirmed directly in SLF's (type 167) and AB-Wasser/
+    # Schaum's (type 170) own .mscv extend-rule text as an alternate phrasing
+    # for the exact same foam need "N Sonderlöschmittel" already covers for
+    # the same type 167 — not live-confirmed in a real mission yet, but
+    # authoritative straight from the vehicle's own definition, and strictly
+    # additive (same type/divisor, just a second way to spell the same thing).
+    (re.compile(r"^(\d+)\s*l\.?\s*schaum", re.IGNORECASE), "foam"),
     (re.compile(r"^(\d+)\s*l\.?\s*wasser", re.IGNORECASE), "water"),
     (re.compile(r"^(\d+)\s*l\s*/\s*min\s*pumpenleistung", re.IGNORECASE), "pump"),
 )
+
+# Polizisten ("N Polizisten", a headcount in the `personnel` group) — the
+# FuStW's (type 32) own .mscv extend-rule tiers confirm ceil(N/2) (1-2->1,
+# 3-4->2, ...), but EVERY type in the broader "Polizisten" staff-table entry
+# (type 32 plus 16 other police vehicles) has personnel=0/planning_personnel=0
+# in AssetLibrary — the SAME shape of bug as Betreuungshelfer: with zero
+# known crews, _personnel_to_vehicles' defensive fallback returns the
+# headcount UNCONVERTED, so "5 Polizisten" would request 5 literal vehicles
+# instead of ceil(5/2)=3. Keeps the same (already-established) broad
+# eligible-type set, just supplies the confirmed-safe divisor it was missing.
+_POLIZISTEN_TYPE_IDS = frozenset({32, 35, 50, 51, 52, 61, 72, 79, 80, 81, 82, 94, 95, 98, 103, 156, 184})
+_POLIZISTEN_CAPACITY = 2
+_POLIZISTEN_PATTERN = re.compile(r"^(\d+)x?\s+polizisten\s*$", re.IGNORECASE)
 
 
 @lru_cache(maxsize=1)
@@ -268,6 +288,13 @@ class MissionRequirementResolver:
                 # the raw headcount as a literal vehicle count instead.
                 care_reqs, remaining_personnel = self._split_care_helper_entries(groups.personnel)
                 reqs.extend(care_reqs)
+                # Polizisten gets the same treatment, same reason (found via
+                # a systematic .mscv sweep, 2026-10-01): every eligible type
+                # has personnel=0/planning_personnel=0, so the generic path's
+                # defensive fallback would request one literal vehicle per
+                # missing officer instead of ceil(N/2) FuStW.
+                police_reqs, remaining_personnel = self._split_polizisten_entries(remaining_personnel)
+                reqs.extend(police_reqs)
                 # `personnel` entries are usually a HEADCOUNT ("12
                 # Feuerwehrleute"), unlike `vehicles` entries which already
                 # count vehicles — convert via the category's largest
@@ -421,6 +448,34 @@ class MissionRequirementResolver:
                 type_ids=_CARE_HELPER_TYPE_IDS,
                 count=vehicles_needed,
                 matchless_type_ids=_CARE_HELPER_TYPE_IDS & self._matchless,
+            ))
+        return reqs, ", ".join(leftover)
+
+    def _split_polizisten_entries(self, raw_personnel: str) -> tuple[list[Requirement], str]:
+        """Pull "Polizisten" headcount entries out of a raw ``personnel``-
+        group string (see :data:`_POLIZISTEN_PATTERN`), converting via
+        ceil-division against the confirmed per-FuStW capacity (2). Returns
+        ``(requirements, leftover_text)`` like :meth:`_split_care_helper_entries`."""
+        text = (raw_personnel or "").strip()
+        if not text:
+            return [], ""
+        reqs: list[Requirement] = []
+        leftover: list[str] = []
+        for chunk in _OTHER_CHUNK_SPLIT_RE.split(text):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            m = _POLIZISTEN_PATTERN.match(chunk)
+            if not m:
+                leftover.append(chunk)
+                continue
+            needed = int(m.group(1))
+            vehicles_needed = max(1, ceil(needed / _POLIZISTEN_CAPACITY))
+            reqs.append(Requirement(
+                source="polizisten",
+                type_ids=_POLIZISTEN_TYPE_IDS,
+                count=vehicles_needed,
+                matchless_type_ids=_POLIZISTEN_TYPE_IDS & self._matchless,
             ))
         return reqs, ", ".join(leftover)
 
