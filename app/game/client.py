@@ -92,10 +92,21 @@ class DispatchResult(NamedTuple):
     explicitly named as unusable — the caller should strike these
     immediately (see ``StrikeTracker.record_confirmed_failure``) rather than
     count them as dispatched.
+
+    ``mission_not_found`` is set when the alarm POST itself came back 404 —
+    confirmed live 2026-10-01: the mission's own detail page still rendered
+    (200 OK) moments earlier, but its ``/alarm`` route had already stopped
+    existing (the mission was resolved/removed between being polled and
+    dispatched). This is NOT a per-vehicle crew problem — every vehicle in
+    the batch gets this same signal regardless of type — so the caller
+    should stop retrying the remaining vehicles individually instead of
+    wasting a GET+POST round trip (and a misleading "no crew?" log line)
+    per vehicle on a mission that can't possibly accept any of them.
     """
 
     ok: bool
     rejected: "MappingProxyType[int, str]" = _NO_REJECTIONS
+    mission_not_found: bool = False
 
 
 logger = logging.getLogger(__name__)
@@ -262,7 +273,17 @@ class GameClient:
                     "vehicle_ids[]": [str(v) for v in ids],
                 },
             )
-        except Exception:  # noqa: BLE001 — caller decides how to react
+        except Exception as exc:  # noqa: BLE001 — caller decides how to react
+            # Duck-typed rather than `import httpx` just for this isinstance
+            # check — this module otherwise has no direct httpx dependency,
+            # only via GameSession.
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status == 404:
+                logger.info(
+                    "dispatch %s: alarm route 404 — mission resolved/removed since being polled",
+                    mission_id,
+                )
+                return DispatchResult(ok=False, mission_not_found=True)
             logger.exception("dispatch %s <- vehicles %s failed", mission_id, ids)
             return DispatchResult(ok=False)
         attempted = set(ids)

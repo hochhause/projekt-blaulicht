@@ -19,10 +19,11 @@ BUILDING = (52.5200, 13.4050)
 NEAR = (52.5300, 13.4100)
 
 
-def _result(ok: bool, rejected: dict[int, str] | None = None) -> SimpleNamespace:
-    """A DispatchOutcome-shaped fake result (ok + rejected), without pulling
-    in app.game.client's httpx-dependent import chain."""
-    return SimpleNamespace(ok=ok, rejected=rejected or {})
+def _result(ok: bool, rejected: dict[int, str] | None = None,
+            mission_not_found: bool = False) -> SimpleNamespace:
+    """A DispatchOutcome-shaped fake result (ok + rejected + mission_not_found),
+    without pulling in app.game.client's httpx-dependent import chain."""
+    return SimpleNamespace(ok=ok, rejected=rejected or {}, mission_not_found=mission_not_found)
 
 
 class FakeClient:
@@ -37,6 +38,9 @@ class FakeClient:
         # vehicle_id -> reason: simulate the game explicitly rejecting a
         # specific vehicle within an otherwise-ok batch/single dispatch.
         self.rejections: dict[int, str] = {}
+        # mission ids whose alarm route should simulate a 404 (confirmed live
+        # 2026-10-01: resolved/removed between poll and dispatch).
+        self.gone_missions: set[int] = set()
 
     async def fetch_missions(self):
         return self._missions
@@ -48,11 +52,15 @@ class FakeClient:
         return self._buildings
 
     async def dispatch(self, mission_id, vehicle_id):
+        if mission_id in self.gone_missions:
+            return _result(False, mission_not_found=True)
         self.dispatched.append((mission_id, vehicle_id))
         reason = self.rejections.get(vehicle_id)
         return _result(True, {vehicle_id: reason} if reason else None)
 
     async def dispatch_many(self, mission_id, vehicle_ids):
+        if mission_id in self.gone_missions:
+            return _result(False, mission_not_found=True)
         rejected = {}
         for vid in vehicle_ids:
             self.dispatched.append((mission_id, vid))
@@ -115,6 +123,59 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(client.dispatched, [(1, 100)])
         self.assertEqual(report.dispatched, 1)
         self.assertEqual(report.failed, 0)
+
+    def test_cycle_abandons_dispatch_when_mission_no_longer_available(self):
+        # Confirmed live 2026-10-01, mission #4420218988 "Reizgas in
+        # geschlossenem Raum": the alarm POST 404'd -- the mission was
+        # resolved/removed between being polled and dispatched. Every
+        # vehicle in the batch would 404 identically; must NOT be retried
+        # individually (that produced 18 misleading "no crew?" log lines and
+        # 18 wasted round trips for a single real event), and must NOT
+        # strike any of the (perfectly fine) vehicles involved.
+        from app.domain.strikes import StrikeTracker
+
+        strikes = StrikeTracker()
+        # type 2's requirement: firetrucks:2, platform_trucks:1, battalion_chief_vehicles:1
+        vehicles = [v(100, 0), v(101, 0), v(102, 2), v(103, 3)]
+        client = FakeClient([m(1, 2)], vehicles, [b()])
+        client.gone_missions.add(1)
+        log_lines: list[str] = []
+        report = asyncio.run(self._runner(client, on_log=log_lines.append, strikes=strikes).run_cycle())
+        self.assertEqual(client.dispatched, [])  # no individual retries attempted
+        self.assertEqual(report.dispatched, 0)
+        self.assertTrue(any("no longer available" in line for line in log_lines))
+        self.assertFalse(any("no crew?" in line for line in log_lines))
+        for vid in (100, 101, 102, 103):
+            self.assertFalse(strikes.is_struck(str(vid), time.time()))
+
+    def test_cycle_abandons_remaining_individual_retries_once_mission_found_gone(self):
+        # The batch attempt can fail for an ordinary ambiguous reason (no
+        # mission_not_found signal yet) and only reveal the mission is gone
+        # partway through the individual-retry loop -- the rest must still
+        # be abandoned rather than each independently discovering the same 404.
+        vehicles = [v(100, 0), v(101, 0), v(102, 2), v(103, 3)]
+        client = FakeClient([m(1, 2)], vehicles, [b()])
+
+        async def dispatch_many(mission_id, vehicle_ids):
+            return _result(False)  # ambiguous batch failure, no mission_not_found yet
+
+        first_call = {"done": False}
+        real_dispatch = client.dispatch
+
+        async def dispatch(mission_id, vehicle_id):
+            if first_call["done"]:
+                return _result(False, mission_not_found=True)
+            first_call["done"] = True
+            return await real_dispatch(mission_id, vehicle_id)
+
+        client.dispatch_many = dispatch_many
+        client.dispatch = dispatch
+        log_lines: list[str] = []
+        report = asyncio.run(self._runner(client, on_log=log_lines.append).run_cycle())
+        # Only the first vehicle was genuinely attempted; the rest were
+        # abandoned once the mission was found gone.
+        self.assertEqual(len(client.dispatched), 1)
+        self.assertTrue(any("abandoning remaining vehicles" in line for line in log_lines))
 
     def test_cycle_records_mission_interaction_timestamp_on_dispatch(self):
         # Sasha, 2026-09-22: "how long since we last interacted with that

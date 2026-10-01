@@ -101,12 +101,16 @@ class DispatchOutcome(Protocol):
     success) flag and a ``rejected`` mapping of vehicle id -> the game's own
     reason text, for every vehicle explicitly named as unusable within an
     otherwise-``ok`` batch — e.g. missing crew or its towing vehicle isn't at
-    the station (confirmed live 2026-09-11). Kept structural (not importing
-    ``app.game.client.DispatchResult`` directly) so this module stays
-    testable without httpx installed."""
+    the station (confirmed live 2026-09-11). ``mission_not_found`` flags an
+    alarm POST that came back 404 — the mission was resolved/removed between
+    being polled and dispatched, confirmed live 2026-10-01 (NOT a per-vehicle
+    crew problem; every vehicle in the batch gets this regardless of type).
+    Kept structural (not importing ``app.game.client.DispatchResult``
+    directly) so this module stays testable without httpx installed."""
 
     ok: bool
     rejected: dict[int, str]
+    mission_not_found: bool
 
 
 class GameClientLike(Protocol):
@@ -466,6 +470,15 @@ class DispatchRunner:
                         veh_by_id.get(vehicle_id), vehicle_id, now, report, reason=reason
                     )
                 await self._timing.sleep(self._timing.dispatch_gap())
+            elif result.mission_not_found:
+                # Confirmed live 2026-10-01: the mission's own page still
+                # rendered moments earlier, but its /alarm route had already
+                # stopped existing (resolved/removed between poll and
+                # dispatch) -- every vehicle would 404 identically, so don't
+                # waste a GET+POST round trip (and a misleading "no crew?"
+                # log line) per vehicle retrying a mission that's gone.
+                self._log(f"#{mid} {cap!r} no longer available (404) — not retrying individually")
+                report.failed += len(ids)
             else:
                 # Batch failed — retry one-by-one so we can isolate and strike the
                 # vehicle that actually won't go (e.g. a crewless truck).
@@ -477,6 +490,10 @@ class DispatchRunner:
                         report.dispatched += 1
                         sent += 1
                         self._log(f"{verb} {name} → #{mid} {cap!r}")
+                    elif single.mission_not_found:
+                        self._log(f"#{mid} {cap!r} no longer available (404) — abandoning remaining vehicles")
+                        report.failed += 1
+                        break
                     else:
                         report.failed += 1
                         reason = single.rejected.get(vehicle_id)
