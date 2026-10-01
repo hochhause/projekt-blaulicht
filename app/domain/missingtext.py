@@ -34,11 +34,15 @@ from .requirements import Requirement, Resolution
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_PATH = _REPO_ROOT / "data" / "reference" / "lssm-missing-requirements.json"
 
-# A chunk starts with "<count> " — split only there, so a comma INSIDE a
-# category's own text (e.g. "Schlauchwagen (GW-L2 Wasser, SW 1000, ... )")
-# is never mistaken for a boundary between two requirement categories.
-_SPLIT_RE = re.compile(r",\s*(?=\d+\s)")
-_COUNT_RE = re.compile(r"^(\d+)\s+(.+)$")
+# A chunk starts with "<count> " or "<count>x " — split only there, so a
+# comma INSIDE a category's own text (e.g. "Schlauchwagen (GW-L2 Wasser, SW
+# 1000, ... )") is never mistaken for a boundary between two requirement
+# categories. The "x" variant is confirmed live 2026-10-01 (mission
+# #4420164223: "5x Betreuungshelfer") and directly in several vehicles' own
+# .mscv extend-rule text (e.g. data/de/vehicles/130.mscv: "([1-3])x
+# (Betreuungs|Verpflegungs)helfer", 134/135/136.mscv: "\d+x Reiterstaffel").
+_SPLIT_RE = re.compile(r",\s*(?=\d+x?\s)")
+_COUNT_RE = re.compile(r"^(\d+)x?\s+(.+)$")
 
 
 @dataclass(frozen=True)

@@ -122,6 +122,15 @@ class MissingTextResolverTests(unittest.TestCase):
         self.assertEqual(req.count, 4)
         self.assertEqual(set(req.type_ids), {0, 1, 30})
 
+    def test_resolves_x_prefixed_count(self):
+        # Confirmed live 2026-10-01 ("5x Betreuungshelfer") and directly in
+        # several vehicles' own .mscv extend-rule text (e.g. 134/135/136.mscv:
+        # "\d+x Reiterstaffel") -- the "Nx Category" format, no space before
+        # the x, must resolve identically to the plain "N Category" form.
+        req = self.resolver.resolve_line("4x Löschfahrzeuge (LF)")
+        self.assertEqual(req.count, 4)
+        self.assertEqual(set(req.type_ids), {0, 1, 30})
+
     def test_bare_category_defaults_to_count_one(self):
         # A category whose own text happens to start with a digit-like token
         # ("ELW 1") must not be mistaken for a count prefix.

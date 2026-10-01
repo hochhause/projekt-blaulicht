@@ -56,10 +56,29 @@ _WATER_PUMP_TYPE_IDS = frozenset({
     0, 1, 6, 7, 8, 9, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 30, 37, 87, 88, 89, 90, 121,
 })
 
-# A raw `other`-group chunk boundary, same convention as missingtext.py's
-# _SPLIT_RE (duplicated rather than imported — keeps modules decoupled per
-# this project's own precedent of avoiding cross-module private access).
-_OTHER_CHUNK_SPLIT_RE = re.compile(r",\s*(?=\d+\s)")
+# A raw `other`/`personnel`-group chunk boundary, same convention as
+# missingtext.py's _SPLIT_RE (duplicated rather than imported — keeps modules
+# decoupled per this project's own precedent of avoiding cross-module private
+# access) — including its "<count>x " variant, confirmed live 2026-10-01.
+_OTHER_CHUNK_SPLIT_RE = re.compile(r",\s*(?=\d+x?\s)")
+
+# Betreuungshelfer/Verpflegungshelfer ("Nx Betreuungshelfer"/"Nx
+# Verpflegungshelfer", confirmed live 2026-10-01, mission #4420164223 "Brand
+# in Mehrfamilienhaus") — a per-vehicle-type capacity confirmed directly from
+# each vehicle's own .mscv extend-rule tiers (130 GW-Bt: 1-3->1, 4-6->2, ...,
+# i.e. ceil(N/3); 131 Bt-Kombi: 1-9->1, 10-18->2, ..., i.e. ceil(N/9)).
+# Neither vehicle has any crew/personnel data at all (capacities={} in
+# AssetLibrary), so this is NOT the same concept _personnel_to_vehicles
+# converts via (crew size) and gets its own small table instead. The two
+# types' real capacities differ (3 vs 9) — using the SMALLER (3) as the
+# shared divisor for both, so the estimate is never wrong regardless of
+# which type coverage.py ends up picking (same safety-first reasoning as
+# Sonderlöschmittel's single-type scoping above, applied here via MIN
+# instead since excluding either type outright isn't an option — both are
+# genuinely eligible, just at different scales).
+_CARE_HELPER_TYPE_IDS = frozenset({130, 131})
+_CARE_HELPER_CAPACITY = 3  # min(GW-Bt's 3, Bt-Kombi's 9)
+_CARE_HELPER_PATTERN = re.compile(r"^(\d+)x?\s+(betreuungshelfer|verpflegungshelfer)\s*$", re.IGNORECASE)
 
 # Capacity-phrased `other`-group entries — a raw liter/rate NUMBER, not a
 # vehicle count (confirmed live: "Uns fehlt: N Sonderlöschmittel" / "N l.
@@ -238,6 +257,17 @@ class MissionRequirementResolver:
                     reqs.extend(sub.requirements)
                     unmatched.extend(sub.unmatched)
             if groups.personnel:
+                # Betreuungshelfer/Verpflegungshelfer ("Nx Betreuungshelfer",
+                # confirmed live 2026-10-01, mission #4420164223 "Brand in
+                # Mehrfamilienhaus") get their OWN conversion first — their
+                # per-vehicle capacity (GW-Bt holds 3, Bt-Kombi holds 9,
+                # confirmed directly from each vehicle's own .mscv extend-rule
+                # tiers) isn't the crew-size concept `_personnel_to_vehicles`
+                # converts via (both vehicles have NO crew data at all), so
+                # routing it through that generic path would silently treat
+                # the raw headcount as a literal vehicle count instead.
+                care_reqs, remaining_personnel = self._split_care_helper_entries(groups.personnel)
+                reqs.extend(care_reqs)
                 # `personnel` entries are usually a HEADCOUNT ("12
                 # Feuerwehrleute"), unlike `vehicles` entries which already
                 # count vehicles — convert via the category's largest
@@ -250,11 +280,12 @@ class MissionRequirementResolver:
                 # mistake (e.g. "2 GW-Wasserrettung" -> 2 GW-W vehicles, type
                 # 64 -- not a headcount of some role) -- resolve_personnel
                 # tells the two apart so only genuine headcounts get converted.
-                headcount, vehicle = self._missing.resolve_personnel(groups.personnel)
-                reqs.extend(self._personnel_to_vehicles(r) for r in headcount.requirements)
-                reqs.extend(vehicle.requirements)
-                unmatched.extend(headcount.unmatched)
-                unmatched.extend(vehicle.unmatched)
+                if remaining_personnel:
+                    headcount, vehicle = self._missing.resolve_personnel(remaining_personnel)
+                    reqs.extend(self._personnel_to_vehicles(r) for r in headcount.requirements)
+                    reqs.extend(vehicle.requirements)
+                    unmatched.extend(headcount.unmatched)
+                    unmatched.extend(vehicle.unmatched)
             return reqs, unmatched
 
         counts: dict[str, int] = {}
@@ -363,6 +394,35 @@ class MissionRequirementResolver:
             count=vehicles_needed,
             matchless_type_ids=type_ids & self._matchless,
         )
+
+    def _split_care_helper_entries(self, raw_personnel: str) -> tuple[list[Requirement], str]:
+        """Pull Betreuungshelfer/Verpflegungshelfer headcount entries out of
+        a raw ``personnel``-group string (see :data:`_CARE_HELPER_PATTERN`),
+        converting via ceil-division against their confirmed per-vehicle
+        capacity. Returns ``(requirements, leftover_text)`` like
+        :meth:`_split_capacity_entries`."""
+        text = (raw_personnel or "").strip()
+        if not text:
+            return [], ""
+        reqs: list[Requirement] = []
+        leftover: list[str] = []
+        for chunk in _OTHER_CHUNK_SPLIT_RE.split(text):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            m = _CARE_HELPER_PATTERN.match(chunk)
+            if not m:
+                leftover.append(chunk)
+                continue
+            needed = int(m.group(1))
+            vehicles_needed = max(1, ceil(needed / _CARE_HELPER_CAPACITY))
+            reqs.append(Requirement(
+                source="betreuungshelfer",
+                type_ids=_CARE_HELPER_TYPE_IDS,
+                count=vehicles_needed,
+                matchless_type_ids=_CARE_HELPER_TYPE_IDS & self._matchless,
+            ))
+        return reqs, ", ".join(leftover)
 
     def _casualty_counts(self, mission, mtype) -> dict[str, int]:
         """NEF / RTH / ambulances / police_cars / incident-command driven by

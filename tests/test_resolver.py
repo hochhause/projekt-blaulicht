@@ -669,6 +669,62 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(res.requirements, [])
         self.assertIn("1 Marsrover", res.unmatched)
 
+    # -- live bugs found 2026-10-01 (mission #4420055266 "Berittene Streife",
+    # #4420164223 "Brand in Mehrfamilienhaus") ---------------------------------
+    def test_police_horse_catalog_class_resolves(self):
+        # Confirmed live: catalog_reqs={'police_horse': 2} for an untouched
+        # mission -> was "no requirements found" because `police_horse` had
+        # no Vehicle.mscv class mapping at all (unlike the text-based
+        # "Polizeipferd" mapping, which is a separate missing_text table).
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=837, name="Berittene Streife", average_credits=100,
+                          requirements={"police_horse": 2}, chances={})
+        resolver = MissionRequirementResolver(MissionCatalog({837: mt}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=837, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0, missing_text="")
+        res = resolver.resolve_mission(m)
+        by = {r.source: r for r in res.requirements}
+        self.assertIn("police_horse", by)
+        self.assertEqual(by["police_horse"].count, 2)
+        self.assertEqual(set(by["police_horse"].type_ids), {134, 135, 136})
+        self.assertEqual(res.unmatched, [])
+
+    def test_betreuungshelfer_nx_format_converts_via_confirmed_capacity(self):
+        # Confirmed live: missing_text personnel group = "5x Betreuungshelfer"
+        # -- the "Nx" format (no space before the x) previously failed to
+        # parse as a count+category pair at all (fell through as one
+        # unmatched blob "5x Betreuungshelfer"). ceil(5/3) = 2 (the smaller
+        # of GW-Bt's 3 and Bt-Kombi's 9, confirmed from each vehicle's own
+        # .mscv extend-rule tiers).
+        m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":null,"personnel":"5x Betreuungshelfer","other":""}')
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r for r in res.requirements}
+        self.assertIn("betreuungshelfer", by)
+        self.assertEqual(by["betreuungshelfer"].count, 2)
+        self.assertEqual(set(by["betreuungshelfer"].type_ids), {130, 131})
+        self.assertEqual(res.unmatched, [])
+
+    def test_verpflegungshelfer_nx_format_also_converts(self):
+        m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"9x Verpflegungshelfer","other":""}')
+        by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("betreuungshelfer"), 3)  # ceil(9/3)
+
+    def test_nx_format_coexists_with_plain_personnel_entry(self):
+        m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"5x Betreuungshelfer, 3 Feuerwehrleute","other":""}')
+        res = self.resolver.resolve_mission(m)
+        by = {r.source: r.count for r in res.requirements}
+        self.assertEqual(by.get("betreuungshelfer"), 2)
+        self.assertIn("Feuerwehrleute", by)
+        self.assertEqual(res.unmatched, [])
+
 
 if __name__ == "__main__":
     unittest.main()
