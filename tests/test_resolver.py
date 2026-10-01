@@ -746,6 +746,30 @@ class ResolverTests(unittest.TestCase):
         by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
         self.assertEqual(by.get("polizisten"), 5)  # ceil(10/2)
 
+    def test_polizeipferde_converts_via_factors_not_as_a_literal_vehicle_count(self):
+        # The LSSM table's "factors" field ({134: 2, 135: 4, 136: 2}) has
+        # always been silently ignored by _build_table, so "N Polizeipferde"
+        # was treated like any other vehiclesByRequirement entry -- a literal
+        # vehicle count. Each vehicle's own .mscv extend-rule tiers
+        # independently confirm the same divisors, so 7 horses should need
+        # ceil(7/2)=4 vehicles, not 7.
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"7 Polizeipferde","personnel":"","other":""}')
+        by = {r.source: r for r in self.resolver.resolve_mission(m).requirements}
+        self.assertIn("polizeipferd", by)
+        self.assertEqual(by["polizeipferd"].count, 4)
+        self.assertEqual(set(by["polizeipferd"].type_ids), {134, 135, 136})
+
+    def test_polizeipferde_also_converts_if_it_arrives_in_the_other_group(self):
+        # Not live-confirmed which raw group this text actually arrives in,
+        # so it's intercepted in both `vehicles` and `other`.
+        m = SimpleNamespace(mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"","personnel":"","other":"3 Polizeipferd"}')
+        by = {r.source: r.count for r in self.resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("polizeipferd"), 2)  # ceil(3/2)
+
     def test_schaum_is_an_alternate_sonderloeschmittel_phrasing(self):
         # Confirmed directly in SLF's (type 167) own .mscv extend-rule text
         # as an alternate spelling of the same foam need "N Sonderlöschmittel"

@@ -80,6 +80,22 @@ _CARE_HELPER_TYPE_IDS = frozenset({130, 131})
 _CARE_HELPER_CAPACITY = 3  # min(GW-Bt's 3, Bt-Kombi's 9)
 _CARE_HELPER_PATTERN = re.compile(r"^(\d+)x?\s+(betreuungshelfer|verpflegungshelfer)\s*$", re.IGNORECASE)
 
+# Polizeipferde ("N Polizeipferde", found 2026-10-01 via a systematic .mscv
+# sweep) — registered in the LSSM text table (vehiclesByRequirement) with a
+# "factors" field ({134: 2, 135: 4, 136: 2}) that MissingTextResolver's
+# _build_table has always silently ignored (it only reads "vehicles"/
+# "texts"), treating the count as a literal vehicle count like every other
+# vehiclesByRequirement entry. Each vehicle's own .mscv extend-rule tiers
+# independently confirm the SAME divisors (134/136: ceil(N/2); 135: ceil(N/4))
+# -- two independent sources agreeing is strong enough to act on without a
+# live capture, unlike the still-open "min." Ausbildung-prefix question
+# below. Using the smaller divisor (2) across all three, same safety-first
+# reasoning as Betreuungshelfer. Not live-confirmed which raw group ("vehicles"
+# or "other") this text actually arrives in, so intercepted in both.
+_POLIZEIPFERD_TYPE_IDS = frozenset({134, 135, 136})
+_POLIZEIPFERD_CAPACITY = 2  # min(134's 2, 135's 4, 136's 2)
+_POLIZEIPFERD_PATTERN = re.compile(r"^(\d+)\s+polizeipferde?\s*$", re.IGNORECASE)
+
 # Capacity-phrased `other`-group entries — a raw liter/rate NUMBER, not a
 # vehicle count (confirmed live: "Uns fehlt: N Sonderlöschmittel" / "N l.
 # Wasser" / "N l/min Pumpenleistung") — need real ceil-division vehicle math
@@ -257,9 +273,18 @@ class MissionRequirementResolver:
             reqs: list[Requirement] = []
             unmatched: list[str] = []
             if groups.vehicles:
-                sub = self._missing.resolve(groups.vehicles)
-                reqs.extend(sub.requirements)
-                unmatched.extend(sub.unmatched)
+                # Polizeipferde needs ceil-division against each vehicle's
+                # real horse capacity (see _POLIZEIPFERD_CAPACITY), not a
+                # literal vehicle count — split it out first, same pattern
+                # as the `other`-group capacity entries below. Not
+                # live-confirmed which group this text actually arrives in,
+                # so intercepted here AND in `other`.
+                horse_reqs, remaining_vehicles = self._split_polizeipferd_entries(groups.vehicles)
+                reqs.extend(horse_reqs)
+                if remaining_vehicles:
+                    sub = self._missing.resolve(remaining_vehicles)
+                    reqs.extend(sub.requirements)
+                    unmatched.extend(sub.unmatched)
             if groups.other:
                 # `other` is a CAPACITY dimension (progress bars) in general,
                 # but most entries actually seen there ("Feuerlöschpumpe (z.
@@ -272,6 +297,8 @@ class MissionRequirementResolver:
                 # run whatever's left through the normal category resolver.
                 capacity_reqs, remaining_other = self._split_capacity_entries(groups.other)
                 reqs.extend(capacity_reqs)
+                horse_reqs, remaining_other = self._split_polizeipferd_entries(remaining_other)
+                reqs.extend(horse_reqs)
                 if remaining_other:
                     sub = self._missing.resolve(remaining_other)
                     reqs.extend(sub.requirements)
@@ -476,6 +503,36 @@ class MissionRequirementResolver:
                 type_ids=_POLIZISTEN_TYPE_IDS,
                 count=vehicles_needed,
                 matchless_type_ids=_POLIZISTEN_TYPE_IDS & self._matchless,
+            ))
+        return reqs, ", ".join(leftover)
+
+    def _split_polizeipferd_entries(self, raw_text: str) -> tuple[list[Requirement], str]:
+        """Pull "Polizeipferde" entries out of a raw ``vehicles``- or
+        ``other``-group string (see :data:`_POLIZEIPFERD_PATTERN`),
+        converting via ceil-division against the confirmed per-vehicle horse
+        capacity instead of treating the count as a literal vehicle count.
+        Returns ``(requirements, leftover_text)`` like
+        :meth:`_split_care_helper_entries`."""
+        text = (raw_text or "").strip()
+        if not text:
+            return [], ""
+        reqs: list[Requirement] = []
+        leftover: list[str] = []
+        for chunk in _OTHER_CHUNK_SPLIT_RE.split(text):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            m = _POLIZEIPFERD_PATTERN.match(chunk)
+            if not m:
+                leftover.append(chunk)
+                continue
+            needed = int(m.group(1))
+            vehicles_needed = max(1, ceil(needed / _POLIZEIPFERD_CAPACITY))
+            reqs.append(Requirement(
+                source="polizeipferd",
+                type_ids=_POLIZEIPFERD_TYPE_IDS,
+                count=vehicles_needed,
+                matchless_type_ids=_POLIZEIPFERD_TYPE_IDS & self._matchless,
             ))
         return reqs, ", ".join(leftover)
 
