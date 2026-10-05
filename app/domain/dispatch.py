@@ -221,12 +221,22 @@ class DispatchPolicy:
     # send without partial_starts, only sent once the pool can fully satisfy
     # the outstanding requirement this cycle (Sasha, 2026-10-05: "TopUp ...
     # ONLY prioritizes a mission if we're certain we can feed it"). No fresh
-    # missions. (A mission we're already personally on — in `assigned` — is
-    # handled by the separate, always-unconditional priority-pass spread
-    # logic instead, not this scope.)
+    # missions. Also covers a mission we're already personally on (in
+    # `assigned`) when this scope applies to it — but when it DOESN'T (this
+    # scope OFF, or the mission's own/alliance source isn't covered), being
+    # already on a mission grants it NO special treatment: it falls through
+    # to the ordinary order/filter/batch/partial_starts handling like any
+    # other mission (Sasha, 2026-10-05, after seeing an unsatisfiable
+    # already-on mission trickle-fed every cycle ahead of cheaper ones
+    # despite this scope being off: "...which would be correct if i had top
+    # up active which i dont").
     top_up_scope: ModeScope = ModeScope.OFF
     # Patient-only: dispatch ONLY the units that clear patients (RTW/NEF/RTH + an
     # LNA >5 patients, OrgL >10); the runner recalls idle units once patients gone.
+    # Unlike top_up_scope, a mission we're already on under THIS scope always
+    # sends whatever's useful regardless of full satisfaction — a partial
+    # medical response is still clearly worth sending, not something to
+    # withhold pending a complete set.
     patient_scope: ModeScope = ModeScope.OFF
     # Hilferuf ("call for help"): share OWN missions to the alliance so
     # members can help. UNCREWABLE = only ones we couldn't crew this cycle;
@@ -236,8 +246,11 @@ class DispatchPolicy:
     # vehicles we have to a mission we haven't touched yet, even if we can't
     # fully crew it, instead of waiting for a full set (Sasha, 2026-10-05:
     # "partial send is just for new missions where we know we can send some
-    # but not all"). Does NOT affect top-up (always requires full coverage)
-    # or a mission we're already on (always unconditional) — see those scopes.
+    # but not all"). Does NOT affect top-up or patient-care (see those
+    # scopes) — but DOES apply to a mission we're already on once it falls
+    # through to "normal" governing (top_up_scope/patient_scope don't cover
+    # it): same rule as a fresh mission, since by then that's exactly what
+    # it's being treated as.
     partial_starts: bool = False
 
 
@@ -463,10 +476,14 @@ def plan_dispatches(
         # the full-crew requirement — "TopUp ... ONLY prioritizes a mission if
         # we're certain we can feed it." So topup governing gets no automatic
         # allow_partial; it only sends once the pool can fully satisfy it,
-        # same as normal without partial_starts (a mission already on_it,
-        # i.e. in `assigned`, bypasses all of this via the priority pass
-        # above instead, which is deliberately unconditional — "always send
-        # to already started ones" — unaffected by this setting).
+        # same as normal without partial_starts. A mission already on_it
+        # (in `assigned`) with no patient/top-up coverage lands HERE too, as
+        # plain "normal" governing — it's no longer special-cased by the
+        # priority pass once neither scope applies (Sasha, 2026-10-05, after
+        # an uncovered on_it mission kept trickle-feeding ahead of cheaper
+        # ones: "...which would be correct if i had top up active which i
+        # dont"); only a mission patient_scope or top_up_scope actually
+        # covers stays in the priority pass, unaffected by this setting.
         allow_partial = governing == "normal" and policy.partial_starts
         # A genuinely FRESH send (nobody there yet) can't use a reserved class —
         # that class is needed to close out a mission that's already open
@@ -685,7 +702,8 @@ def _abundance_vehicle(pool, mission_pos, building_pos):
 
 def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_pos, text_engine,
                     own_user_id=None):
-    """Handle spread/top-up and parasite missions BEFORE the normal filtered pass.
+    """Handle patient-care/top-up reinforcement and parasite missions BEFORE
+    the normal filtered pass.
 
     Bypasses cash/source/category filters, ordering and batch. Returns the set of
     handled mission ids, how many count toward the batch (useful contributions
@@ -694,6 +712,19 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
     still mentions them as needed — see ``reserved_type_ids`` in
     :func:`plan_dispatches` for the full rationale (unconditional, not gated
     on whether this pass's own attempt happens to look sufficient).
+
+    A mission we're already on (``on_it``) only stays in THIS pass — ahead of
+    order/filters/batch — when patient_scope or top_up_scope actually covers
+    it; otherwise it's just a normal mission from here on, falling through to
+    the main loop's ordinary governing/order/filter/batch/partial_starts
+    handling like anything else (Sasha, 2026-10-05: reinforcement jumping the
+    queue, or sending a partial batch, should only happen when top_up_scope
+    or partial_starts is actually what's responsible for it — not as a
+    separate always-on behavior merely because we already have a vehicle
+    there). Patient care (RTW/NEF response) still always sends whatever's
+    useful regardless of full satisfaction — unlike a generic vehicle-class
+    top-up, a partial medical response is still clearly worth sending, not
+    something to withhold pending a complete set.
     """
     handled: set[int] = set()
     batch_used = 0
@@ -718,19 +749,33 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
             is_parasite = scope_ok and others_on and revealed
         else:  # ACTIVE
             is_parasite = scope_ok and others_on
-        if not (on_it or is_parasite):
+        patient_here = _scope_covers(policy.patient_scope, is_alliance)
+        top_up_here = _scope_covers(policy.top_up_scope, is_alliance)
+        if on_it or is_parasite:
+            # Unconditional for EVERY on_it/is_parasite mission here, even one
+            # that's about to fall through below with no patient/top-up
+            # coverage: the main loop's OWN reservation call only runs for a
+            # mission that also clears mission_source/category/credit/radius/
+            # age there, so without this, an on_it mission that gets filtered
+            # out at any of those (e.g. it went alliance-shared after we got
+            # on it, or mission_source no longer covers its source) would
+            # lose reservation entirely -- exposing exactly the fresh-send
+            # poaching `_reserve_vehicle_group` exists to prevent.
+            _reserve_vehicle_group(reserved, mission, mtype, resolver, assigned,
+                                    patient_governed=patient_here)
+        on_it_here = on_it and (patient_here or top_up_here)
+        if not (on_it_here or is_parasite):
             continue
 
         pos = getattr(mission, "position", None)
-        patient_here = _scope_covers(policy.patient_scope, is_alliance)
         # Parasite on a patient-governed mission we're not on (leeching, not
         # topping up): never compute a "useful" patient-only contribution
         # here — go straight to the plain participation-claiming spare send
         # below. Decision (Sasha, 2026-08-31): patient_scope's own governance
-        # (the top-up/`on_it` branch above, for missions we're actually
-        # assigned to) is what handles real medical need; a parasite leech
-        # isn't medically aware and shouldn't pretend a random "useful" pick
-        # is patient care. Once this claim send lands, the mission becomes
+        # (the on_it_here branch above, for missions we're actually assigned
+        # to) is what handles real medical need; a parasite leech isn't
+        # medically aware and shouldn't pretend a random "useful" pick is
+        # patient care. Once this claim send lands, the mission becomes
         # `on_it` from NEXT cycle onward, so real medical coverage follows
         # with a one-cycle delay, not immediately this same cycle.
         skip_patient_contribution = is_parasite and patient_here
@@ -739,7 +784,14 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
             reqs = _outstanding(mission, resolver, text_engine, assigned, patient_here)
             if reqs and pos is not None:
                 cov = select_coverage(reqs, pool, distance_of=_distance_fn(pos, building_pos))
-                if cov.vehicle_ids:
+                # Patient care and parasite contributions send whatever's
+                # useful regardless; a plain top-up reinforcement (on_it_here
+                # without patient_here, i.e. gated in only via top_up_here)
+                # only sends once it's certain to fully satisfy the mission —
+                # same "only prioritizes if we're certain we can feed it"
+                # rule plan_dispatches' main loop applies to topup governing.
+                allow_send = is_parasite or patient_here or cov.satisfied
+                if cov.vehicle_ids and allow_send:
                     chosen = list(cov.vehicle_ids)
                     plan.planned.append(MissionPlan(mid, getattr(mission, "caption", ""),
                                                     tuple(chosen), cov.satisfied, dict(cov.shortfall)))
@@ -756,10 +808,6 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
             cset = set(chosen)
             pool[:] = [v for v in pool if v.id not in cset]
             handled.add(mid)
-        # Same reservation rule as plan_dispatches' main loop, regardless of
-        # whether OUR OWN attempt above happens to look sufficient this cycle.
-        _reserve_vehicle_group(reserved, mission, mtype, resolver, assigned,
-                                patient_governed=patient_here)
     return handled, batch_used, reserved
 
 

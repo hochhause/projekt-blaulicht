@@ -709,7 +709,9 @@ class DispatchPlannerTests(unittest.TestCase):
 
     def test_spread_mission_topped_up_first(self):
         # We're already on mission 1 (assigned an LF) but it still needs police;
-        # priority pass tops it up before the batch even with batch_size 1.
+        # the outstanding need (police) CAN be fully met this cycle, so it's
+        # sent -- whether that happens via the priority pass or (now) the main
+        # loop's ordinary "normal" governing, the visible result is the same.
         m1 = mission(1, 3, NEAR)  # firetrucks + police; LF en route, needs FuStW
         plan = plan_dispatches(
             [m1], [vehicle(200, FUSTW)], [building()], self.resolver,
@@ -717,6 +719,48 @@ class DispatchPlannerTests(unittest.TestCase):
         )
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].vehicle_ids, (200,))  # FuStW tops it up
+
+    def test_on_it_mission_that_cannot_be_fully_crewed_is_skipped_not_trickled(self):
+        # Sasha, 2026-10-05 (live log): an already-on mission that can NEVER
+        # be fully crewed this cycle (e.g. a mass-casualty Dammbruch needing
+        # dozens of specialist vehicles) must not jump the queue ahead of
+        # ordering, nor get a partial vehicle sent every single cycle, just
+        # because we already have one vehicle there -- that's top_up_scope's
+        # job (requires full satisfaction too) or partial_starts' job
+        # (explicit partial opt-in), and both are off by default here. The
+        # outstanding need (after subtracting the already-assigned LF) is
+        # police_cars:1, which the pool can't supply -> skipped, same as any
+        # other normal-governed mission that can't be fully crewed.
+        m1 = mission(1, 3, NEAR)  # firetrucks:1 (met by assigned LF) + police_cars:1
+        plan = plan_dispatches(
+            [m1], [vehicle(100, LF)], [building()], self.resolver,  # no FuStW anywhere
+            DispatchPolicy(radius_km=40), assigned={1: [LF]},
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "not enough vehicles: short police_cars x1")])
+
+    def test_on_it_mission_respects_least_cash_ordering_once_fallen_through(self):
+        # Same point from the ordering angle: an on_it mission (we have SOME
+        # vehicle tracked against it, via `assigned`'s key -- a realistic
+        # stand-in for "we sent something here a prior cycle") with no
+        # top_up_scope/patient_scope coverage competes on equal footing for
+        # the one scarce LF in the pool -- it doesn't jump the "least cash
+        # first" queue ahead of a cheaper fresh mission just because we're
+        # already on it. (Before this fix, the priority pass handled on_it
+        # missions unconditionally, BEFORE this ordering ever ran, so the
+        # expensive on_it mission would have won the LF instead.)
+        on_it_expensive = mission(1, 1, NEAR, average_credits=9999)  # firetrucks:1, nothing of ours counts yet
+        fresh_cheap = mission(2, 1, NEAR, average_credits=1)         # firetrucks:1, fresh
+        plan = plan_dispatches(
+            [on_it_expensive, fresh_cheap], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, order=DispatchOrder.CREDITS_LOW, batch_size=1),
+            assigned={1: []},  # "on_it" (a key exists) but contributes no actual delta
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].mission_id, 2)  # the cheap FRESH mission wins the LF
+        # mission 1 doesn't bypass batch_size via the priority pass either --
+        # it's capped out just like any other normal-governed candidate.
+        self.assertIn((1, "beyond batch size"), plan.skipped)
 
     def test_absent_class_never_strikes(self):
         # A firetruck mission with NO firetruck available: short EVERY cycle, but
@@ -1142,11 +1186,16 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertIn(2, planned_ids)
 
     def test_reservation_contributed_via_priority_pass_for_our_own_open_mission(self):
-        # Mission 1 is OUR OWN already-open mission (on_it, via `assigned`) --
-        # handled entirely inside _priority_pass, never reaching the main
-        # loop's own reservation block. A SECOND boat is idle and unclaimed
-        # by mission 1's own dispatch -- reservation must still hold it back
-        # from the fresh mission (not just "whatever's left over").
+        # Mission 1 is OUR OWN already-open mission (on_it, via `assigned`).
+        # With no patient/top-up scope covering it, its actual DISPATCH now
+        # happens via the main loop's ordinary "normal" governing (it falls
+        # through _priority_pass's send gate) -- but _priority_pass still
+        # reserves its vehicle type UNCONDITIONALLY for every on_it mission
+        # regardless of that gate, so this still proves what its name claims:
+        # the reservation itself is contributed via the priority pass. A
+        # SECOND boat is idle and unclaimed by mission 1's own dispatch --
+        # reservation must still hold it back from the fresh mission (not
+        # just "whatever's left over").
         ours = mission(1, 1, NEAR, vehicle_state=1,
                        missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
         fresh = mission(2, 1, NEAR2, vehicle_state=0,
@@ -1157,6 +1206,31 @@ class DispatchPlannerTests(unittest.TestCase):
         planned_ids = {p.mission_id for p in plan.planned}
         self.assertIn(1, planned_ids)     # priority pass grabs a boat for our own mission
         self.assertNotIn(2, planned_ids)  # fresh mission blocked despite an idle second boat
+
+    def test_reservation_holds_even_when_the_on_it_mission_itself_is_out_of_scope(self):
+        # Mission 1 is on_it (we have a vehicle assigned) but ALLIANCE, and
+        # mission_source here only covers OWN -- with no patient/top-up scope
+        # covering it either, it gets zero special treatment: it falls
+        # through _priority_pass's send gate, then the main loop skips it as
+        # "out of scope" before ever reaching THAT loop's own reservation
+        # call. Its type must still be reserved regardless (an on_it mission
+        # is reserved UNCONDITIONALLY in the priority pass, independent of
+        # whether it goes on to actually get dispatched anywhere) -- a fresh
+        # OWN mission needing the same boat must not poach the only spare.
+        ours_alliance = mission(1, 1, NEAR, is_alliance=True, vehicle_state=1,
+                                 missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        fresh_own = mission(2, 1, NEAR2, vehicle_state=0,
+                            missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        boats = [vehicle(100, 70), vehicle(101, 70)]
+        assigned = {1: [999]}  # on_it via an irrelevant type -- doesn't satisfy the boat need
+        policy = DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.OWN}))
+        plan = plan_dispatches([ours_alliance, fresh_own], boats, [building()], self.resolver,
+                               policy, assigned=assigned)
+        self.assertEqual(plan.planned, [])  # neither mission gets anything
+        self.assertEqual(plan.skipped, [
+            (1, "out of scope"),                        # mission 1 gets nothing itself...
+            (2, "not enough vehicles: short Boot x1"),   # ...but its reservation still blocks mission 2
+        ])
 
     def test_reservation_accumulates_across_multiple_open_missions(self):
         # Mission 1 needs a boat, mission 2 needs a GW-Wasserrettung -- both
