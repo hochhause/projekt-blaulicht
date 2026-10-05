@@ -58,12 +58,15 @@ def building(pos=BUILDING):
 
 
 class DispatchPlannerTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
+    def setUp(self):
+        # A fresh resolver per test (not setUpClass/cls): MissionRequirementResolver
+        # now carries small per-mission-id sticky state (effective_count_revealed,
+        # resolver.py) that must not leak between tests reusing the same literal
+        # mission ids for unrelated scenarios.
         library = AssetLibrary.load(VEHICLES_DIR)
-        cls.lib_for_engine = library
+        self.lib_for_engine = library
         catalog = MissionCatalog.from_payload(json.loads(FIXTURE.read_text(encoding="utf-8")))
-        cls.resolver = MissionRequirementResolver(catalog, library)
+        self.resolver = MissionRequirementResolver(catalog, library)
 
     def plan(self, missions, vehicles, policy=None, assigned=None):
         return plan_dispatches(
@@ -618,24 +621,38 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(plan.planned, [])
         self.assertEqual(plan.skipped, [(1, "not begun (top-up)")])
 
-    def test_top_up_partial_fills_begun_mission(self):
-        # A begun mission (vehicle_state=1) needs fire + police; we only have an
-        # LF. Top-up sends it and reports the police shortfall — no full crew
-        # required, unlike normal dispatch.
+    def test_top_up_skips_begun_mission_it_cannot_fully_crew(self):
+        # A begun mission (vehicle_state=1, not already ours -- see on_it's own
+        # unconditional spread path below) needs fire + police; we only have an
+        # LF. Top-up's job is to PRIORITIZE an already-begun mission ahead of
+        # the normal order/batch, not to relax the full-crew requirement --
+        # Sasha, 2026-10-05: "TopUp ... ONLY prioritizes a mission if we're
+        # certain we can feed it." So this is a skip, same as normal dispatch
+        # without partial_starts, not a partial send.
         begun = mission(1, 3, NEAR, vehicle_state=1)
         plan = plan_dispatches(
             [begun], [vehicle(100, LF)], [building()], self.resolver,
             DispatchPolicy(radius_km=40, top_up_scope=ModeScope.BOTH),
         )
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "not enough vehicles: short police_cars x1")])
+
+    def test_top_up_sends_once_it_can_fully_crew(self):
+        # Same begun mission, but the pool now has both an LF and a FuStW --
+        # top-up sends the full set rather than withholding it.
+        begun = mission(1, 3, NEAR, vehicle_state=1)
+        plan = plan_dispatches(
+            [begun], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, top_up_scope=ModeScope.BOTH),
+        )
         self.assertEqual(len(plan.planned), 1)
         mp = plan.planned[0]
-        self.assertEqual(mp.vehicle_ids, (100,))
-        self.assertFalse(mp.satisfied)
-        self.assertIn("police_cars", mp.shortfall)
+        self.assertEqual(set(mp.vehicle_ids), {100, 101})
+        self.assertTrue(mp.satisfied)
 
     def test_top_up_does_not_strike(self):
-        # Same partial situation, but with a strike tracker: top-up must NOT
-        # record ANY strike (it keeps helping, it doesn't give up on a class).
+        # Same uncrewable situation, but with a strike tracker: a top-up skip
+        # (short a class, not a failed send) must NOT record ANY strike.
         from app.domain.strikes import StrikeTracker
 
         strikes = StrikeTracker(threshold=1)  # would strike on the first miss

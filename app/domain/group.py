@@ -310,7 +310,11 @@ def plan_group_dispatches(
             # and ELW2-Drohne are deprioritized for a plain ELW slot unless
             # the mission's reconciled patient count is heavy enough that
             # SEG-ELW's automatic patient handling makes it the better pick.
-            count_revealed = getattr(mission, "vehicle_state", 0) >= 1
+            # Uses the resolver's sticky memory (see
+            # MissionRequirementResolver.effective_count_revealed), not the
+            # raw live vehicle_state, so this doesn't re-prefer SEG-ELW the
+            # moment the last vehicle leaves an already-resolved mission.
+            count_revealed = resolver.effective_count_revealed(mission)
             patient_load = _casualties(
                 int(getattr(mission, "patients_count", 0) or 0),
                 int(getattr(mission, "possible_patients_count", 0) or 0),

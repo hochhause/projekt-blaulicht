@@ -166,6 +166,7 @@ class MissionRequirementResolver:
         library: AssetLibrary,
         missing_resolver: MissingTextResolver | None = None,
         capacity_table: dict[int, dict[str, int]] | None = None,
+        ever_revealed: set[int] | None = None,
     ) -> None:
         self._catalog = catalog
         self._library = library
@@ -180,6 +181,42 @@ class MissionRequirementResolver:
         # `other`-group entries (see _CAPACITY_PATTERNS) — same default-unless-
         # injected pattern as `missing_resolver` above.
         self._capacity = capacity_table if capacity_table is not None else _default_capacity_table()
+        # Mission ids that have EVER shown vehicle_state>=1 (see
+        # effective_count_revealed below). Accepts an externally-owned set
+        # (same default-unless-injected pattern as `missing_resolver` above) so
+        # a caller that recreates the resolver on reconnect — e.g. AccountRunner,
+        # whose own `run_cycle` tears down and rebuilds the whole session on
+        # ANY exception, not just a confirmed logout — can hand in a set that
+        # survives the swap. Without that, a transient, unrelated hiccup (a
+        # flaky fetch, a timeout) would silently wipe this memory and reopen
+        # the exact over-dispatch bug it exists to prevent, the moment a
+        # reconnect lands mid-mission. Plain `set()` (not persisted) if the
+        # caller doesn't care, e.g. in tests.
+        self._ever_revealed: set[int] = ever_revealed if ever_revealed is not None else set()
+
+    def effective_count_revealed(self, mission) -> bool:
+        """Whether a mission's revealed casualty/prisoner count — 0 or
+        otherwise — should be treated as authoritative, for :func:`_casualties`.
+
+        ``vehicle_state`` is the game's own live field, and it is TRANSIENT:
+        it reverts to 0 once no vehicle is CURRENTLY on scene, even on a
+        mission that's already been fully worked and had every vehicle leave
+        again (confirmed live, Sasha 2026-10-01: for missions whose patients
+        appear over time, his medical vehicles leave the scene after handling
+        each one, by design, while the mission stays open). Trusting the live
+        field fresh every cycle therefore made an already-resolved mission
+        look "fresh" again the moment the last vehicle left, re-triggering the
+        max-possible fallback in `_casualties` — the reported ambulance/NEF
+        over-dispatch bug. A mission that has EVER shown a responder on scene
+        has permanently closed its "0 means hidden" ambiguity window, so that
+        fact is remembered per mission id for this resolver's lifetime instead
+        of being re-derived from the live flag every single cycle."""
+        mid = getattr(mission, "id", None)
+        if getattr(mission, "vehicle_state", 0) >= 1:
+            if mid is not None:
+                self._ever_revealed.add(mid)
+            return True
+        return mid is not None and mid in self._ever_revealed
 
     def resolve(self, mission_type_id: int) -> Resolution:
         """Resolve base requirements for a mission type.
@@ -550,8 +587,10 @@ class MissionRequirementResolver:
         counts: dict[str, int] = {}
 
         # A unit already on the mission means its casualty counts are revealed,
-        # so a 0 is real (patients/prisoners already dealt with) rather than hidden.
-        count_revealed = getattr(mission, "vehicle_state", 0) >= 1
+        # so a 0 is real (patients/prisoners already dealt with) rather than
+        # hidden — see effective_count_revealed for why this isn't the raw
+        # live vehicle_state flag.
+        count_revealed = self.effective_count_revealed(mission)
         patients = _casualties(
             getattr(mission, "patients_count", 0),
             getattr(mission, "possible_patients_count", 0),

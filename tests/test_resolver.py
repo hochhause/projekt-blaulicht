@@ -14,11 +14,14 @@ FIXTURE = BASE / "fixtures" / "einsaetze_sample.json"
 
 
 class ResolverTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
+    def setUp(self):
+        # A fresh resolver per test (not setUpClass/cls): MissionRequirementResolver
+        # now carries small per-mission-id sticky state (effective_count_revealed)
+        # that must not leak between tests reusing the same literal mission ids
+        # for unrelated scenarios.
         library = AssetLibrary.load(VEHICLES_DIR)
         catalog = MissionCatalog.from_payload(json.loads(FIXTURE.read_text(encoding="utf-8")))
-        cls.resolver = MissionRequirementResolver(catalog, library)
+        self.resolver = MissionRequirementResolver(catalog, library)
 
     def test_single_class_requirement(self):
         res = self.resolver.resolve(1)
@@ -228,6 +231,25 @@ class ResolverTests(unittest.TestCase):
         self.assertNotIn("kdow_lna", by)
         self.assertNotIn("kdow_orgl", by)
 
+
+    def test_effective_count_revealed_uses_injected_set_not_private_state(self):
+        # AccountRunner hands in its OWN long-lived set (survives a resolver
+        # being torn down and rebuilt on reconnect, see account_runner.py) --
+        # confirm a resolver built with an injected set both writes to it and
+        # reads another resolver's prior writes through it.
+        shared: set[int] = set()
+        r1 = MissionRequirementResolver(self.resolver.catalog, self.resolver.library,
+                                         ever_revealed=shared)
+        self.assertTrue(r1.effective_count_revealed(SimpleNamespace(id=42, vehicle_state=1)))
+        self.assertIn(42, shared)
+        # A brand-new resolver instance (as reconnect would build) sharing the
+        # SAME injected set still remembers mission 42, even with vehicle_state
+        # back to 0 and no prior calls of its own.
+        r2 = MissionRequirementResolver(self.resolver.catalog, self.resolver.library,
+                                         ever_revealed=shared)
+        self.assertTrue(r2.effective_count_revealed(SimpleNamespace(id=42, vehicle_state=0)))
+        # An unrelated mission id is unaffected.
+        self.assertFalse(r2.effective_count_revealed(SimpleNamespace(id=43, vehicle_state=0)))
 
     # -- patient-only mode -----------------------------------------------------
     def test_patient_only_transports_all_and_drops_non_patient(self):

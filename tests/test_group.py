@@ -50,11 +50,14 @@ def building(bid=1, pos=BUILDING):
 
 
 class GroupPlannerTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
+    def setUp(self):
+        # A fresh resolver per test (not setUpClass/cls): MissionRequirementResolver
+        # now carries small per-mission-id sticky state (effective_count_revealed,
+        # resolver.py) that must not leak between tests reusing the same literal
+        # mission ids for unrelated scenarios.
         library = AssetLibrary.load(VEHICLES_DIR)
         catalog = MissionCatalog.from_payload(json.loads(FIXTURE.read_text(encoding="utf-8")))
-        cls.resolver = MissionRequirementResolver(catalog, library)
+        self.resolver = MissionRequirementResolver(catalog, library)
 
     def plan(self, missions, vehicles_by_account, buildings_by_account=None, policy=None):
         if buildings_by_account is None:
@@ -426,11 +429,14 @@ class FakeMember:
 
 
 class GroupCoordinatorTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
+    def setUp(self):
+        # A fresh resolver per test (not setUpClass/cls): MissionRequirementResolver
+        # now carries small per-mission-id sticky state (effective_count_revealed,
+        # resolver.py) that must not leak between tests reusing the same literal
+        # mission ids for unrelated scenarios.
         library = AssetLibrary.load(VEHICLES_DIR)
         catalog = MissionCatalog.from_payload(json.loads(FIXTURE.read_text(encoding="utf-8")))
-        cls.resolver = MissionRequirementResolver(catalog, library)
+        self.resolver = MissionRequirementResolver(catalog, library)
 
     def _run(self, coord):
         import asyncio

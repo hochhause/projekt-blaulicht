@@ -73,6 +73,14 @@ class AccountRunner:
         # vehicle's name). Persists across reconnects; a real account restart makes
         # a fresh AccountRunner -> fresh tracker.
         self._strikes = StrikeTracker()
+        # Mission ids whose casualty count has ever been authoritatively
+        # revealed (see MissionRequirementResolver.effective_count_revealed) —
+        # owned here, not by the resolver, and handed to each newly-built
+        # resolver in _connect() below, for the SAME reason as _strikes above:
+        # _connect() is re-run on any transient failure (not just a confirmed
+        # logout), which would otherwise silently wipe this memory mid-mission
+        # and reopen the ambulance/NEF over-dispatch bug it exists to prevent.
+        self._ever_revealed: set[int] = set()
 
     def _log(self, message: str) -> None:
         if self._on_log is not None:
@@ -89,7 +97,10 @@ class AccountRunner:
 
         client = GameClient(session)
         einsaetze = await client.fetch_einsaetze()  # once per session, not per cycle
-        resolver = MissionRequirementResolver(MissionCatalog.from_payload(einsaetze), self._library)
+        resolver = MissionRequirementResolver(
+            MissionCatalog.from_payload(einsaetze), self._library,
+            ever_revealed=self._ever_revealed,
+        )
         # Regex fallback for missions the structured catalogue doesn't cover.
         text_engine = RequirementEngine(self._library)
         self._session = session

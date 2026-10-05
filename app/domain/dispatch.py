@@ -217,7 +217,13 @@ class DispatchPolicy:
     # How eagerly parasite grabs a mission — see ParasiteAggressiveness.
     parasite_mode: ParasiteAggressiveness = ParasiteAggressiveness.ACTIVE
     # Top-up (symbiont): only reinforce ALREADY-begun missions (vehicle_state>=1),
-    # sending the useful vehicles we have (partial ok). No fresh missions.
+    # PRIORITIZED ahead of the normal order/batch — but, like a fresh "normal"
+    # send without partial_starts, only sent once the pool can fully satisfy
+    # the outstanding requirement this cycle (Sasha, 2026-10-05: "TopUp ...
+    # ONLY prioritizes a mission if we're certain we can feed it"). No fresh
+    # missions. (A mission we're already personally on — in `assigned` — is
+    # handled by the separate, always-unconditional priority-pass spread
+    # logic instead, not this scope.)
     top_up_scope: ModeScope = ModeScope.OFF
     # Patient-only: dispatch ONLY the units that clear patients (RTW/NEF/RTH + an
     # LNA >5 patients, OrgL >10); the runner recalls idle units once patients gone.
@@ -226,8 +232,12 @@ class DispatchPolicy:
     # members can help. UNCREWABLE = only ones we couldn't crew this cycle;
     # ALL = every own mission. Runner-level add-on.
     hilferuf_mode: HilferufAggressiveness = HilferufAggressiveness.OFF
-    # Partial dispatch: send whatever useful vehicles we have to a mission even if
-    # we can't fully crew it (instead of waiting for a full set). Reports the gap.
+    # Partial dispatch for FRESH ("normal") sends only: send whatever useful
+    # vehicles we have to a mission we haven't touched yet, even if we can't
+    # fully crew it, instead of waiting for a full set (Sasha, 2026-10-05:
+    # "partial send is just for new missions where we know we can send some
+    # but not all"). Does NOT affect top-up (always requires full coverage)
+    # or a mission we're already on (always unconditional) — see those scopes.
     partial_starts: bool = False
 
 
@@ -446,7 +456,18 @@ def plan_dispatches(
         if policy.batch_size is not None and actioned >= policy.batch_size:
             plan.skipped.append((mission.id, "beyond batch size"))
             continue
-        allow_partial = (governing == "topup") or (governing == "normal" and policy.partial_starts)
+        # partial_starts is scoped to fresh ("normal") sends only (Sasha,
+        # 2026-10-05): "partial send is just for new missions where we know we
+        # can send some but not all." Top-up's job is to PRIORITIZE an
+        # already-begun mission ahead of the normal order/batch, not to relax
+        # the full-crew requirement — "TopUp ... ONLY prioritizes a mission if
+        # we're certain we can feed it." So topup governing gets no automatic
+        # allow_partial; it only sends once the pool can fully satisfy it,
+        # same as normal without partial_starts (a mission already on_it,
+        # i.e. in `assigned`, bypasses all of this via the priority pass
+        # above instead, which is deliberately unconditional — "always send
+        # to already started ones" — unaffected by this setting).
+        allow_partial = governing == "normal" and policy.partial_starts
         # A genuinely FRESH send (nobody there yet) can't use a reserved class —
         # that class is needed to close out a mission that's already open
         # elsewhere. Anything with vehicle_state >= 1 (help/reinforcement) is
@@ -859,11 +880,13 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
               text_engine=None, allow_partial=False, patient_only=False, shortfalls=None):
     """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string.
 
-    *allow_partial* (top-up/symbiont) sends whatever useful vehicles we have to
-    an already-begun mission and reports the rest, instead of holding out for a
-    full crew. *patient_only* derives only patient-clearing units. Both come from
-    the mission's governing mode. *shortfalls* (a dict) tallies classes that leave
-    a mission short for the dashboard.
+    *allow_partial* (fresh "normal" sends only, with ``partial_starts`` on)
+    sends whatever useful vehicles we have and reports the rest, instead of
+    holding out for a full crew — top-up never sets this (it requires full
+    coverage, just prioritized ahead of the normal order/batch; see
+    ``plan_dispatches``). *patient_only* derives only patient-clearing units.
+    Both come from the mission's governing mode. *shortfalls* (a dict) tallies
+    classes that leave a mission short for the dashboard.
 
     Besides vehicle-class requirements, a mission may state a **minimum
     firefighter count** (``average_min_fire_personnel``); that's met by fire
@@ -902,7 +925,11 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
         # once units are on scene and patients_count authoritatively drops
         # (most already transported), the SEG-ELW preference must drop with
         # it rather than staying "preferred" for the mission's whole life.
-        count_revealed = getattr(mission, "vehicle_state", 0) >= 1
+        # Uses the resolver's sticky memory (see
+        # MissionRequirementResolver.effective_count_revealed), not the raw
+        # live vehicle_state, so this doesn't re-prefer SEG-ELW the moment the
+        # last vehicle leaves an already-resolved mission.
+        count_revealed = resolver.effective_count_revealed(mission)
         patient_load = _casualties(
             int(getattr(mission, "patients_count", 0) or 0),
             int(getattr(mission, "possible_patients_count", 0) or 0),

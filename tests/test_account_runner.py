@@ -124,6 +124,24 @@ class AccountRunnerTests(unittest.TestCase):
             asyncio.run(runner.run_cycle())  # must not raise
             self.assertIsNone(runner._dispatch._own_user_id)
 
+    def test_ever_revealed_survives_a_reconnect(self):
+        # The sticky ambulance/NEF memory (MissionRequirementResolver.
+        # effective_count_revealed) must not be silently wiped by a reconnect --
+        # _connect() reruns on ANY exception (not just a confirmed logout), and
+        # used to always build a resolver with a fresh, empty set.
+        FakeSession, FakeClient = _make_fakes()
+        with mock.patch("app.core.account_runner.GameSession", FakeSession), \
+             mock.patch("app.core.account_runner.GameClient", FakeClient):
+            runner = self._runner()
+            asyncio.run(runner.connect())
+            from types import SimpleNamespace
+            runner._resolver.effective_count_revealed(SimpleNamespace(id=1, vehicle_state=1))
+            self.assertIn(1, runner._resolver._ever_revealed)
+            first_resolver = runner._resolver
+            asyncio.run(runner._connect())  # e.g. a transient failure's reconnect
+            self.assertIsNot(runner._resolver, first_resolver)  # genuinely rebuilt
+            self.assertIn(1, runner._resolver._ever_revealed)   # memory survived
+
     def test_bad_credentials_surface_as_error_not_crash(self):
         # A password_provider that raises (e.g. undecryptable secret) becomes a
         # cycle error, not a hard failure at construction.
