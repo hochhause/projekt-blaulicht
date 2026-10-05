@@ -447,6 +447,28 @@ class GroupCoordinatorTests(unittest.TestCase):
         coord._sleep = no_sleep
         return asyncio.run(coord.run_cycle())
 
+    def test_ever_revealed_pooled_across_members(self):
+        # Each real member (AccountRunner) owns its own `_ever_revealed` set so
+        # it survives ITS OWN reconnects (see test_account_runner.py), but a
+        # shared/alliance mission's reveal must count for the WHOLE group
+        # regardless of which member's resolver plan_group_dispatches happens
+        # to use that cycle -- GroupCoordinator pools them into one shared set.
+        from app.core.group_coordinator import GroupCoordinator
+
+        class StubMember:
+            def __init__(self, pre=()):
+                self._ever_revealed = set(pre)
+
+        m1 = StubMember(pre={1})  # already saw mission 1 revealed, elsewhere
+        m2 = StubMember()
+        coord = GroupCoordinator({10: m1, 20: m2}, GroupPolicy(radius_km=40))
+
+        self.assertIs(m1._ever_revealed, m2._ever_revealed)
+        self.assertIs(m1._ever_revealed, coord._ever_revealed)
+        self.assertIn(1, coord._ever_revealed)  # pre-existing entry folded in, not dropped
+        m2._ever_revealed.add(99)  # a write through one member...
+        self.assertIn(99, m1._ever_revealed)    # ...is visible via the other
+
     def test_both_members_dispatch_to_shared_mission(self):
         from app.core.group_coordinator import GroupCoordinator
         from app.domain.group import GroupPolicy

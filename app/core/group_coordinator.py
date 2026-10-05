@@ -80,6 +80,30 @@ class GroupCoordinator:
         self._buildings: dict[int, list] = {}
         self._shared: set[tuple[int, int]] = set()  # (account_id, mission_id) already shared
         self._sleep = asyncio.sleep
+        # Ambulance/NEF sticky memory (MissionRequirementResolver.
+        # effective_count_revealed) pooled across ALL members, not kept
+        # per-account: a shared mission's casualty count being authoritatively
+        # revealed should count for the whole group, regardless of which
+        # member's resolver `plan_group_dispatches` happens to use that cycle
+        # (see the `live[next(iter(live))].resolver` pick below) — otherwise a
+        # member reconnecting (or simply not being the one picked that cycle)
+        # would silently lose a reveal another member already witnessed.
+        # Delegates to AccountRunner.adopt_ever_revealed (mirrors the public
+        # `strikes` property's existing precedent for sharing a member's
+        # per-account state with the group, rather than poking its private
+        # attribute directly) — that method also repoints an already-built
+        # resolver's own reference, not just this attribute, so it stays
+        # correct even for a member that somehow connected before being
+        # handed to the group. Falls back to the plain attribute for a test
+        # double that doesn't model the full AccountRunner surface.
+        self._ever_revealed: set[int] = set()
+        for member in self._members.values():
+            adopt = getattr(member, "adopt_ever_revealed", None)
+            if adopt is not None:
+                adopt(self._ever_revealed)
+            else:
+                self._ever_revealed |= getattr(member, "_ever_revealed", None) or set()
+                member._ever_revealed = self._ever_revealed
 
     def _text_engine(self, resolver):
         """Regex requirement engine (for parsing missing_text), built once."""

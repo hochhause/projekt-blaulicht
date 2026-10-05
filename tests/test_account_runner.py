@@ -142,6 +142,46 @@ class AccountRunnerTests(unittest.TestCase):
             self.assertIsNot(runner._resolver, first_resolver)  # genuinely rebuilt
             self.assertIn(1, runner._resolver._ever_revealed)   # memory survived
 
+    def test_adopt_ever_revealed_repoints_an_already_built_resolver(self):
+        # GroupCoordinator calls this to pool sticky ambulance/NEF memory
+        # across members. If this account already connected (built its own
+        # resolver) before being handed to the group, swapping only
+        # runner._ever_revealed wouldn't be enough -- the resolver captured
+        # the OLD set by reference at construction time and would keep
+        # writing into it, invisible to the rest of the group, until its next
+        # reconnect. adopt_ever_revealed must repoint the live resolver too.
+        from types import SimpleNamespace
+
+        FakeSession, FakeClient = _make_fakes()
+        with mock.patch("app.core.account_runner.GameSession", FakeSession), \
+             mock.patch("app.core.account_runner.GameClient", FakeClient):
+            runner = self._runner()
+            asyncio.run(runner.connect())
+            own_set_before = runner._resolver._ever_revealed
+            shared: set[int] = {7}
+            runner.adopt_ever_revealed(shared)
+            self.assertIs(runner._ever_revealed, shared)
+            self.assertIs(runner._resolver._ever_revealed, shared)  # not the old, orphaned set
+            self.assertIsNot(runner._resolver._ever_revealed, own_set_before)
+            self.assertIn(7, shared)
+            runner._resolver.effective_count_revealed(SimpleNamespace(id=8, vehicle_state=1))
+            self.assertIn(8, shared)  # a later reveal lands in the shared set
+
+    def test_adopt_ever_revealed_folds_in_this_accounts_own_entries(self):
+        # A reveal this account already witnessed, before adopting a group's
+        # pooled set, must not be silently dropped.
+        from types import SimpleNamespace
+
+        FakeSession, FakeClient = _make_fakes()
+        with mock.patch("app.core.account_runner.GameSession", FakeSession), \
+             mock.patch("app.core.account_runner.GameClient", FakeClient):
+            runner = self._runner()
+            asyncio.run(runner.connect())
+            runner._resolver.effective_count_revealed(SimpleNamespace(id=3, vehicle_state=1))
+            shared: set[int] = set()
+            runner.adopt_ever_revealed(shared)
+            self.assertIn(3, shared)
+
     def test_bad_credentials_surface_as_error_not_crash(self):
         # A password_provider that raises (e.g. undecryptable secret) becomes a
         # cycle error, not a hard failure at construction.

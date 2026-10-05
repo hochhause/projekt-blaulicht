@@ -145,6 +145,27 @@ class AccountRunner:
         same way it would be in solo dispatch."""
         return self._strikes
 
+    def adopt_ever_revealed(self, shared: set[int]) -> None:
+        """Point this account's ambulance/NEF sticky memory (see
+        MissionRequirementResolver.effective_count_revealed) at an externally
+        pooled set — used by GroupCoordinator so a reveal any group member
+        witnesses counts for the whole group, regardless of which member's
+        resolver gets used on a later cycle (mirrors the `strikes` property
+        above: a public, named way for the group coordinator to share a
+        member's per-account state, instead of reaching past the underscore).
+        Folds in whatever this account already held (never discards a real
+        reveal) and, if a resolver has ALREADY been built (this account was
+        connected before being handed to the group — not how the real group
+        factory works today, but not relied upon here either), repoints its
+        live reference too: swapping only this attribute would otherwise
+        leave that resolver writing into the old, now-orphaned set until its
+        next reconnect, silently defeating the pooling for that member.
+        """
+        shared |= self._ever_revealed
+        self._ever_revealed = shared
+        if self._resolver is not None:
+            self._resolver._ever_revealed = shared
+
     async def handle_transports(self, vehicles) -> int:
         """Run the FMS-5 transport phase over an already-fetched fleet."""
         if self._dispatch is None:
