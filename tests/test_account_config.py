@@ -133,6 +133,15 @@ class AccountConfigTests(unittest.TestCase):
         cfg = AccountConfig.from_dict({"hilferuf": True, "hilferuf_mode": "off"})
         self.assertEqual(cfg.hilferuf_mode, "off")
 
+    def test_hilferuf_min_credits_roundtrip_and_maps_to_policy(self):
+        cfg = AccountConfig(hilferuf_min_credits=500)
+        again = AccountConfig.from_dict(cfg.to_dict())
+        self.assertEqual(again.hilferuf_min_credits, 500)
+        self.assertEqual(again.dispatch_policy().hilferuf_min_credits, 500)
+
+    def test_hilferuf_min_credits_defaults_to_zero_no_floor(self):
+        self.assertEqual(AccountConfig().dispatch_policy().hilferuf_min_credits, 0)
+
     def test_policies_reflect_config(self):
         cfg = AccountConfig(
             radius_km=15, own_credit_min=200, alliance_credit_max=9000,

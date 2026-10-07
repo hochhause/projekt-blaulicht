@@ -104,6 +104,8 @@
         <option value="uncrewable" {{ 'selected' if cfg.hilferuf_mode == 'uncrewable' else '' }}>only missions I can't crew</option>
         <option value="all" {{ 'selected' if cfg.hilferuf_mode == 'all' else '' }}>everything (let allies pile on for extra credit too)</option>
       </select></div>
+    <div class="field"><label>Hilferuf min. credits — never share a mission worth less than this, even on "everything" (0 = no floor)</label>
+      <input name="hilferuf_min_credits" type="number" step="1" min="0" value="{{ cfg.hilferuf_min_credits }}"></div>
     <div class="field"><label>Partial dispatch — add-on: send what I have even if I can't fully crew a mission (reports the gap)</label>
       <select name="partial_starts"><option value="1" {{ 'selected' if cfg.partial_starts else '' }}>on</option><option value="" {{ '' if cfg.partial_starts else 'selected' }}>off</option></select></div>
   </div>

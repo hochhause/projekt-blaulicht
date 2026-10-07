@@ -94,6 +94,19 @@ class HilferufAggressiveness(str, Enum):
     ALL = "all"                # every OWN, not-yet-shared mission, regardless of crew status
 
 
+# Official Verbandsgroßeinsatz (VGE) mission-type ids (Sasha, 2026-10-07, from
+# their alliance's own list of which mission types the Leitungsteam picks
+# from when starting one). Their alliance's rules (§4/§6) reserve command
+# vehicles (ELW 1/2, AB-Einsatzleitung) on these for the Leitungsteam only,
+# for the first 12h after release -- we have no way to tell whether THIS
+# account is Leitungsteam or whether we're inside that window, so these are
+# always treated as parasite-only (see _priority_pass): claim participation
+# with a single spare vehicle, never a real requirement-driven dispatch.
+# "Custom" (player-started) Großschadenslagen have no fixed type id at all
+# ("because they are... custom") and so aren't caught by this list.
+_VGE_MISSION_TYPE_IDS = frozenset({41, 42, 43, 44, 45, 159, 216, 250})
+
+
 def _scope_covers(scope, is_alliance: bool) -> bool:
     """True if a :class:`ModeScope` value covers a mission of this source."""
     scope = getattr(scope, "value", scope)
@@ -165,6 +178,37 @@ def is_own_mission(mission, own_user_id: int | None) -> bool:
     if mission_user_id is not None and own_user_id is not None:
         return mission_user_id == own_user_id
     return not getattr(mission, "is_alliance", False)
+
+
+def _confidently_alliance(mission, own_user_id: int | None) -> bool:
+    """True only with POSITIVE evidence this mission is genuinely foreign —
+    not just the absence of evidence it's ours. Reuses ``is_own_mission``'s
+    own two signals (the "[Verband]" tag; a known, differing user_id) but,
+    unlike it, returns False rather than falling back to the raw
+    ``is_alliance``/``alliance_shared_at`` flag when neither resolves.
+
+    That fallback is the right call for `is_own_mission` itself (never worse
+    than pre-fix behavior) — but one caller (the VGE override, see
+    ``_VGE_MISSION_TYPE_IDS``) treats "alliance" as a hard trigger with a
+    real cost if it misfires on an own mission (under-dispatching your own
+    big incident to a single spare vehicle). A narrow, self-healing window
+    exists where it could: your own mission gets Hilferuf-shared before
+    ``own_user_id`` has ever been inferred (needs some OTHER currently-
+    unshared own mission in the feed first) — at that exact moment it has
+    no "[Verband]" tag (never does, it's yours) and no resolvable user_id
+    match, so `is_own_mission` would fall back to the raw (now-True)
+    `is_alliance` flag and misclassify it. This helper keeps that case
+    "not confidently alliance" instead, so the VGE override simply doesn't
+    fire until real evidence arrives — safe either way, since briefly
+    under-covering a genuinely foreign VGE for a cycle or two costs nothing
+    comparable to briefly under-crewing your own mission would.
+    """
+    if "[Verband]" in (getattr(mission, "caption", "") or ""):
+        return True
+    mission_user_id = getattr(mission, "user_id", None)
+    if mission_user_id is not None and own_user_id is not None:
+        return mission_user_id != own_user_id
+    return False
 
 
 def _source_covers(source: "frozenset[MissionSource]", is_alliance: bool, is_event: bool) -> bool:
@@ -242,6 +286,14 @@ class DispatchPolicy:
     # members can help. UNCREWABLE = only ones we couldn't crew this cycle;
     # ALL = every own mission. Runner-level add-on.
     hilferuf_mode: HilferufAggressiveness = HilferufAggressiveness.OFF
+    # Never share a mission worth less than this many credits, REGARDLESS of
+    # hilferuf_mode -- including ALL ("gebe alles frei"), which otherwise has
+    # no floor at all (Sasha, 2026-10-07, quoting their alliance's own rule:
+    # "Kleineinsätze sind nicht freizugeben" -- small jobs, needing only 1-2
+    # vehicles, must never be released). 0 (default) = no floor. Checked
+    # against the mission's own average_credits, falling back to its
+    # mission type's average -- same source/fallback own_credit_min uses.
+    hilferuf_min_credits: int = 0
     # Partial dispatch for FRESH ("normal") sends only: send whatever useful
     # vehicles we have to a mission we haven't touched yet, even if we can't
     # fully crew it, instead of waiting for a full set (Sasha, 2026-10-05:
@@ -702,8 +754,13 @@ def _abundance_vehicle(pool, mission_pos, building_pos):
 
 def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_pos, text_engine,
                     own_user_id=None):
-    """Handle patient-care/top-up reinforcement and parasite missions BEFORE
-    the normal filtered pass.
+    """Handle patient-care/top-up reinforcement, parasite missions, and
+    official Verbandsgroßeinsatz missions BEFORE the normal filtered pass.
+
+    An alliance-shared mission whose type id is in :data:`_VGE_MISSION_TYPE_IDS`
+    is always forced into a single, one-time spare-vehicle participation claim
+    — never a real dispatch — regardless of `policy.parasite_scope` or any
+    other mode; see that constant for the compliance rationale.
 
     Bypasses cash/source/category filters, ordering and batch. Returns the set of
     handled mission ids, how many count toward the batch (useful contributions
@@ -732,10 +789,30 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
     assigned = assigned or {}
     for mission in missions:
         mid = mission.id
-        mtype = resolver.catalog.get(getattr(mission, "mission_type_id", None))
         on_it = mid in assigned                       # a mission we're already on
-        others_on = getattr(mission, "vehicle_state", 0) >= 1
         is_alliance = not is_own_mission(mission, own_user_id)
+        # Deliberately the stricter _confidently_alliance, not the plain
+        # is_alliance above -- see its own docstring for why misfiring this
+        # specific override on an own mission has a real cost the general
+        # is_alliance proxy's fallback isn't careful enough to avoid.
+        if (_confidently_alliance(mission, own_user_id)
+                and getattr(mission, "mission_type_id", None) in _VGE_MISSION_TYPE_IDS):
+            # Hard compliance override (see _VGE_MISSION_TYPE_IDS) -- skips
+            # every other branch below, including on_it's usual "always keep
+            # reinforcing" exemption: once our one participation vehicle is
+            # in (or if we simply have nothing spare to send), this mission
+            # is DONE for this account, every cycle, period.
+            if not on_it:
+                pos = getattr(mission, "position", None)
+                spare = _abundance_vehicle(pool, pos, building_pos) if pos is not None else None
+                if spare is not None:
+                    plan.planned.append(MissionPlan(mid, getattr(mission, "caption", ""),
+                                                    (spare.id,), False, {}))  # pure leech, free
+                    pool[:] = [v for v in pool if v.id != spare.id]
+            handled.add(mid)
+            continue
+        mtype = resolver.catalog.get(getattr(mission, "mission_type_id", None))
+        others_on = getattr(mission, "vehicle_state", 0) >= 1
         scope_ok = _scope_covers(policy.parasite_scope, is_alliance) and not on_it
         # Aggressiveness (Sasha, 2026-08-31): ACTIVE (default) requires someone
         # already on it, matching the original behavior; ALL drops that

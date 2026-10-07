@@ -616,6 +616,11 @@ class DispatchRunner:
         ALL (Sasha, 2026-09-11): every own, not-yet-shared mission, regardless
         of whether we handled it ourselves — lets allies pile on for the
         extra participation credit too, not just the ones we're stuck on.
+
+        Either way, ``policy.hilferuf_min_credits`` (Sasha, 2026-10-07) is an
+        absolute floor underneath both modes — a mission worth less never
+        gets shared, period, per their alliance's own rule against releasing
+        small jobs regardless of how eagerly Hilferuf is otherwise set.
         """
         if mode is HilferufAggressiveness.UNCREWABLE:
             candidates = [
@@ -625,12 +630,20 @@ class DispatchRunner:
             ]
         else:  # ALL
             candidates = [(mid, "sharing everything") for mid in by_id]
+        floor = getattr(self._policy, "hilferuf_min_credits", 0) or 0
         for mid, why in candidates:
             mission = by_id.get(mid)
             if mission is None or getattr(mission, "is_alliance", False):
                 continue  # not ours, or already shared
             if mid in self._shared:
                 continue
+            if floor:
+                mtype = self._resolver.catalog.get(getattr(mission, "mission_type_id", None))
+                credits = int(getattr(mission, "average_credits", 0) or 0) or (
+                    mtype.average_credits if mtype is not None else 0
+                )
+                if credits < floor:
+                    continue
             if await self._client.share_mission(mid):
                 self._shared.add(mid)
                 self._log(

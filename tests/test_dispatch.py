@@ -419,6 +419,98 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].mission_id, 1)
 
+    # -- Verbandsgroßeinsatz (VGE) compliance override -------------------------
+
+    def test_vge_mission_gets_only_a_single_spare_vehicle(self):
+        # Sasha, 2026-10-07: official VGE mission-type ids (here: 41) must
+        # never get a real dispatch, even with parasite entirely off and a
+        # policy that would otherwise fully crew it -- just one participation
+        # spare, same free leech mechanism parasite mode uses.
+        # "[Verband]" caption (confirmed live, 2026-10-07): the real signal a
+        # genuinely foreign alliance mission carries -- see
+        # _confidently_alliance, which the VGE override deliberately requires
+        # over the plain is_alliance flag alone.
+        vge = mission(1, 41, NEAR, is_alliance=True, vehicle_state=1,
+                      caption="[Verband] VGE")
+        plan = plan_dispatches(
+            [vge], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.OFF,
+                            mission_source=frozenset({MissionSource.OWN, MissionSource.ALLIANCE})),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        mp = plan.planned[0]
+        self.assertEqual(mp.mission_id, 1)
+        self.assertEqual(len(mp.vehicle_ids), 1)  # exactly one spare, not a real crew
+        self.assertFalse(mp.satisfied)
+
+    def test_vge_mission_gets_nothing_more_once_already_on_it(self):
+        # Once our one participation vehicle is in (tracked via `assigned`),
+        # later cycles must send NOTHING further -- not even a top-up, unlike
+        # a normal on_it mission's "always finish what's started" rule.
+        vge = mission(1, 41, NEAR, is_alliance=True, vehicle_state=1,
+                      caption="[Verband] VGE")
+        plan = plan_dispatches(
+            [vge], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, top_up_scope=ModeScope.ALLIANCE),
+            assigned={1: [0]},  # already claimed participation with an LF
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [])  # handled silently, not reported as skipped
+
+    def test_vge_mission_handled_even_with_no_spare_available(self):
+        # No usable vehicle at all for the spare claim -- still marked
+        # handled (no fallback to a real dispatch attempt), just silently
+        # does nothing this cycle.
+        vge = mission(1, 41, NEAR, is_alliance=True, vehicle_state=1,
+                      caption="[Verband] VGE")
+        plan = plan_dispatches(
+            [vge], [], [building()], self.resolver, DispatchPolicy(radius_km=40),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [])
+
+    def test_vge_override_does_not_apply_to_own_missions(self):
+        # The restriction is about the ALLIANCE's Leitungsteam controlling a
+        # shared incident -- an own (not alliance-shared) mission of the same
+        # type id dispatches completely normally.
+        own_vge_type = mission(1, 41, NEAR, is_alliance=False)
+        plan = plan_dispatches(
+            [own_vge_type], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40),
+        )
+        # mission type 41 isn't in the test fixture catalog, so this resolves
+        # to "no requirements found" rather than a real crew -- the point is
+        # only that it reaches NORMAL handling, not the VGE override.
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "no requirements found")])
+
+    def test_vge_override_does_not_misfire_on_an_own_hilferuf_shared_mission(self):
+        # Code-review finding, 2026-10-07: a player's OWN mission of a
+        # VGE-matching type (here: 41, a real id in _VGE_MISSION_TYPE_IDS),
+        # shared via Hilferuf, with own_user_id still unresolved (no other
+        # unshared own mission around to infer it from) -- raw is_alliance is
+        # now True, but it carries no "[Verband]" tag (never does, it's
+        # genuinely ours) and no user_id to cross-check. _confidently_alliance
+        # must treat this as "not confidently alliance" rather than guessing,
+        # so the VGE override does NOT fire and this still gets a real, full
+        # dispatch. (Type 41 isn't in the shared test fixture catalog, so a
+        # small dedicated one is built here, mirroring the one-off
+        # MissionCatalog pattern used elsewhere in these tests.)
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=41, name="VGE-type", average_credits=100,
+                          requirements={"firetrucks": 1}, chances={})
+        resolver = MissionRequirementResolver(MissionCatalog({41: mt}), self.lib_for_engine)
+        own_shared = mission(1, 41, NEAR, is_alliance=True, caption="M1")  # no [Verband], own_user_id unknown
+        plan = plan_dispatches(
+            [own_shared], [vehicle(100, LF)], [building()], resolver,
+            DispatchPolicy(radius_km=40),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].vehicle_ids, (100,))
+        self.assertTrue(plan.planned[0].satisfied)  # a real crew, not a lone spare
+
     # -- per-mode scoping -----------------------------------------------------
     def test_mode_scope_lets_normal_own_and_patient_alliance_coexist(self):
         # Normal dispatch own-only, patient-only on alliance: an own fire mission

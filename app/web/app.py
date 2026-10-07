@@ -431,6 +431,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
         top_up_scope: str = Form("off"),
         patient_scope: str = Form("off"),
         hilferuf_mode: str = Form("off"),
+        hilferuf_min_credits: int = Form(0),
         partial_starts: str = Form(""),
         batch_size: str = Form(""),
         allowed_categories: str = Form(""),
@@ -464,6 +465,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
             top_up_scope=top_up_scope,
             patient_scope=patient_scope,
             hilferuf_mode=hilferuf_mode,
+            hilferuf_min_credits=hilferuf_min_credits,
             partial_starts=bool(partial_starts),
             batch_size=_opt_int(batch_size),
             allowed_categories=tuple(

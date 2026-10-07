@@ -691,6 +691,95 @@ class RunnerTests(unittest.TestCase):
         asyncio.run(runner.run_cycle())
         self.assertEqual(client.shared, [])
 
+    def test_hilferuf_min_credits_blocks_small_missions_even_under_all(self):
+        # Sasha, 2026-10-07, quoting their alliance's own rule: "Kleineinsätze
+        # sind nicht freizugeben" -- a floor that holds even under ALL mode,
+        # which otherwise shares every own mission with no credit check at all.
+        # Fixture type 1 is a 170-credit mission; floor it out at 200.
+        async def no_sleep(_):
+            return None
+
+        client = FakeClient([m(1, 1)], [v(100, 0)], [b()])  # LF -- fully crewable
+        runner = DispatchRunner(
+            client, self.resolver,
+            DispatchPolicy(radius_km=40, hilferuf_mode=HilferufAggressiveness.ALL,
+                            hilferuf_min_credits=200),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.shared, [])
+        self.assertEqual(client.dispatched, [(1, 100)])  # still dispatched normally
+
+    def test_hilferuf_min_credits_lets_big_missions_through(self):
+        # Same floor, but a mission worth enough still gets shared.
+        async def no_sleep(_):
+            return None
+
+        client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
+        runner = DispatchRunner(
+            client, self.resolver,
+            DispatchPolicy(radius_km=40, hilferuf_mode=HilferufAggressiveness.ALL,
+                            hilferuf_min_credits=100),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.shared, [1])
+
+    def test_hilferuf_min_credits_also_applies_to_uncrewable_mode(self):
+        # The floor is universal -- not just an ALL-mode carve-out.
+        async def no_sleep(_):
+            return None
+
+        client = FakeClient([m(1, 1)], [v(100, 32)], [b()])  # need fire, only police
+        runner = DispatchRunner(
+            client, self.resolver,
+            DispatchPolicy(radius_km=40, hilferuf_mode=HilferufAggressiveness.UNCREWABLE,
+                            hilferuf_min_credits=200),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.shared, [])
+
+    def test_hilferuf_min_credits_zero_means_no_floor(self):
+        # Default (0) must not change any existing behavior.
+        async def no_sleep(_):
+            return None
+
+        client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
+        runner = DispatchRunner(
+            client, self.resolver,
+            DispatchPolicy(radius_km=40, hilferuf_mode=HilferufAggressiveness.ALL,
+                            hilferuf_min_credits=0),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.shared, [1])
+
+    def test_hilferuf_min_credits_prefers_the_missions_own_value_over_the_type_average(self):
+        # Code-review gap, 2026-10-07: every other hilferuf_min_credits test
+        # uses m(), which never sets average_credits, so they only exercise
+        # the mtype.average_credits fallback. Fixture type 1 averages 170
+        # credits; a per-instance override to 500 must win over that, both
+        # when it clears the floor and when the type's own average wouldn't.
+        async def no_sleep(_):
+            return None
+
+        own_credits_mission = SimpleNamespace(id=1, caption="M1", mission_type_id=1,
+                                              position=NEAR, status="unknown",
+                                              vehicle_state=0, average_credits=500)
+        client = FakeClient([own_credits_mission], [v(100, 0)], [b()])
+        runner = DispatchRunner(
+            client, self.resolver,
+            # Floor (300) sits ABOVE the type's own 170-credit average but
+            # BELOW this specific mission's 500 -- only passes if the
+            # mission's own average_credits is what's actually checked.
+            DispatchPolicy(radius_km=40, hilferuf_mode=HilferufAggressiveness.ALL,
+                            hilferuf_min_credits=300),
+            timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
+        )
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(client.shared, [1])
+
     def test_transport_phase_sends_fms5_vehicles(self):
         # A vehicle in FMS 5 (has a patient) gets its first offered target hit.
         v5 = SimpleNamespace(id=77, type_id=28, is_available=False, position=BUILDING, fms=5)

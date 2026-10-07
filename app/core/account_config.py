@@ -65,6 +65,9 @@ class AccountConfig:
     # Hilferuf: off / uncrewable (only own missions we couldn't crew this
     # cycle) / all (every own, not-yet-shared mission, regardless of crew).
     hilferuf_mode: str = HilferufAggressiveness.OFF.value
+    # Never share a mission worth less than this many credits, regardless of
+    # hilferuf_mode -- an absolute floor under even "all". 0 = no floor.
+    hilferuf_min_credits: int = 0
     # Partial dispatch: send what we have even if we can't fully crew a mission.
     partial_starts: bool = False
     # transport
@@ -126,6 +129,7 @@ class AccountConfig:
             top_up_scope=_scope(self.top_up_scope),
             patient_scope=_scope(self.patient_scope),
             hilferuf_mode=hilferuf_mode,
+            hilferuf_min_credits=self.hilferuf_min_credits,
             partial_starts=self.partial_starts,
         )
 
