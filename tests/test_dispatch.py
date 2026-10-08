@@ -1360,6 +1360,180 @@ class DispatchPlannerTests(unittest.TestCase):
         planned_ids = {p.mission_id for p in plan.planned}
         self.assertIn(2, planned_ids)
 
+    # -- unstick-first ordering (Sasha, 2026-10-07) ----------------------------
+    # "a 30 vehicle mission that waits for 1 single LF can be unstuck, freeing
+    # up 29 more vehicles" -- any mission with vehicles already ARRIVED is
+    # ranked by closeness to completion (still_missing/arrived, ascending)
+    # and dispatched -- fully, never partially -- before any fresh candidate,
+    # regardless of `order`, and exempt from `batch_size`.
+
+    def _fillable_resolver(self, *type_specs):
+        """A resolver over just the given (id, requirements, credits) mission
+        types -- these tests need real, known totals to compute ratios
+        against, not the shared fixture's."""
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        types = {
+            tid: MissionType(id=tid, name=f"T{tid}", average_credits=credits,
+                              requirements=reqs, chances={})
+            for tid, reqs, credits in type_specs
+        }
+        return MissionRequirementResolver(MissionCatalog(types), self.lib_for_engine)
+
+    def test_unstick_first_outranks_order_for_a_fillable_mission(self):
+        # Mission 1 wants 5 firetrucks total, missing_text now reveals only 1
+        # still missing -> 4 arrived, ratio 1/4. Mission 2 is a fresh, cheap
+        # mission CREDITS_LOW would normally put first. The pool only has one
+        # LF -- it must go to the almost-finished mission, not the cheaper
+        # fresh one.
+        resolver = self._fillable_resolver((950, {"firetrucks": 5}, 1000), (951, {"firetrucks": 1}, 10))
+        almost_done = mission(1, 950, NEAR, vehicle_state=1,
+                              missing_text='{"vehicles":"1 Löschfahrzeuge (LF)","personnel":"","other":""}')
+        fresh_cheap = mission(2, 951, NEAR2)
+        plan = plan_dispatches(
+            [almost_done, fresh_cheap], [vehicle(100, LF)], [building()], resolver,
+            DispatchPolicy(radius_km=40, order=DispatchOrder.CREDITS_LOW),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].mission_id, 1)
+        self.assertTrue(plan.planned[0].satisfied)
+        self.assertIn((2, "not enough vehicles: short firetrucks x1"), plan.skipped)
+
+    def test_unstick_unfillable_mission_is_skipped_not_partially_sent(self):
+        # Needs 2 more LF to finish; the pool only has 1 LF anywhere -- ruled
+        # unfillable and skipped (no partial trickle). Mission 2 needs a
+        # DIFFERENT class (police, not firetrucks) so it isn't blocked by
+        # mission 1's own (correct, pre-existing) reservation of the LF type
+        # it's still legitimately waiting on -- it still gets handled normally.
+        resolver = self._fillable_resolver((950, {"firetrucks": 5}, 1000), (951, {"police_cars": 1}, 10))
+        almost_done = mission(1, 950, NEAR, vehicle_state=1,
+                              missing_text='{"vehicles":"2 Löschfahrzeuge (LF)","personnel":"","other":""}')
+        fresh_cheap = mission(2, 951, NEAR2)
+        plan = plan_dispatches(
+            [almost_done, fresh_cheap], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], resolver,
+            DispatchPolicy(radius_km=40),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].mission_id, 2)
+        # The shortfall is reported as what's still missing AFTER using the
+        # one LF coverage could already find toward it (2 wanted, 1 on
+        # hand -> 1 further short), not the full original count.
+        self.assertIn((1, "not enough vehicles: short Löschfahrzeuge (LF) x1"), plan.skipped)
+
+    def test_unstick_fills_are_exempt_from_batch_size(self):
+        resolver = self._fillable_resolver((950, {"firetrucks": 5}, 1000))
+        almost_done = mission(1, 950, NEAR, vehicle_state=1,
+                              missing_text='{"vehicles":"1 Löschfahrzeuge (LF)","personnel":"","other":""}')
+        plan = plan_dispatches(
+            [almost_done], [vehicle(100, LF)], [building()], resolver,
+            DispatchPolicy(radius_km=40, batch_size=0),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].mission_id, 1)
+
+    def test_unstick_ranks_closest_to_complete_first_among_several_fillable(self):
+        # Mission 1: 30 wanted, 1 missing -> arrived 29, ratio ~0.034 (nearly
+        # done). Mission 2: 2 wanted, 1 missing -> arrived 1, ratio 1.0
+        # (barely started), and worth far more credits. Only one LF exists
+        # anywhere -- closeness to completion must win over both credits and
+        # list order (mission 2 listed first here, on purpose).
+        resolver = self._fillable_resolver(
+            (950, {"firetrucks": 30}, 100), (951, {"firetrucks": 2}, 9999),
+        )
+        barely_started = mission(2, 951, NEAR2, vehicle_state=1,
+                                 missing_text='{"vehicles":"1 Löschfahrzeuge (LF)","personnel":"","other":""}')
+        almost_done = mission(1, 950, NEAR, vehicle_state=1,
+                              missing_text='{"vehicles":"1 Löschfahrzeuge (LF)","personnel":"","other":""}')
+        plan = plan_dispatches(
+            [barely_started, almost_done], [vehicle(100, LF)], [building()], resolver,
+            DispatchPolicy(radius_km=40, order=DispatchOrder.CREDITS_HIGH),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].mission_id, 1)
+
+    def test_unstick_does_not_apply_to_an_unknown_mission_type(self):
+        # No catalogue entry at all -> no computable total -> the fillable
+        # check's `mtype is not None` guard simply doesn't fire, falling
+        # through to the normal fresh-candidate path unchanged. That path
+        # itself can't resolve anything for an unknown type either (same as
+        # today, unrelated to this feature) -- the point here is only that
+        # it's handled as "no requirements found", not mis-ranked or errored.
+        unknown = mission(1, 999, NEAR, vehicle_state=1,
+                          missing_text='{"vehicles":"1 Löschfahrzeuge (LF)","personnel":"","other":""}')
+        plan = plan_dispatches(
+            [unknown], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "no requirements found")])
+
+    def test_unstick_excludes_a_fresh_untouched_mission_even_with_a_known_total(self):
+        # Code-review finding, 2026-10-08: vehicle_state == 0 alone must keep
+        # a mission out of the fillable bucket -- nothing could have arrived
+        # yet, whatever the catalogue total says. Pool scarce enough that
+        # only one of two equal-cost candidates gets the LF; if the untouched
+        # mission wrongly jumped the queue it would win despite listed second.
+        resolver = self._fillable_resolver((950, {"firetrucks": 1}, 100), (951, {"firetrucks": 1}, 100))
+        fresh_first = mission(2, 951, NEAR2)
+        untouched_second = mission(1, 950, NEAR)  # vehicle_state=0 default
+        plan = plan_dispatches(
+            [untouched_second, fresh_first], [vehicle(100, LF)], [building()], resolver,
+            DispatchPolicy(radius_km=40),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].mission_id, 2)  # order (nearest), not a bogus unstick jump
+
+    def test_unstick_excludes_a_mission_with_an_unresolvable_catalogue_class(self):
+        # Code-review finding, 2026-10-08: vehicle_requirements() silently
+        # DROPS a catalogue class it can't map to any vehicle type (a real,
+        # tested, documented behavior -- see tests/test_resolver.py's
+        # test_unknown_class_is_reported_not_dropped) -- so total_wanted
+        # (every declared class) and still_missing_raw (only the resolvable
+        # ones) would otherwise enumerate different class sets, fabricating
+        # an "arrived" count. Even WITH vehicle_state=1, this must not be
+        # classified fillable -- proven here via batch_size=0: a fillable
+        # dispatch is exempt from it (see the batch-exemption test above), so
+        # if this mission wrongly entered that bucket it would still be
+        # dispatched despite batch_size=0; correctly excluded, it must go
+        # through the normal batch-respecting path and get capped out.
+        resolver = self._fillable_resolver((950, {"totally_unknown_class": 3, "firetrucks": 1}, 9999))
+        buggy = mission(1, 950, NEAR, vehicle_state=1)
+        plan = plan_dispatches(
+            [buggy], [vehicle(100, LF)], [building()], resolver,
+            DispatchPolicy(radius_km=40, batch_size=0),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "beyond batch size")])
+
+    def test_unstick_never_partial_even_with_partial_starts_on(self):
+        # partial_starts is scoped to fresh sends only (established earlier
+        # this session) -- confirm it does NOT leak into the unstick pass:
+        # an unfillable-this-cycle mission still gets nothing, not a partial.
+        resolver = self._fillable_resolver((950, {"firetrucks": 5}, 1000))
+        almost_done = mission(1, 950, NEAR, vehicle_state=1,
+                              missing_text='{"vehicles":"2 Löschfahrzeuge (LF)","personnel":"","other":""}')
+        plan = plan_dispatches(
+            [almost_done], [vehicle(100, LF)], [building()], resolver,
+            DispatchPolicy(radius_km=40, partial_starts=True),
+        )
+        self.assertEqual(plan.planned, [])
+        self.assertIn((1, "not enough vehicles: short Löschfahrzeuge (LF) x1"), plan.skipped)
+
+    def test_unstick_applies_to_topup_governed_missions_too(self):
+        # The only exclusion is governing == "patient" -- a topup-governed
+        # fillable candidate still jumps ahead of a fresh one, same as normal.
+        resolver = self._fillable_resolver((950, {"firetrucks": 5}, 1000), (951, {"firetrucks": 1}, 9999))
+        almost_done = mission(1, 950, NEAR, is_alliance=True, vehicle_state=1,
+                              missing_text='{"vehicles":"1 Löschfahrzeuge (LF)","personnel":"","other":""}')
+        fresh_expensive = mission(2, 951, NEAR2, is_alliance=False)
+        plan = plan_dispatches(
+            [almost_done, fresh_expensive], [vehicle(100, LF)], [building()], resolver,
+            DispatchPolicy(radius_km=40, top_up_scope=ModeScope.ALLIANCE, order=DispatchOrder.CREDITS_HIGH),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].mission_id, 1)  # topup-governed, but still unstick-first
+
 
 if __name__ == "__main__":
     unittest.main()

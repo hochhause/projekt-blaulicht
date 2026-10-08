@@ -368,6 +368,33 @@ def plan_dispatches(
     (epoch seconds) drives the alliance age-since-shared window. *own_user_id*
     (see :func:`is_own_mission`) tells a genuinely-own mission apart from one
     merely visible via alliance sharing, even after it's been shared.
+
+    Unstick-first ordering (Sasha, 2026-10-07): among every candidate this
+    cycle gathers (after the SAME filters as always — radius/scope/category/
+    credits — this only reorders the already-eligible set, it doesn't widen
+    it), any mission that already has vehicles ARRIVED gets ranked by how
+    close it is to complete (``still_missing / arrived``, ascending — a
+    30-vehicle mission waiting on 1 more outranks a fresh 2-vehicle one,
+    since finishing it unsticks the other 29 already stuck there) and
+    dispatched BEFORE any genuinely fresh mission, in that order, each only
+    if the pool can fully satisfy it right now (never a partial trickle —
+    ``partial_starts`` stays scoped to fresh sends only, same as today) and
+    exempt from ``batch_size`` (finishing an unstick is never deferred).
+    "Arrived" is derived, not fetched: ``mtype.requirements`` (what the
+    mission type originally asks for) minus the current raw, non-delta
+    ``vehicle_requirements()`` count (what's still missing AT THE SCENE,
+    live-confirmed to only decrement once a vehicle has actually arrived,
+    never for one merely en route) — so it's correct for everyone's arrived
+    vehicles, not just ours, without needing to see anyone's en-route state.
+    A mission with no usable catalogue total (unknown type, or governed as
+    patient-only, which has no such fixed total) simply can't be ranked this
+    way and falls through to the normal fresh-candidate path unchanged. Same
+    for one still at ``vehicle_state == 0`` (nothing could have arrived yet)
+    or whose ``vehicle_requirements()`` reports any unmatched catalogue class
+    (code review, 2026-10-08: that silently drops the unmapped class from
+    the "still missing" side only, so the subtraction would compare two
+    different class sets and could fabricate an "arrived" count for a
+    mission that hasn't actually started).
     """
     plan = DispatchPlan()
     origins = [b.position for b in buildings if getattr(b, "position", None)]
@@ -411,7 +438,8 @@ def plan_dispatches(
 
     # Gather in-range, category-allowed missions with their distance, the mission
     # type's average credits (for ordering) and the governing mode.
-    candidates: list[tuple[float, int, object, str]] = []  # (distance, credits, mission, mode)
+    candidates: list[tuple[float, int, object, str, float]] = []  # (distance, credits, mission, mode, efficiency)
+    fillable: list[tuple[float, object, str]] = []  # (ratio, mission, governing) -- see "unstick-first" above
     for mission in missions:
         if mission.id in handled:
             continue  # already actioned in the priority pass
@@ -478,6 +506,40 @@ def plan_dispatches(
         # short a vehicle category -- see _reserve_vehicle_group's docstring.
         _reserve_vehicle_group(reserved_type_ids, mission, mtype, resolver, assigned,
                                 patient_governed=(governing == "patient"))
+        # Unstick-first: does this mission already have vehicles ARRIVED (see
+        # plan_dispatches' own docstring for the "total minus raw-still-
+        # missing" derivation)? If so, it skips the normal order/batch path
+        # entirely -- it's ranked and dispatched in its own pass below,
+        # before any fresh candidate. Not meaningful for patient governing
+        # (no fixed vehicle-class total to measure against).
+        #
+        # Two guards, both load-bearing (code review, 2026-10-08): (1) only
+        # for vehicle_state >= 1 -- mirrors _reserve_vehicle_group's own
+        # precondition just above, and is true for every genuinely "arrived"
+        # mission anyway; without it, a completely untouched (vehicle_state
+        # 0) mission can still trip the arithmetic below into a false
+        # "arrived" count. (2) only if `vehicle_requirements` reports NO
+        # unmatched class -- it silently DROPS any catalogue class it can't
+        # map to a vehicle type (a known, tested, documented data-gap
+        # behavior, not a bug in it), so `still_missing_raw` can legitimately
+        # enumerate a different, smaller class set than `total_wanted`
+        # (which sums literally every declared class, mapped or not). Either
+        # gap alone makes the subtraction meaningless, not just imprecise --
+        # skip fillable classification entirely rather than risk a mission
+        # that hasn't actually started jumping the queue and bypassing
+        # batch_size on a fabricated "almost done" reading.
+        if (governing != "patient" and mtype is not None and mtype.requirements
+                and getattr(mission, "vehicle_state", 0) >= 1):
+            total_wanted = sum(int(n) for n in mtype.requirements.values())
+            if total_wanted > 0:
+                raw_reqs, raw_unmatched = resolver.vehicle_requirements(mission, mtype)
+                if not raw_unmatched:
+                    still_missing_raw = sum(r.count for r in raw_reqs)
+                    arrived = total_wanted - still_missing_raw
+                    if arrived > 0:
+                        ratio = still_missing_raw / arrived
+                        fillable.append((ratio, mission, governing))
+                        continue
         # SMART order ranks by credits PER VEHICLE NEEDED (not raw credits) —
         # a cheap, well-known knapsack heuristic: one expensive mission that
         # eats a rare vehicle type can deny several cheaper missions worth
@@ -509,6 +571,22 @@ def plan_dispatches(
                 vehicles_needed += -(-fire_needed // max(1, int(avg_fire_crew)))  # ceil division
             efficiency = credits / max(1, vehicles_needed)
         candidates.append((distance, credits, mission, governing, efficiency))
+
+    # Unstick pass: every fillable candidate, closest-to-complete first,
+    # dispatched (fully, never partial) BEFORE any fresh candidate below and
+    # exempt from batch_size -- see plan_dispatches' own docstring.
+    fillable.sort(key=lambda t: t[0])
+    for _ratio, mission, governing in fillable:
+        outcome = _plan_one(mission, pool, resolver, policy, assigned, building_pos,
+                            text_engine, allow_partial=False,
+                            patient_only=False, shortfalls=plan.shortfalls)
+        if isinstance(outcome, str):
+            plan.skipped.append((mission.id, outcome))
+            continue
+        mission_plan, chosen = outcome
+        plan.planned.append(mission_plan)
+        chosen_set = set(chosen)
+        pool = [v for v in pool if v.id not in chosen_set]
 
     candidates = _order(candidates, policy.order)
 
