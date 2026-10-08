@@ -811,10 +811,55 @@ def _outstanding(mission, resolver, text_engine, assigned, patient_only=False):
     )
 
 
+# Abrollbehälter/Anhänger (towed) types with a genuinely self-propelled
+# alternative satisfying the SAME requirement category somewhere in our data
+# (confirmed against LSSM's own vehiclesByRequirement table, 2026-10-08, not
+# guessed — each one listed below co-occurs with at least one non-towed type
+# id in some category entry). These get a distance PENALTY in vehicle
+# selection so an equally-eligible self-propelled vehicle is preferred
+# unless the towed one is meaningfully closer (Sasha, 2026-10-08): whichever
+# vehicle tows one of these (a WLF or similar) is locked to it for the whole
+# job, so spending that tow commitment only makes sense when there's truly
+# no closer self-driving option. AB/Anh types with NO self-propelled sibling
+# anywhere (e.g. AB-Tank, Anh TeSi, Anh Plattform) are deliberately excluded
+# — there's nothing to prefer instead, so penalizing them would only delay a
+# dispatch that always needed the tow anyway.
+_TOWED_WITH_SELF_PROPELLED_ALTERNATIVE = frozenset({
+    47,        # AB-Rüst            vs. the whole LF/HLF/RW family
+    48,        # AB-Atemschutz      vs. GW-Atemschutz (5)
+    49,        # AB-Öl              vs. GW-Öl (10)
+    54,        # AB-Dekon-P         vs. Dekon-P (53)
+    62,        # AB-Schlauch        vs. the GW-L2-Wasser/SW family
+    66, 67, 68, 71,  # Anh MzB / Anh SchlB / Anh MzAB / AB-MZB vs. the self-propelled Boot (70)
+    77,        # AB-Gefahrgut       vs. GW-Gefahrgut (27)
+    # AB-Einsatzleitung vs. plain ELW 1/2 (3, 34, 128). 129 (ELW2-Drohne) is
+    # also a sibling per the data, but the penalty is structurally inert
+    # against it specifically: select_coverage's specialist tier (see
+    # _ELW_SPECIALIST_TYPE_IDS) is compared before distance, so AB-
+    # Einsatzleitung already wins over an ELW2-Drohne regardless of distance
+    # -- noted here only so a future reader doesn't expect the 7km figure to
+    # be what's deciding that particular matchup (code review, 2026-10-08).
+    78,
+    101, 102,  # Anh SwPu / Anh 7   vs. the GW-L2-Wasser/SW family
+    115, 116,  # Anh Lüfter / AB-Lüfter vs. GW-Lüfter (114)
+    119,       # AB-Lösch           vs. the whole LF/TLF family
+    143,       # Anh Schlauch       vs. the GW-L2-Wasser/SW family
+    155,       # Anh Höhenrettung (Bergrettung) vs. GW-Höhenrettung (33, 158)
+    164,       # AB-Schiene         vs. HLF Schiene / Bahnrettungsfahrzeug (162, 163)
+    178,       # Anh 12 Lbw (FGr Log-V) vs. the Bt-Kombi/GW-Bt family
+    179,       # AB-NEA50           vs. the self-propelled NEA50 carriers
+    180,       # AB-NEA200          vs. the self-propelled NEA200 carriers
+})
+_TOWED_DISTANCE_PENALTY_KM = 7.0
+
+
 def _distance_fn(mission_pos, building_pos):
     def distance_of(vehicle) -> float:
         vp = getattr(vehicle, "position", None) or building_pos.get(getattr(vehicle, "building_id", None))
-        return haversine_km(mission_pos, vp) if (vp and mission_pos) else float("inf")
+        km = haversine_km(mission_pos, vp) if (vp and mission_pos) else float("inf")
+        if km != float("inf") and getattr(vehicle, "type_id", None) in _TOWED_WITH_SELF_PROPELLED_ALTERNATIVE:
+            km += _TOWED_DISTANCE_PENALTY_KM
+        return km
     return distance_of
 
 

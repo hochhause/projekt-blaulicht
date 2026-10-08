@@ -12,6 +12,7 @@ from app.domain.dispatch import (
     ModeScope,
     ParasiteAggressiveness,
     _infer_own_user_id,
+    _TOWED_WITH_SELF_PROPELLED_ALTERNATIVE,
     assigned_from_vehicles,
     plan_dispatches,
 )
@@ -1533,6 +1534,79 @@ class DispatchPlannerTests(unittest.TestCase):
         )
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].mission_id, 1)  # topup-governed, but still unstick-first
+
+    # -- towed (AB/Anh) distance penalty (Sasha, 2026-10-08) -------------------
+    # A WLF (or similar) that tows an AB/Anh is locked to it for the whole job
+    # -- prefer an equally-eligible self-propelled alternative unless the
+    # towed one is meaningfully closer (by more than the 7km penalty).
+
+    def test_towed_variant_loses_the_tiebreak_at_equal_distance(self):
+        # Dekon-P (53, self-propelled) vs AB-Dekon-P (54, towed) -- same
+        # position, so only the penalty decides.
+        m = mission(1, 1, NEAR, vehicle_state=1,
+                   missing_text='{"vehicles":"1 Dekon-P","personnel":"","other":""}')
+        self_propelled = vehicle(100, 53, pos=NEAR)
+        towed = vehicle(101, 54, pos=NEAR)
+        plan = self.plan([m], [towed, self_propelled])  # towed listed first, on purpose
+        self.assertEqual(plan.planned[0].vehicle_ids, (100,))
+
+    def test_towed_variant_still_wins_when_meaningfully_closer(self):
+        # Towed one is right at the scene; the self-propelled alternative is
+        # far away -- the penalty (7km) must not override a real, larger gap.
+        m = mission(1, 1, NEAR, vehicle_state=1,
+                   missing_text='{"vehicles":"1 Dekon-P","personnel":"","other":""}')
+        towed_here = vehicle(101, 54, pos=NEAR)
+        self_propelled_far = vehicle(100, 53, pos=FAR)
+        plan = self.plan([m], [towed_here, self_propelled_far])
+        self.assertEqual(plan.planned[0].vehicle_ids, (101,))
+
+    def test_towed_variant_without_a_self_propelled_sibling_is_unpenalized(self):
+        # AB-Tank (117) has no self-propelled alternative anywhere in our
+        # data -- confirm it's genuinely excluded from the penalty set, not
+        # just untested (picked at equal distance against a DIFFERENT, also
+        # towed type with no penalty either, to isolate the exclusion itself).
+        self.assertNotIn(117, _TOWED_WITH_SELF_PROPELLED_ALTERNATIVE)
+        self.assertIn(54, _TOWED_WITH_SELF_PROPELLED_ALTERNATIVE)
+
+    def test_towed_penalty_set_matches_a_fresh_derivation_from_committed_data(self):
+        # Drift canary (code review, 2026-10-08): _TOWED_WITH_SELF_PROPELLED_
+        # ALTERNATIVE is a hand-derived snapshot of data/reference/lssm-
+        # missing-requirements.json + data/de/vehicles/*.mscv's own vehicle
+        # names, hardcoded rather than loaded at runtime (that data changes
+        # only on a deliberate, reviewed refresh -- this project's own
+        # precedent for the LAST such refresh, this same session, was a
+        # manual diff-and-update, not an auto-reload). This test re-derives
+        # the set fresh from the committed files and fails loudly if a future
+        # data refresh changes which AB/Anh types have a self-propelled
+        # sibling, instead of the hardcoded set silently drifting stale.
+        import glob
+        import re
+
+        ab_anh: dict[int, str] = {}
+        for f in glob.glob(str(VEHICLES_DIR / "*.mscv")):
+            m = re.search(r"(\d+)\.mscv$", f)
+            if not m:
+                continue
+            tid = int(m.group(1))
+            text = Path(f).read_text(encoding="utf-8")
+            bm = re.search(r'"base"\s*:\s*\[(.*?)\]', text, re.S)
+            if not bm:
+                continue
+            names = re.findall(r'"([^"]+)"', bm.group(1))
+            first = names[0] if names else ""
+            if first.startswith("AB-") or first.startswith("Anh "):
+                ab_anh[tid] = first
+
+        lssm_path = BASE.parent / "data" / "reference" / "lssm-missing-requirements.json"
+        lssm = json.loads(lssm_path.read_text(encoding="utf-8"))
+        derived: set[int] = set()
+        for entry in lssm["vehiclesByRequirement"]:
+            vids = set(entry.get("vehicles", []))
+            present = vids & set(ab_anh)
+            if present and (vids - set(ab_anh)):  # at least one non-AB/Anh sibling in the SAME entry
+                derived |= present
+
+        self.assertEqual(derived, _TOWED_WITH_SELF_PROPELLED_ALTERNATIVE)
 
 
 if __name__ == "__main__":
