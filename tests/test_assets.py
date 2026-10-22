@@ -12,8 +12,9 @@ class AssetLoadingTests(unittest.TestCase):
         cls.lib = AssetLibrary.load(VEHICLES_DIR)
 
     def test_all_type_files_loaded(self):
-        # 186 files on disk minus Vehicle.mscv = 185 vehicle types.
-        self.assertEqual(len(self.lib.types), 185)
+        # 192 files on disk (186 + 187-192, the 2026-10 wildfire update) minus
+        # Vehicle.mscv = 191 vehicle types.
+        self.assertEqual(len(self.lib.types), 191)
 
     def test_class_map_known_groups(self):
         cm = self.lib.class_map
@@ -22,6 +23,32 @@ class AssetLoadingTests(unittest.TestCase):
         self.assertEqual(cm.by_class["ambulances"], (28, 74))
         # reverse index
         self.assertIn("ambulances", cm.class_of[28])
+
+    def test_wildfire_classes_mapped(self):
+        # 2026-10-12 wildfire update: TLF 3000 W / TLF 5000 W / GTLF 10000 W
+        # are pump-equipped brush trucks -- BOTH the dedicated "brush_truck"
+        # catalog class AND plain "firetrucks" (same multi-role precedent as
+        # HLF 20/10 already being in both "firetrucks" and
+        # "heavy_rescue_vehicles"). GW-Waldbrand/Anh Waldbrand/AB-Waldbrand
+        # share one dedicated "wildfire_equipment" class instead (confirmed
+        # from LSSM's own category table, which groups all three under one
+        # "GW-Waldbrand" text), and are deliberately NOT in "firetrucks".
+        cm = self.lib.class_map
+        self.assertEqual(cm.by_class["brush_truck"], (187, 188, 189))
+        self.assertEqual(cm.by_class["wildfire_equipment"], (190, 191, 192))
+        for tid in (187, 188, 189):
+            self.assertIn(tid, cm.by_class["firetrucks"])
+        for tid in (190, 191, 192):
+            self.assertNotIn(tid, cm.by_class["firetrucks"])
+
+    def test_brush_truck_capacities_parsed(self):
+        # Confirmed from the live vehicle API, 2026-10-12.
+        tlf3000w, tlf5000w, gtlf10000w = self.lib.types[187], self.lib.types[188], self.lib.types[189]
+        self.assertEqual(tlf3000w.capacities.get("water"), 3000.0)
+        self.assertEqual(tlf3000w.capacities.get("pump"), 2000.0)
+        self.assertEqual(tlf5000w.capacities.get("water"), 5000.0)
+        self.assertEqual(gtlf10000w.capacities.get("water"), 10000.0)
+        self.assertEqual(gtlf10000w.capacities.get("pump"), 2000.0)
 
     def test_lf_capacities_parsed(self):
         lf = self.lib.types[0]

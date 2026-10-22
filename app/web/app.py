@@ -432,6 +432,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
         patient_scope: str = Form("off"),
         hilferuf_mode: str = Form("off"),
         hilferuf_min_credits: int = Form(0),
+        parasite_scarce_threshold: int = Form(8),
         partial_starts: str = Form(""),
         batch_size: str = Form(""),
         allowed_categories: str = Form(""),
@@ -466,6 +467,7 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
             patient_scope=patient_scope,
             hilferuf_mode=hilferuf_mode,
             hilferuf_min_credits=hilferuf_min_credits,
+            parasite_scarce_threshold=parasite_scarce_threshold,
             partial_starts=bool(partial_starts),
             batch_size=_opt_int(batch_size),
             allowed_categories=tuple(

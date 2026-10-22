@@ -68,6 +68,9 @@ class AccountConfig:
     # Never share a mission worth less than this many credits, regardless of
     # hilferuf_mode -- an absolute floor under even "all". 0 = no floor.
     hilferuf_min_credits: int = 0
+    # Parasite mode never spends a vehicle type we own this few or fewer of,
+    # fleet-wide. 0 = off. See DispatchPolicy.parasite_scarce_threshold.
+    parasite_scarce_threshold: int = 8
     # Partial dispatch: send what we have even if we can't fully crew a mission.
     partial_starts: bool = False
     # transport
@@ -130,6 +133,7 @@ class AccountConfig:
             patient_scope=_scope(self.patient_scope),
             hilferuf_mode=hilferuf_mode,
             hilferuf_min_credits=self.hilferuf_min_credits,
+            parasite_scarce_threshold=self.parasite_scarce_threshold,
             partial_starts=self.partial_starts,
         )
 

@@ -54,6 +54,14 @@ _SONDERLOESCHMITTEL_TYPE_IDS = frozenset({167})
 # Sonderlöschmittel trailer above, mirrored at the other end of the scale).
 _WATER_PUMP_TYPE_IDS = frozenset({
     0, 1, 6, 7, 8, 9, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 30, 37, 87, 88, 89, 90, 121,
+    # TLF 3000 W / TLF 5000 W / GTLF 10000 W (187-189, 2026-10 wildfire update) --
+    # unlike plain GTLF (121), these DO carry a real pump (pumpCapacity 2000,
+    # confirmed via the vehicle API), so they're ordinary pump-equipped
+    # firetrucks for this purpose, not an exotic no-pump tanker. GW-Waldbrand/
+    # Anh Waldbrand/AB-Waldbrand (190-192) are deliberately excluded -- their
+    # small water/pump figures carry the same unmodeled "waterBonus" stacking
+    # mechanic as the GW-L2-Wasser bonus this set already excludes elsewhere.
+    187, 188, 189,
 })
 
 # A raw `other`/`personnel`-group chunk boundary, same convention as
@@ -195,21 +203,35 @@ class MissionRequirementResolver:
         self._ever_revealed: set[int] = ever_revealed if ever_revealed is not None else set()
 
     def effective_count_revealed(self, mission) -> bool:
-        """Whether a mission's revealed casualty/prisoner count — 0 or
-        otherwise — should be treated as authoritative, for :func:`_casualties`.
+        """Whether this mission has EVER shown a responder on scene — sticky,
+        per mission id, for this resolver's lifetime.
+
+        Originally added so a mission's revealed casualty/prisoner count — 0
+        or otherwise — could be treated as authoritative in :func:`_casualties`
+        (see below), but it's the right general-purpose "has this mission
+        actually started" check for ``dispatch.py`` too (reservation,
+        unstick-first eligibility, parasite/top-up's "already on it" gates,
+        "is this a fresh send") — ANY caller that needs to know "has this
+        mission ever been responded to" rather than "is someone there RIGHT
+        THIS INSTANT" should use this instead of the raw live field.
 
         ``vehicle_state`` is the game's own live field, and it is TRANSIENT:
         it reverts to 0 once no vehicle is CURRENTLY on scene, even on a
         mission that's already been fully worked and had every vehicle leave
         again (confirmed live, Sasha 2026-10-01: for missions whose patients
         appear over time, his medical vehicles leave the scene after handling
-        each one, by design, while the mission stays open). Trusting the live
-        field fresh every cycle therefore made an already-resolved mission
-        look "fresh" again the moment the last vehicle left, re-triggering the
-        max-possible fallback in `_casualties` — the reported ambulance/NEF
-        over-dispatch bug. A mission that has EVER shown a responder on scene
-        has permanently closed its "0 means hidden" ambiguity window, so that
-        fact is remembered per mission id for this resolver's lifetime instead
+        each one, by design, while the mission stays open — and again, Sasha
+        2026-10-22: a riot mission whose FuStW had already contributed and
+        moved on, still needing more BePol, read as untouched and lost its
+        reservation/priority treatment as a result). Trusting the live field
+        fresh every cycle therefore made an already-active mission look
+        "fresh" again the moment the last vehicle left — for `_casualties`,
+        that re-triggered the max-possible fallback (the reported ambulance/
+        NEF over-dispatch bug); for the dispatch.py call sites, it meant
+        losing reservation, unstick-first priority, and parasite/top-up
+        eligibility on a mission that was genuinely still open. A mission
+        that has EVER shown a responder on scene has permanently closed that
+        ambiguity window, so that fact is remembered per mission id instead
         of being re-derived from the live flag every single cycle."""
         mid = getattr(mission, "id", None)
         if getattr(mission, "vehicle_state", 0) >= 1:

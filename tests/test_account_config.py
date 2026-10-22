@@ -142,6 +142,15 @@ class AccountConfigTests(unittest.TestCase):
     def test_hilferuf_min_credits_defaults_to_zero_no_floor(self):
         self.assertEqual(AccountConfig().dispatch_policy().hilferuf_min_credits, 0)
 
+    def test_parasite_scarce_threshold_roundtrip_and_maps_to_policy(self):
+        cfg = AccountConfig(parasite_scarce_threshold=3)
+        again = AccountConfig.from_dict(cfg.to_dict())
+        self.assertEqual(again.parasite_scarce_threshold, 3)
+        self.assertEqual(again.dispatch_policy().parasite_scarce_threshold, 3)
+
+    def test_parasite_scarce_threshold_defaults_to_eight(self):
+        self.assertEqual(AccountConfig().dispatch_policy().parasite_scarce_threshold, 8)
+
     def test_policies_reflect_config(self):
         cfg = AccountConfig(
             radius_km=15, own_credit_min=200, alliance_credit_max=9000,

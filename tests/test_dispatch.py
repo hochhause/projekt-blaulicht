@@ -12,6 +12,7 @@ from app.domain.dispatch import (
     ModeScope,
     ParasiteAggressiveness,
     _infer_own_user_id,
+    _reserve_vehicle_group,
     _TOWED_WITH_SELF_PROPELLED_ALTERNATIVE,
     assigned_from_vehicles,
     plan_dispatches,
@@ -313,7 +314,8 @@ class DispatchPlannerTests(unittest.TestCase):
         para = mission(1, 3, FAR, is_alliance=True, average_credits=99999, vehicle_state=1)
         plan = plan_dispatches(
             [para], [vehicle(100, LF)], [building()], self.resolver,
-            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE, own_credit_max=1000),
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE, own_credit_max=1000,
+                            parasite_scarce_threshold=0),
         )
         # Useful (LF covers firetrucks part) OR leech — either way it's actioned,
         # despite being far and over the cash cap.
@@ -352,7 +354,7 @@ class DispatchPlannerTests(unittest.TestCase):
         plan = plan_dispatches(
             [para], [rtw, *lfs], [building()], self.resolver,
             DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
-                            patient_scope=ModeScope.ALLIANCE),
+                            patient_scope=ModeScope.ALLIANCE, parasite_scarce_threshold=0),
         )
         self.assertEqual(len(plan.planned), 1)
         sent = plan.planned[0]
@@ -369,7 +371,8 @@ class DispatchPlannerTests(unittest.TestCase):
             [para], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
             DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
                             parasite_mode=ParasiteAggressiveness.ALL,
-                            mission_source=frozenset({MissionSource.OWN})),
+                            mission_source=frozenset({MissionSource.OWN}),
+                            parasite_scarce_threshold=0),
         )
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].mission_id, 1)
@@ -383,7 +386,8 @@ class DispatchPlannerTests(unittest.TestCase):
         cheap = mission(1, 1, NEAR, is_alliance=False, average_credits=10)  # firetrucks:1
         policy = DispatchPolicy(radius_km=40, own_credit_min=1000,  # would filter it out normally
                                  parasite_scope=ModeScope.BOTH,
-                                 parasite_mode=ParasiteAggressiveness.ALL)
+                                 parasite_mode=ParasiteAggressiveness.ALL,
+                                 parasite_scarce_threshold=0)
         # Sanity: without ALL-mode parasite, the credit floor filters it out.
         plain = plan_dispatches([cheap], [vehicle(100, LF)], [building()], self.resolver,
                                  DispatchPolicy(radius_km=40, own_credit_min=1000))
@@ -415,10 +419,81 @@ class DispatchPlannerTests(unittest.TestCase):
             [needy], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
             DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
                             parasite_mode=ParasiteAggressiveness.NEEDED,
-                            mission_source=frozenset({MissionSource.OWN})),
+                            mission_source=frozenset({MissionSource.OWN}),
+                            parasite_scarce_threshold=0),
         )
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].mission_id, 1)
+
+    # -- Parasite scarce-vehicle threshold ---------------------------------
+
+    def test_parasite_scarce_threshold_withholds_a_scarce_type_from_useful_contribution(self):
+        # We own exactly 1 FUSTW fleet-wide -> scarce at threshold=2. 3 LFs
+        # owned -> comfortably abundant at the same threshold. Parasite must
+        # send an LF for the firetrucks slot but withhold the scarce FUSTW
+        # from the police_cars slot, leaving it unsatisfied.
+        para = mission(1, 3, NEAR, is_alliance=True, vehicle_state=1)
+        lfs = [vehicle(101, LF), vehicle(102, LF), vehicle(103, LF)]
+        plan = plan_dispatches(
+            [para], [vehicle(100, FUSTW), *lfs], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
+                            parasite_scarce_threshold=2),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        sent = plan.planned[0]
+        self.assertEqual(len(sent.vehicle_ids), 1)
+        self.assertIn(sent.vehicle_ids[0], {101, 102, 103})  # an LF, never the scarce FUSTW
+        self.assertFalse(sent.satisfied)
+        self.assertIn("police_cars", sent.shortfall)
+
+    def test_parasite_scarce_threshold_zero_means_no_floor(self):
+        # Same fleet as above, but the floor is off (default-equivalent) ->
+        # both classes get filled, including the "scarce" FUSTW.
+        para = mission(1, 3, NEAR, is_alliance=True, vehicle_state=1)
+        plan = plan_dispatches(
+            [para], [vehicle(100, FUSTW), vehicle(101, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
+                            parasite_scarce_threshold=0),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        sent = plan.planned[0]
+        self.assertEqual(set(sent.vehicle_ids), {100, 101})
+        self.assertTrue(sent.satisfied)
+
+    def test_parasite_scarce_threshold_falls_back_to_a_non_scarce_spare(self):
+        # Every type the mission could actually use (FUSTW, LF) is scarce (1
+        # owned each) -> the useful-contribution pick finds nothing, so the
+        # plain claim-a-spare fallback must also skip them and reach for the
+        # abundant, functionally-irrelevant ambulances instead.
+        para = mission(1, 3, NEAR, is_alliance=True, vehicle_state=1)
+        ambulances = [vehicle(102, 28), vehicle(103, 28), vehicle(104, 28)]
+        plan = plan_dispatches(
+            [para], [vehicle(100, FUSTW), vehicle(101, LF), *ambulances], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
+                            parasite_scarce_threshold=2),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        sent = plan.planned[0]
+        self.assertEqual(len(sent.vehicle_ids), 1)
+        self.assertIn(sent.vehicle_ids[0], {102, 103, 104})
+        self.assertFalse(sent.satisfied)  # a pure leech claim, not a real contribution
+
+    def test_parasite_scarce_threshold_does_not_restrict_our_own_topup_reinforcement(self):
+        # Scoped to parasite only (Sasha, 2026-10-12): a mission we're
+        # genuinely on, reinforced via top_up_scope, must still be able to use
+        # a scarce vehicle to actually finish it -- top-up already can't waste
+        # one on an unsatisfiable mission (full-satisfaction gated).
+        ours = mission(1, 3, NEAR, is_alliance=False, vehicle_state=1)
+        plan = plan_dispatches(
+            [ours], [vehicle(100, FUSTW), vehicle(101, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.OFF,
+                            top_up_scope=ModeScope.OWN, parasite_scarce_threshold=2),
+            assigned={1: [LF]},  # already on it with the LF; FUSTW still needed
+        )
+        self.assertEqual(len(plan.planned), 1)
+        sent = plan.planned[0]
+        self.assertEqual(sent.vehicle_ids, (100,))  # the scarce FUSTW, sent anyway
+        self.assertTrue(sent.satisfied)
 
     # -- Verbandsgroßeinsatz (VGE) compliance override -------------------------
 
@@ -674,7 +749,8 @@ class DispatchPlannerTests(unittest.TestCase):
         plan = plan_dispatches(
             [shared_but_mine], [vehicle(100, LF)], [building()], self.resolver,
             DispatchPolicy(radius_km=40, parasite_scope=ModeScope.OWN,
-                            mission_source=frozenset()),  # normal dispatch off -- isolate parasite
+                            mission_source=frozenset(),  # normal dispatch off -- isolate parasite
+                            parasite_scarce_threshold=0),
             own_user_id=42,
         )
         self.assertEqual([mp.mission_id for mp in plan.planned], [1])
@@ -1534,6 +1610,68 @@ class DispatchPlannerTests(unittest.TestCase):
         )
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].mission_id, 1)  # topup-governed, but still unstick-first
+
+    # -- Sticky vehicle_state survives a reverted live flag (Sasha, 2026-10-22) -
+    # vehicle_state is transient on the GAME's side (confirmed live, 2026-10-01):
+    # it reverts to 0 the instant nobody is CURRENTLY on scene, even on a
+    # mission that's genuinely already open and just had its responders finish
+    # a shift and step away (observed live on a riot mission whose FuStW had
+    # already contributed and moved on, still needing more BePol). Every
+    # dispatch.py call site that cares "has this mission ever been responded
+    # to" must use resolver.effective_count_revealed (sticky), not the raw
+    # live flag, or it loses reservation/unstick-first/topup/parasite
+    # eligibility the moment the live flag reverts.
+
+    def test_topup_eligibility_persists_after_vehicle_state_reverts_to_zero(self):
+        policy = DispatchPolicy(radius_km=40, top_up_scope=ModeScope.OWN)
+        cycle1 = mission(1, 3, NEAR, vehicle_state=1)
+        self.plan([cycle1], [vehicle(100, LF), vehicle(101, FUSTW)], policy)
+        cycle2 = mission(1, 3, NEAR, vehicle_state=0)
+        plan = self.plan([cycle2], [vehicle(102, FUSTW)], policy)
+        self.assertNotIn((1, "not begun (top-up)"), plan.skipped)
+
+    def test_unstick_first_eligibility_persists_after_vehicle_state_reverts_to_zero(self):
+        resolver = self._fillable_resolver((950, {"firetrucks": 5}, 1000), (951, {"firetrucks": 1}, 10))
+        cycle1 = mission(1, 950, NEAR, vehicle_state=1,
+                         missing_text='{"vehicles":"1 Löschfahrzeuge (LF)","personnel":"","other":""}')
+        plan_dispatches([cycle1], [], [building()], resolver, DispatchPolicy(radius_km=40))
+        cycle2 = mission(1, 950, NEAR, vehicle_state=0,
+                         missing_text='{"vehicles":"1 Löschfahrzeuge (LF)","personnel":"","other":""}')
+        fresh_cheap = mission(2, 951, NEAR2)
+        plan = plan_dispatches(
+            [cycle2, fresh_cheap], [vehicle(100, LF)], [building()], resolver,
+            DispatchPolicy(radius_km=40, order=DispatchOrder.CREDITS_LOW),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].mission_id, 1)  # unstick-first priority preserved
+
+    def test_parasite_others_on_persists_after_vehicle_state_reverts_to_zero(self):
+        # parasite_scarce_threshold=0: this test's tiny 1-vehicle pool would
+        # otherwise read as "scarce" under the default threshold and get
+        # withheld from parasite entirely -- an unrelated feature, isolated
+        # here so it doesn't mask what's actually under test.
+        policy = DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
+                                parasite_scarce_threshold=0)
+        cycle1 = mission(1, 3, NEAR, is_alliance=True, vehicle_state=1)
+        self.plan([cycle1], [vehicle(100, LF), vehicle(101, FUSTW)], policy)
+        cycle2 = mission(1, 3, NEAR, is_alliance=True, vehicle_state=0)
+        plan = self.plan([cycle2], [vehicle(102, FUSTW)], policy)
+        # A parasite leech send only fires when `others_on` reads true; a
+        # plain normal-governed candidate wouldn't be actioned here at all
+        # (own_user_id unset makes is_alliance=True fall outside the default
+        # mission_source) -- any planned entry proves the parasite path fired.
+        self.assertEqual([mp.mission_id for mp in plan.planned], [1])
+
+    def test_reservation_persists_after_vehicle_state_reverts_to_zero(self):
+        mtype = self.resolver.catalog.get(3)
+        cycle1 = mission(1, 3, NEAR, vehicle_state=1)
+        self.resolver.vehicle_requirements(cycle1, mtype)  # unrelated to stickiness, just realistic use
+        self.resolver.effective_count_revealed(cycle1)  # cycle 1: establishes sticky memory
+        cycle2 = mission(1, 3, NEAR, vehicle_state=0)
+        reserved: set[int] = set()
+        _reserve_vehicle_group(reserved, cycle2, mtype, self.resolver, assigned={},
+                               patient_governed=False)
+        self.assertTrue(reserved, "reservation should still fire after vehicle_state reverts to 0")
 
     # -- towed (AB/Anh) distance penalty (Sasha, 2026-10-08) -------------------
     # A WLF (or similar) that tows an AB/Anh is locked to it for the whole job

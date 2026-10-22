@@ -71,6 +71,30 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(res.requirements, [])
         self.assertIn("totally_unknown_class", res.unmatched)
 
+    def test_wildfire_catalog_classes_resolve_to_real_vehicle_types(self):
+        # 2026-10-12 wildfire update, confirmed live against /einsaetze.json:
+        # a wildfire mission variant carries "brush_truck" (scales 1-3 with
+        # severity) and "wildfire_equipment" (always 1) as their OWN
+        # requirement keys, alongside the ordinary "firetrucks" count --
+        # three separate rows, not one. A dedicated one-off catalog/resolver
+        # (not the shared fixture) isolates this from einsaetze_sample.json's
+        # other tests.
+        from app.domain.catalog import MissionCatalog, MissionType
+
+        mtype = MissionType(id=900, name="Waldbrand (Wald- und Vegetation)",
+                             average_credits=5000,
+                             requirements={"brush_truck": 2, "wildfire_equipment": 1, "firetrucks": 1})
+        catalog = MissionCatalog({900: mtype})
+        resolver = MissionRequirementResolver(catalog, self.resolver.library)
+        res = resolver.resolve(900)
+        self.assertEqual(res.unmatched, [])
+        by_class = {r.source: r for r in res.requirements}
+        self.assertEqual(set(by_class["brush_truck"].type_ids), {187, 188, 189})
+        self.assertEqual(by_class["brush_truck"].count, 2)
+        self.assertEqual(set(by_class["wildfire_equipment"].type_ids), {190, 191, 192})
+        self.assertEqual(by_class["wildfire_equipment"].count, 1)
+        self.assertEqual(by_class["firetrucks"].count, 1)
+
     def test_knows(self):
         self.assertTrue(self.resolver.knows(1))
         self.assertFalse(self.resolver.knows(4242))

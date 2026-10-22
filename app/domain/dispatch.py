@@ -24,6 +24,7 @@ needs ``id``, ``caption``, ``mission_type_id``, ``position``; a vehicle needs
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -304,6 +305,24 @@ class DispatchPolicy:
     # it): same rule as a fresh mission, since by then that's exactly what
     # it's being treated as.
     partial_starts: bool = False
+    # Never let PARASITE mode spend a vehicle type we own this few or fewer of,
+    # fleet-wide (Sasha, 2026-10-12: "leave parasite to the not-scarce
+    # vehicles" — simpler than teaching the priority pass to rank scarce
+    # contributions across competing missions). A parasite leech contribution
+    # is a "nice to have," not a real requirement -- it has no business
+    # spending one of our 2-3 GKW/MzGW/Anh TeSi on a VGE-scale mission we can
+    # never fully crew anyway, when that same unit might finish one of OUR OWN
+    # actually-completable missions via the ordinary reservation/unstick-first
+    # path instead. Based on TOTAL OWNED count (not momentary pool
+    # availability), so it doesn't flicker as vehicles come and go from other
+    # missions. Default 8 (Sasha, 2026-10-12: most vehicle types need well
+    # more than 2 of a kind to fill a mission outright, so a low threshold
+    # would barely rule anything out -- "5-10 sounds more reasonable"). 0 =
+    # off. Does NOT affect top-up/patient/normal dispatch -- those already
+    # can't waste a scarce vehicle on an unsatisfiable mission (top-up/normal-
+    # without-partial_starts require full satisfaction first; see their own
+    # docstrings).
+    parasite_scarce_threshold: int = 8
 
 
 @dataclass(frozen=True)
@@ -389,7 +408,8 @@ def plan_dispatches(
     A mission with no usable catalogue total (unknown type, or governed as
     patient-only, which has no such fixed total) simply can't be ranked this
     way and falls through to the normal fresh-candidate path unchanged. Same
-    for one still at ``vehicle_state == 0`` (nothing could have arrived yet)
+    for one that has never shown a responder on scene (sticky, via
+    ``resolver.effective_count_revealed`` — nothing could have arrived yet)
     or whose ``vehicle_requirements()`` reports any unmatched catalogue class
     (code review, 2026-10-08: that silently drops the unmapped class from
     the "still missing" side only, so the subtraction would compare two
@@ -430,10 +450,16 @@ def plan_dispatches(
         if getattr(b, "position", None) and getattr(b, "id", None) is not None
     }
 
+    # Total OWNED count per vehicle type (the whole fleet, not just the
+    # currently-idle pool) -- parasite_scarce_threshold is judged against this
+    # stable figure, not momentary availability (see DispatchPolicy's docstring).
+    type_counts = Counter(v.type_id for v in vehicles)
+
     # PRIORITY PASS — spread/top-up (missions we're on) and, in parasite mode,
     # leech targets. Runs first, bypassing filters/order/batch.
     handled, priority_batch, reserved_type_ids = _priority_pass(
-        plan, missions, pool, resolver, policy, assigned or {}, building_pos, text_engine, own_user_id
+        plan, missions, pool, resolver, policy, assigned or {}, building_pos, text_engine, own_user_id,
+        type_counts=type_counts,
     )
 
     # Gather in-range, category-allowed missions with their distance, the mission
@@ -455,8 +481,15 @@ def plan_dispatches(
         else:
             plan.skipped.append((mission.id, "out of scope"))
             continue
-        # Top-up only reinforces missions someone has already begun.
-        if governing == "topup" and getattr(mission, "vehicle_state", 0) < 1:
+        # Top-up only reinforces missions someone has already begun. Sticky
+        # (resolver.effective_count_revealed), not the raw live flag -- see
+        # that method's docstring for why: vehicle_state reverts to 0 the
+        # moment nobody is CURRENTLY on scene (confirmed live, 2026-10-01),
+        # even on a mission that's genuinely already underway and just had
+        # its responders finish a shift and leave (Sasha, 2026-10-22: riot
+        # missions where our own FuStW already contributed and left, with the
+        # mission still needing more BePol, were being treated as untouched).
+        if governing == "topup" and not resolver.effective_count_revealed(mission):
             plan.skipped.append((mission.id, "not begun (top-up)"))
             continue
         pos = getattr(mission, "position", None)
@@ -513,23 +546,29 @@ def plan_dispatches(
         # before any fresh candidate. Not meaningful for patient governing
         # (no fixed vehicle-class total to measure against).
         #
-        # Two guards, both load-bearing (code review, 2026-10-08): (1) only
-        # for vehicle_state >= 1 -- mirrors _reserve_vehicle_group's own
-        # precondition just above, and is true for every genuinely "arrived"
-        # mission anyway; without it, a completely untouched (vehicle_state
-        # 0) mission can still trip the arithmetic below into a false
-        # "arrived" count. (2) only if `vehicle_requirements` reports NO
-        # unmatched class -- it silently DROPS any catalogue class it can't
-        # map to a vehicle type (a known, tested, documented data-gap
-        # behavior, not a bug in it), so `still_missing_raw` can legitimately
-        # enumerate a different, smaller class set than `total_wanted`
-        # (which sums literally every declared class, mapped or not). Either
-        # gap alone makes the subtraction meaningless, not just imprecise --
-        # skip fillable classification entirely rather than risk a mission
-        # that hasn't actually started jumping the queue and bypassing
-        # batch_size on a fabricated "almost done" reading.
+        # Two guards, both load-bearing (code review, 2026-10-08): (1) the
+        # mission has EVER shown a responder on scene -- mirrors
+        # _reserve_vehicle_group's own precondition just above, and is true
+        # for every genuinely "arrived" mission anyway; without it, a
+        # completely untouched mission can still trip the arithmetic below
+        # into a false "arrived" count. Sticky (resolver.
+        # effective_count_revealed), not the raw live vehicle_state -- that
+        # field reverts to 0 the instant nobody is CURRENTLY on scene
+        # (confirmed live 2026-10-01), which would otherwise make a mission
+        # whose responders finished a shift and left look untouched again,
+        # losing its unstick-first priority (Sasha, 2026-10-22). (2) only if
+        # `vehicle_requirements` reports NO unmatched class -- it silently
+        # DROPS any catalogue class it can't map to a vehicle type (a known,
+        # tested, documented data-gap behavior, not a bug in it), so
+        # `still_missing_raw` can legitimately enumerate a different, smaller
+        # class set than `total_wanted` (which sums literally every declared
+        # class, mapped or not). Either gap alone makes the subtraction
+        # meaningless, not just imprecise -- skip fillable classification
+        # entirely rather than risk a mission that hasn't actually started
+        # jumping the queue and bypassing batch_size on a fabricated
+        # "almost done" reading.
         if (governing != "patient" and mtype is not None and mtype.requirements
-                and getattr(mission, "vehicle_state", 0) >= 1):
+                and resolver.effective_count_revealed(mission)):
             total_wanted = sum(int(n) for n in mtype.requirements.values())
             if total_wanted > 0:
                 raw_reqs, raw_unmatched = resolver.vehicle_requirements(mission, mtype)
@@ -617,11 +656,15 @@ def plan_dispatches(
         allow_partial = governing == "normal" and policy.partial_starts
         # A genuinely FRESH send (nobody there yet) can't use a reserved class —
         # that class is needed to close out a mission that's already open
-        # elsewhere. Anything with vehicle_state >= 1 (help/reinforcement) is
-        # exempt: it's exactly who the reservation exists for. topup missions
-        # are always vehicle_state >= 1 already (enforced above), so they're
-        # naturally exempt without a separate check.
-        is_fresh_send = governing == "normal" and getattr(mission, "vehicle_state", 0) == 0
+        # elsewhere. Anything ever shown active (help/reinforcement) is
+        # exempt: it's exactly who the reservation exists for. Sticky check
+        # (resolver.effective_count_revealed), same reason as the topup gate
+        # above -- raw vehicle_state reverts to 0 once nobody's CURRENTLY on
+        # scene, which would otherwise make an already-open mission whose
+        # responders stepped away look fresh again. topup missions already
+        # cleared this same sticky check above, so they're naturally exempt
+        # without a separate check.
+        is_fresh_send = governing == "normal" and not resolver.effective_count_revealed(mission)
         call_pool = (
             [v for v in pool if v.type_id not in reserved_type_ids]
             if is_fresh_send and reserved_type_ids else pool
@@ -849,6 +892,10 @@ _TOWED_WITH_SELF_PROPELLED_ALTERNATIVE = frozenset({
     178,       # Anh 12 Lbw (FGr Log-V) vs. the Bt-Kombi/GW-Bt family
     179,       # AB-NEA50           vs. the self-propelled NEA50 carriers
     180,       # AB-NEA200          vs. the self-propelled NEA200 carriers
+    191, 192,  # Anh Waldbrand / AB-Waldbrand vs. the self-propelled GW-Waldbrand
+               # (190) -- all three share the one "wildfire_equipment" class
+               # (2026-10-12 wildfire update), same co-occurrence test as every
+               # other entry here.
 })
 _TOWED_DISTANCE_PENALTY_KM = 7.0
 
@@ -868,17 +915,25 @@ def _abundance_vehicle(pool, mission_pos, building_pos):
     to throw at a leech mission just to claim participation."""
     if not pool:
         return None
-    from collections import Counter
-
     common_type = Counter(v.type_id for v in pool).most_common(1)[0][0]
     candidates = [v for v in pool if v.type_id == common_type]
     return min(candidates, key=_distance_fn(mission_pos, building_pos))
 
 
 def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_pos, text_engine,
-                    own_user_id=None):
+                    own_user_id=None, type_counts=None):
     """Handle patient-care/top-up reinforcement, parasite missions, and
     official Verbandsgroßeinsatz missions BEFORE the normal filtered pass.
+
+    *type_counts* (type_id -> total OWNED count, the whole fleet) backs
+    ``policy.parasite_scarce_threshold`` (Sasha, 2026-10-12): a vehicle type
+    we own this few or fewer of is withheld from EVERY parasite contribution
+    (both the useful-coverage pick and the plain claim-a-spare fallback) —
+    see that field's own docstring for why. Scoped to ``is_parasite`` only;
+    a genuine top-up/patient reinforcement for a mission we're already on
+    (``on_it_here``) still draws from the full pool, since it already can't
+    waste a scarce vehicle on an unsatisfiable mission (full-satisfaction
+    gated) the way an unconditional parasite send can.
 
     An alliance-shared mission whose type id is in :data:`_VGE_MISSION_TYPE_IDS`
     is always forced into a single, one-time spare-vehicle participation claim
@@ -910,6 +965,11 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
     batch_used = 0
     reserved: set[int] = set()
     assigned = assigned or {}
+    threshold = policy.parasite_scarce_threshold
+    scarce_type_ids = (
+        frozenset(tid for tid, cnt in (type_counts or {}).items() if cnt <= threshold)
+        if threshold > 0 else frozenset()
+    )
     for mission in missions:
         mid = mission.id
         on_it = mid in assigned                       # a mission we're already on
@@ -935,7 +995,12 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
             handled.add(mid)
             continue
         mtype = resolver.catalog.get(getattr(mission, "mission_type_id", None))
-        others_on = getattr(mission, "vehicle_state", 0) >= 1
+        # Sticky (resolver.effective_count_revealed), not the raw live
+        # vehicle_state -- see plan_dispatches' topup-gate comment for why:
+        # a genuinely active mission whose responders finished a shift and
+        # left would otherwise read as "nobody on it" and lose parasite/
+        # top-up eligibility (Sasha, 2026-10-22).
+        others_on = resolver.effective_count_revealed(mission)
         scope_ok = _scope_covers(policy.parasite_scope, is_alliance) and not on_it
         # Aggressiveness (Sasha, 2026-08-31): ACTIVE (default) requires someone
         # already on it, matching the original behavior; ALL drops that
@@ -979,11 +1044,18 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
         # `on_it` from NEXT cycle onward, so real medical coverage follows
         # with a one-cycle delay, not immediately this same cycle.
         skip_patient_contribution = is_parasite and patient_here
+        # A parasite send never spends a scarce type (see parasite_scarce_
+        # threshold's docstring) -- on_it_here reinforcement draws from the
+        # full pool as usual.
+        contribution_pool = (
+            [v for v in pool if v.type_id not in scarce_type_ids]
+            if is_parasite and scarce_type_ids else pool
+        )
         chosen: list[int] = []
         if not skip_patient_contribution:
             reqs = _outstanding(mission, resolver, text_engine, assigned, patient_here)
             if reqs and pos is not None:
-                cov = select_coverage(reqs, pool, distance_of=_distance_fn(pos, building_pos))
+                cov = select_coverage(reqs, contribution_pool, distance_of=_distance_fn(pos, building_pos))
                 # Patient care and parasite contributions send whatever's
                 # useful regardless; a plain top-up reinforcement (on_it_here
                 # without patient_here, i.e. gated in only via top_up_here)
@@ -999,7 +1071,7 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
                         _note_shortfall(plan.shortfalls, cov.shortfall.keys())
                     batch_used += 1  # useful contribution -> counts to batch
         if not chosen and is_parasite:
-            spare = _abundance_vehicle(pool, pos, building_pos)
+            spare = _abundance_vehicle(contribution_pool, pos, building_pos)
             if spare is not None:
                 chosen = [spare.id]
                 plan.planned.append(MissionPlan(mid, getattr(mission, "caption", ""),
@@ -1277,16 +1349,19 @@ def _reserve_vehicle_group(reserved, mission, mtype, resolver, assigned, patient
     and :func:`_priority_pass` so the two reservation paths can't drift apart.
 
     Qualifies when: NOT patient-governed (vehicle categories aren't part of
-    patient-only resolution), the mission type is known, and the mission
-    already has some response (``vehicle_state >= 1`` — it's revealed/
-    mentioned something, not just an untouched catalogue estimate).
-    Unconditional beyond that: does NOT check whether the current pool looks
-    numerically sufficient, by design (a vehicle can look available/
-    dispatchable yet keep silently failing to actually crew/tow, so a
-    same-cycle "looks satisfiable" check is exactly the kind of signal that
-    failure mode fools — trust the mission's own revealed need instead).
+    patient-only resolution), the mission type is known, and the mission has
+    EVER shown some response (sticky, via ``resolver.effective_count_revealed``
+    — not the raw live ``vehicle_state``, which reverts to 0 the instant
+    nobody is CURRENTLY on scene, even on a mission that's genuinely already
+    open and just had its responders finish a shift and step away; see that
+    method's own docstring). Unconditional beyond that: does NOT check
+    whether the current pool looks numerically sufficient, by design (a
+    vehicle can look available/dispatchable yet keep silently failing to
+    actually crew/tow, so a same-cycle "looks satisfiable" check is exactly
+    the kind of signal that failure mode fools — trust the mission's own
+    revealed need instead).
     """
-    if patient_governed or mtype is None or getattr(mission, "vehicle_state", 0) < 1:
+    if patient_governed or mtype is None or not resolver.effective_count_revealed(mission):
         return
     vreqs, _unmatched = resolver.vehicle_requirements(mission, mtype)
     for req in _apply_delta(vreqs, assigned, mission.id):

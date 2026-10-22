@@ -93,6 +93,8 @@
           <option value="all" {{ 'selected' if cfg.parasite_aggressiveness == 'all' else '' }}>any covered mission, even untouched ones</option>
           <option value="needed" {{ 'selected' if cfg.parasite_aggressiveness == 'needed' else '' }}>only where something's still missing</option>
         </select></div>
+      <div class="field"><label>Parasite scarce-vehicle floor — never let parasite spend a type I own this few or fewer of, fleet-wide (0 = no floor)</label>
+        <input name="parasite_scarce_threshold" type="number" step="1" min="0" value="{{ cfg.parasite_scarce_threshold }}"></div>
       <div class="field"><label>Top-up / symbiont (only reinforce already-begun missions)</label>
         {{ scope_select('top_up_scope', cfg.top_up_scope) }}</div>
       <div class="field"><label>Patient-only (only RTW/NEF/RTH + LNA&gt;5/OrgL&gt;10; recall idle units when cleared)</label>

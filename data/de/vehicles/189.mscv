@@ -1,0 +1,14 @@
+{
+  "additional": {
+    "base": {
+      "water": 10000,
+      "pump": 2000,
+      "personnel": 3
+    }
+  },
+  "object" : 189,
+  "is_matchless" : false,
+  "pattern" : {
+    "base" : ["GTLF 10000 W"]
+  }
+}
