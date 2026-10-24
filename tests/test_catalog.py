@@ -48,6 +48,17 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(cat.get(159).min_fire_personnel, 3)
         self.assertEqual(self.catalog.get(1).min_fire_personnel, 0)  # absent -> 0
 
+    def test_care_includes_staff_members_parsed(self):
+        # additional.care_includes_staff_members -> MissionType.care_includes_staff_members
+        # (Sasha, 2026-10-24, confirmed live on mission 505/abcde).
+        cat = MissionCatalog.from_payload([
+            {"id": "505", "name": "Hochwasserschadenslage", "requirements": {},
+             "additional": {"care_includes_staff_members": True,
+                            "care_affected_people_min": 100, "care_affected_people_max": 500}},
+        ])
+        self.assertTrue(cat.get(505).care_includes_staff_members)
+        self.assertFalse(self.catalog.get(1).care_includes_staff_members)  # absent -> False
+
     def test_accepts_id_keyed_object(self):
         obj = {"1": {"id": "1", "name": "X", "average_credits": 10, "requirements": {"firetrucks": 1}}}
         cat = MissionCatalog.from_payload(obj)

@@ -741,9 +741,12 @@ class ResolverTests(unittest.TestCase):
         # Confirmed live: missing_text personnel group = "5x Betreuungshelfer"
         # -- the "Nx" format (no space before the x) previously failed to
         # parse as a count+category pair at all (fell through as one
-        # unmatched blob "5x Betreuungshelfer"). ceil(5/3) = 2 (the smaller
-        # of GW-Bt's 3 and Bt-Kombi's 9, confirmed from each vehicle's own
-        # .mscv extend-rule tiers).
+        # unmatched blob "5x Betreuungshelfer"). ceil(5/3) = 2 (the smallest
+        # crew across the eligible SEG pool, confirmed from each vehicle's
+        # own .mscv extend-rule tiers / the live vehicle API's staff data).
+        # Fixture mission type 1 has no care_includes_staff_members flag, so
+        # only the always-eligible SEG pool applies -- not the Feuerwehr/THW
+        # responder-only one.
         m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=0,
                             prisoners_count=0, possible_prisoners_count=0,
                             missing_text='{"vehicles":null,"personnel":"5x Betreuungshelfer","other":""}')
@@ -751,8 +754,28 @@ class ResolverTests(unittest.TestCase):
         by = {r.source: r for r in res.requirements}
         self.assertIn("betreuungshelfer", by)
         self.assertEqual(by["betreuungshelfer"].count, 2)
-        self.assertEqual(set(by["betreuungshelfer"].type_ids), {130, 131})
+        self.assertEqual(set(by["betreuungshelfer"].type_ids), {130, 131, 133})
         self.assertEqual(res.unmatched, [])
+
+    def test_betreuungshelfer_widens_to_feuerwehr_and_thw_when_staff_must_be_cared_for(self):
+        # Sasha, 2026-10-24, confirmed live against mission 505/abcde ("490
+        # Betroffene und 732 Einsatzkräfte müssen versorgt werden"): a mission
+        # whose own responders also need care additionally accepts the
+        # Feuerwehr (GW-Verpflegung/GW-Küche/MTW-Verpflegung) and THW
+        # (LKW 7 Lbw FGr Log-V/MTW-FGr Log-V) care-service vehicles -- useless
+        # on a Betroffene-only mission (they can't help civilians), so they're
+        # excluded unless the mission's catalogue says staff need care too.
+        from app.domain.catalog import MissionCatalog, MissionType
+
+        mtype = MissionType(id=900, name="Hochwasserschadenslage", average_credits=22975,
+                             requirements={}, care_includes_staff_members=True)
+        resolver = MissionRequirementResolver(MissionCatalog({900: mtype}), self.resolver.library)
+        m = SimpleNamespace(mission_type_id=900, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":null,"personnel":"10x Betreuungshelfer","other":""}')
+        res = resolver.resolve_mission(m)
+        by = {r.source: r for r in res.requirements}
+        self.assertEqual(set(by["betreuungshelfer"].type_ids), {130, 131, 133, 138, 139, 140, 176, 177})
 
     def test_verpflegungshelfer_nx_format_also_converts(self):
         m = SimpleNamespace(mission_type_id=1, patients_count=0, possible_patients_count=0,

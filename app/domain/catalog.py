@@ -48,6 +48,14 @@ class MissionType:
     # "3 Feuerwehrleute mind. benötigt" — satisfied by fire vehicles whose combined
     # crew reaches this (one HLF ≈ 9).
     min_fire_personnel: int = 0
+    # True when this mission also needs its OWN responders cared for (not just
+    # affected civilians) -- additional.care_includes_staff_members (Sasha,
+    # 2026-10-24, confirmed live against mission 505/abcde's own revealed
+    # text: "490 Betroffene und 732 Einsatzkräfte müssen versorgt werden").
+    # Widens which Betreuungshelfer-capable vehicle types are eligible for the
+    # mission's revealed Betreuungshelfer headcount -- see resolver.py's
+    # _SEG_CARE_TYPE_IDS / _RESPONDER_ONLY_CARE_TYPE_IDS.
+    care_includes_staff_members: bool = False
     categories: tuple[str, ...] = ()
     expansion_ids: tuple[int, ...] = ()
 
@@ -71,6 +79,7 @@ class MissionType:
             possible_patient=int(additional.get("possible_patient") or 0),
             possible_prisoner=int(additional.get("possible_prisoner") or 0),
             min_fire_personnel=int(additional.get("average_min_fire_personnel") or 0),
+            care_includes_staff_members=bool(additional.get("care_includes_staff_members") or False),
             categories=tuple(d.get("mission_categories") or ()),
             expansion_ids=tuple(int(x) for x in expansions),
         )

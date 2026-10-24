@@ -77,15 +77,41 @@ _OTHER_CHUNK_SPLIT_RE = re.compile(r",\s*(?=\d+x?\s)")
 # i.e. ceil(N/3); 131 Bt-Kombi: 1-9->1, 10-18->2, ..., i.e. ceil(N/9)).
 # Neither vehicle has any crew/personnel data at all (capacities={} in
 # AssetLibrary), so this is NOT the same concept _personnel_to_vehicles
-# converts via (crew size) and gets its own small table instead. The two
-# types' real capacities differ (3 vs 9) — using the SMALLER (3) as the
-# shared divisor for both, so the estimate is never wrong regardless of
-# which type coverage.py ends up picking (same safety-first reasoning as
-# Sonderlöschmittel's single-type scoping above, applied here via MIN
-# instead since excluding either type outright isn't an option — both are
-# genuinely eligible, just at different scales).
-_CARE_HELPER_TYPE_IDS = frozenset({130, 131})
-_CARE_HELPER_CAPACITY = 3  # min(GW-Bt's 3, Bt-Kombi's 9)
+# converts via (crew size) and gets its own small table instead.
+#
+# Two SEPARATE pools, confirmed live 2026-10-24 against mission 505/abcde's
+# own revealed text ("490 Betroffene und 732 Einsatzkräfte müssen versorgt
+# werden", "Benötigtes Personal: 78 Betreuungshelfer" == floor(490/10) +
+# floor(732/25), i.e. the game runs this as two independent per-population
+# ratios, not one pool) and against the vehicle API's own training tags
+# (Sasha, 2026-10-24 -- "headcount, i dont think equipment is a difference
+# between its origins", distinguishing this from the SEPARATE "Betreuungs-
+# und Verpflegungsausstattung" equipment requirement, which these same
+# vehicles also carry but which is already handled via Vehicle.mscv's plain
+# class map, unaffected by this split):
+#   - SEG/Rettungsdienst ("care_service" training, building 12): can staff
+#     EITHER population. GW-Bt (130, crew 3), Bt-Kombi (131, crew 9),
+#     Bt-LKW (133, crew 3) -- always eligible.
+#   - Feuerwehr ("fire_care_service" training, buildings 0/18) and THW
+#     ("thw_care_service", building 9): can ONLY staff the Einsatzkräfte
+#     share -- useless on a mission that only needs Betroffene cared for.
+#     GW-Verpflegung (138, crew 6), GW-Küche (139, crew 3), MTW-Verpflegung
+#     (140, crew 6), LKW 7 Lbw FGr Log-V (176, crew 3), MTW-FGr Log-V
+#     (177, crew 5) -- eligible only when the mission's own
+#     ``care_includes_staff_members`` flag is set (see catalog.py); the
+#     revealed "Nx Betreuungshelfer" text doesn't say how much of N is for
+#     which population, so this is the only signal available for gating them
+#     in at all, applied the same safety-first way as everywhere else in
+#     this module: never excluded when they could genuinely help, never
+#     included when they structurally can't.
+#   The smallest crew across the WHOLE eligible superset is still 3 (130,
+# 133, 139, 176 all tie) — using that single shared divisor regardless of
+# which subset is actually eligible this cycle keeps the estimate
+# conservative no matter which type coverage.py ends up picking (same
+# safety-first reasoning as Sonderlöschmittel's single-type scoping above).
+_SEG_CARE_TYPE_IDS = frozenset({130, 131, 133})
+_RESPONDER_ONLY_CARE_TYPE_IDS = frozenset({138, 139, 140, 176, 177})
+_CARE_HELPER_CAPACITY = 3  # min crew across the whole eligible superset
 _CARE_HELPER_PATTERN = re.compile(r"^(\d+)x?\s+(betreuungshelfer|verpflegungshelfer)\s*$", re.IGNORECASE)
 
 # Polizeipferde ("N Polizeipferde", found 2026-10-01 via a systematic .mscv
@@ -372,7 +398,7 @@ class MissionRequirementResolver:
                 # converts via (both vehicles have NO crew data at all), so
                 # routing it through that generic path would silently treat
                 # the raw headcount as a literal vehicle count instead.
-                care_reqs, remaining_personnel = self._split_care_helper_entries(groups.personnel)
+                care_reqs, remaining_personnel = self._split_care_helper_entries(groups.personnel, mtype)
                 reqs.extend(care_reqs)
                 # Polizisten gets the same treatment, same reason (found via
                 # a systematic .mscv sweep, 2026-10-01): every eligible type
@@ -508,15 +534,23 @@ class MissionRequirementResolver:
             matchless_type_ids=type_ids & self._matchless,
         )
 
-    def _split_care_helper_entries(self, raw_personnel: str) -> tuple[list[Requirement], str]:
+    def _split_care_helper_entries(self, raw_personnel: str, mtype) -> tuple[list[Requirement], str]:
         """Pull Betreuungshelfer/Verpflegungshelfer headcount entries out of
         a raw ``personnel``-group string (see :data:`_CARE_HELPER_PATTERN`),
         converting via ceil-division against their confirmed per-vehicle
         capacity. Returns ``(requirements, leftover_text)`` like
-        :meth:`_split_capacity_entries`."""
+        :meth:`_split_capacity_entries`.
+
+        *mtype* gates whether the Feuerwehr/THW responder-only pool
+        (:data:`_RESPONDER_ONLY_CARE_TYPE_IDS`) is eligible alongside the
+        always-eligible SEG pool (:data:`_SEG_CARE_TYPE_IDS`) — see those
+        constants' own comment for why."""
         text = (raw_personnel or "").strip()
         if not text:
             return [], ""
+        eligible = _SEG_CARE_TYPE_IDS
+        if mtype is not None and getattr(mtype, "care_includes_staff_members", False):
+            eligible = _SEG_CARE_TYPE_IDS | _RESPONDER_ONLY_CARE_TYPE_IDS
         reqs: list[Requirement] = []
         leftover: list[str] = []
         for chunk in _OTHER_CHUNK_SPLIT_RE.split(text):
@@ -531,9 +565,9 @@ class MissionRequirementResolver:
             vehicles_needed = max(1, ceil(needed / _CARE_HELPER_CAPACITY))
             reqs.append(Requirement(
                 source="betreuungshelfer",
-                type_ids=_CARE_HELPER_TYPE_IDS,
+                type_ids=eligible,
                 count=vehicles_needed,
-                matchless_type_ids=_CARE_HELPER_TYPE_IDS & self._matchless,
+                matchless_type_ids=eligible & self._matchless,
             ))
         return reqs, ", ".join(leftover)
 
