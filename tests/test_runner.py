@@ -209,6 +209,11 @@ class RunnerTests(unittest.TestCase):
 
     # -- mission breakdown (Sasha, 2026-09-22) ----------------------------
     def test_cycle_reports_mission_breakdown_fully_staffed(self):
+        # "fully staffed" + red here is a deliberate, confirmed-still-correct
+        # one-cycle-lag artifact (re-checked 2026-10-26, see the
+        # "awaiting arrival" tests below for the case that ISN'T): the live
+        # status was polled before we dispatched THIS cycle, so a mission
+        # with zero vehicles before now always still shows red in this row.
         missions = [m(1, 1, status="red")]
         client = FakeClient(missions, [v(100, 0)], [b()])  # type 1 needs 1 firetruck; LF supplied
         report = asyncio.run(self._runner(client).run_cycle())
@@ -234,15 +239,64 @@ class RunnerTests(unittest.TestCase):
         # cycle -- our own tracking says a vehicle from a PREVIOUS cycle
         # already satisfies it) must be its own bucket, not folded into
         # "fully staffed" (which means we just now dispatched this cycle).
+        # On a non-red live status this combination is unremarkable, so it
+        # keeps the plain "already covered" label.
         already_assigned = SimpleNamespace(id=200, type_id=0, is_available=False,
                                             position=BUILDING, target_type="mission", target_id=1)
-        missions = [m(1, 1, status="red")]  # type 1 needs 1 firetruck; already met
+        missions = [m(1, 1, status="yellow")]  # type 1 needs 1 firetruck; already met
         client = FakeClient(missions, [already_assigned], [b()])
         report = asyncio.run(self._runner(client).run_cycle())
         self.assertEqual(client.dispatched, [])  # nothing sent this cycle
         row = report.mission_breakdown[0]
         self.assertEqual(row["bot_status"], "already covered")
         self.assertEqual(row["explanation"], "already covered")
+
+    def test_red_mission_ignores_stale_assigned_tracking_and_re_requests_in_full(self):
+        # Rule 1 hotfix (Sasha, 2026-10-26): a mission still RED has had
+        # NOTHING arrive, no matter what our own "assigned" bookkeeping
+        # claims -- live-observed missions stuck red and marked "already
+        # covered" for a long time because a vehicle we believed was en
+        # route delta-subtracted the requirement to zero without ever
+        # showing up. A red mission is now always evaluated against the
+        # FULL current requirement, ignoring assigned/delta entirely, so a
+        # stale "already assigned" entry can no longer mask a genuine
+        # shortfall -- this one becomes "not enough vehicles" (there's
+        # nothing actually usable in the pool), not silently "already
+        # covered".
+        already_assigned = SimpleNamespace(id=200, type_id=0, is_available=False,
+                                            position=BUILDING, target_type="mission", target_id=1)
+        missions = [m(1, 1, status="red")]  # type 1 needs 1 firetruck
+        client = FakeClient(missions, [already_assigned], [b()])
+        report = asyncio.run(self._runner(client).run_cycle())
+        self.assertEqual(client.dispatched, [])  # nothing usable to send
+        row = report.mission_breakdown[0]
+        self.assertEqual(row["bot_status"], "not enough vehicles")
+
+    def test_red_mission_still_dispatches_a_genuinely_free_vehicle_despite_stale_assigned_entry(self):
+        # Same stale-assigned-tracking setup, but this time a real, free
+        # vehicle also exists -- confirms Rule 1 doesn't just report the
+        # shortfall correctly, it actually dispatches to close it.
+        already_assigned = SimpleNamespace(id=200, type_id=0, is_available=False,
+                                            position=BUILDING, target_type="mission", target_id=1)
+        missions = [m(1, 1, status="red")]  # type 1 needs 1 firetruck
+        client = FakeClient(missions, [already_assigned, v(201, 0)], [b()])
+        report = asyncio.run(self._runner(client).run_cycle())
+        self.assertEqual(client.dispatched, [(1, 201)])
+        row = report.mission_breakdown[0]
+        self.assertEqual(row["bot_status"], "fully staffed")
+
+    def test_yellow_mission_still_trusts_assigned_delta_as_already_covered(self):
+        # Rule 1 is scoped to RED only (Sasha, 2026-10-26) -- once a mission
+        # has shown SOME real response (yellow/green), normal delta
+        # adjustment against our own assigned tracking still applies.
+        already_assigned = SimpleNamespace(id=200, type_id=0, is_available=False,
+                                            position=BUILDING, target_type="mission", target_id=1)
+        missions = [m(1, 1, status="yellow")]  # type 1 needs 1 firetruck; already met
+        client = FakeClient(missions, [already_assigned], [b()])
+        report = asyncio.run(self._runner(client).run_cycle())
+        self.assertEqual(client.dispatched, [])
+        row = report.mission_breakdown[0]
+        self.assertEqual(row["bot_status"], "already covered")
 
     def test_cycle_reports_mission_breakdown_out_of_scope(self):
         missions = [m(1, 1, status="red")]
@@ -825,6 +879,23 @@ class RunnerTests(unittest.TestCase):
         asyncio.run(runner.run_cycle())
         asyncio.run(runner.run_cycle())
         self.assertEqual(calls["n"], 0)  # cache used, never fetched
+
+    # -- shortfall log ordering (Sasha, 2026-10-26) ------------------------
+
+    def test_shortfall_log_lists_closest_to_complete_first(self):
+        # Fixture types 2 (firetrucks:2, platform_trucks:1,
+        # battalion_chief_vehicles:1 -> magnitude 4), 3 (firetrucks:1,
+        # police_cars:1 -> magnitude 2), 1 (firetrucks:1 -> magnitude 1), all
+        # with zero vehicles to crew them. Listed 1, 2, 3 (worst-to-best) so
+        # the log's own order can't coincidentally match -- the fixed
+        # first-N-in-plan-order cap used to just show whichever sorted first
+        # by mission id, not whichever was most actionable.
+        client = FakeClient([m(1, 2), m(2, 3), m(3, 1)], [], [b()])
+        lines: list[str] = []
+        asyncio.run(self._runner(client, on_log=lines.append).run_cycle())
+        short_lines = [ln for ln in lines if ln.strip().startswith("short #")]
+        ids_in_order = [int(ln.split("#", 1)[1].split()[0]) for ln in short_lines]
+        self.assertEqual(ids_in_order, [3, 2, 1])  # magnitude 1, 2, 4
 
 
 if __name__ == "__main__":

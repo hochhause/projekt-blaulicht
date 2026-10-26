@@ -1231,9 +1231,30 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
         return "no patients on site" if patient_only else "no requirements found"
 
     # Credit gating already happened during candidate collection.
-    requirements = _apply_delta(base, assigned, mission.id)
-    # Firefighters already en route count toward the personnel minimum.
-    fire_needed = max(0, min_fire - _fire_crew(resolver, assigned.get(mission.id, []))) if min_fire else 0
+    #
+    # Rule (Sasha, 2026-10-26, hotfix): a mission still showing RED has had
+    # NOTHING arrive, no matter what our own "assigned" (en-route) bookkeeping
+    # claims -- live-observed missions stuck red and marked "already covered"
+    # for a long time, because something we believed was already en route
+    # delta-subtracted the requirement to zero without ever actually showing
+    # up. Trust the mission's own currently-revealed need over bookkeeping
+    # that isn't producing visible progress: skip the delta entirely while
+    # red, so it's always evaluated against the FULL current requirement
+    # instead of being silently skipped as "already covered". Once the
+    # mission goes yellow/green (something has genuinely shown up), normal
+    # delta-adjustment resumes. A known, accepted tradeoff of this hotfix:
+    # a genuinely-en-route (but not yet arrived) vehicle no longer reduces
+    # what gets dispatched to a still-red mission, so a slow arrival can
+    # cause a harmless extra send rather than a silent stall -- deliberately
+    # preferred over the stall for now; the underlying assigned-tracking
+    # gets revisited properly in a follow-up pass, not as part of this fix.
+    if getattr(mission, "status", None) == "red":
+        requirements = list(base)
+        fire_needed = min_fire
+    else:
+        requirements = _apply_delta(base, assigned, mission.id)
+        # Firefighters already en route count toward the personnel minimum.
+        fire_needed = max(0, min_fire - _fire_crew(resolver, assigned.get(mission.id, []))) if min_fire else 0
 
     if not requirements and fire_needed <= 0:
         return "already covered"

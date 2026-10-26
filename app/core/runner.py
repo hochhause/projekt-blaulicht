@@ -43,6 +43,21 @@ def _summary_key(reason: str) -> str:
     return _REASON_DETAIL.sub("", reason).strip()
 
 
+# Every per-class count in a "not enough vehicles: short X x3, Y x1" reason
+# string is written "x<N>" (see plan_dispatches' shortfall formatting) --
+# reused here as the sort key for the cycle-log's shortfall list.
+_SHORTFALL_COUNT_RE = re.compile(r"x(\d+)\b")
+
+
+def _shortfall_magnitude(reason: str) -> int:
+    """Total still-missing vehicle count implied by a skip reason (sum of
+    every "xN" in it) — closest-to-complete sorts first. A reason with no
+    parseable count (e.g. a future reason shape this doesn't recognize) sorts
+    LAST, never masking an actually-actionable mission behind an unknown one."""
+    counts = _SHORTFALL_COUNT_RE.findall(reason)
+    return sum(int(c) for c in counts) if counts else 10**9
+
+
 def _bucket_skip_reason(reason: str) -> tuple[str, str]:
     """Map a raw dispatch skip reason to one of the panel's named bot-status
     buckets (Sasha, 2026-09-22: "fully staffed, out of scope, no requirements
@@ -336,8 +351,14 @@ class DispatchRunner:
         for m in missions:
             mp = planned_by_id.get(m.id)
             reason = skipped_by_id.get(m.id)
+            live_status = getattr(m, "status", "unknown")
             if mp is not None:
                 if mp.satisfied:
+                    # "fully staffed" + red is an EXPECTED one-cycle-lag
+                    # artifact when we just dispatched THIS cycle (the live
+                    # status was polled before we acted) -- deliberately left
+                    # alone, see the "already covered" branch below for the
+                    # case that's actually suspicious.
                     bot_status = "fully staffed"
                     explanation = f"{len(mp.vehicle_ids)} vehicle(s) sent"
                 else:
@@ -346,6 +367,14 @@ class DispatchRunner:
                     explanation = f"sent {len(mp.vehicle_ids)}, still short: {missing}"
             elif reason is not None:
                 bot_status, explanation = _bucket_skip_reason(reason)
+                # Same red/"already covered" contradiction as above, for the
+                # skip path: "already covered" means our OWN tracking saw
+                # nothing left to dispatch WITHOUT sending anything new this
+                # cycle -- on a mission still showing red, that's exactly the
+                # same "satisfied but nothing's arrived" state, just reached
+                # via last cycle's send instead of this one's.
+                if bot_status == "already covered" and live_status == "red":
+                    bot_status = "awaiting arrival"
             else:
                 continue  # not actually considered this cycle (shouldn't normally happen)
             is_alliance = not is_own_mission(m, self._own_user_id)
@@ -354,7 +383,7 @@ class DispatchRunner:
                 "mission_id": m.id,
                 "caption": getattr(m, "caption", "") or "(no caption)",
                 "category": category,
-                "live_status": getattr(m, "status", "unknown"),
+                "live_status": live_status,
                 "bot_status": bot_status,
                 "explanation": explanation,
             })
@@ -408,12 +437,18 @@ class DispatchRunner:
             self._log(f"plan: {len(plan.planned)} actionable")
 
         # Log shortfalls / strike-outs prominently — these matter more than
-        # successes (they're why a mission didn't get handled).
+        # successes (they're why a mission didn't get handled). Closest-to-
+        # complete first (Sasha, 2026-10-26: the fixed first-5-in-plan-order
+        # cut a mission short just x1 off the same way it cut one short x12 —
+        # order by total still-missing count instead, so whichever one is
+        # most actionable survives the cap, not whichever happened to sort
+        # first in plan.skipped).
         by_id = {m.id: m for m in missions}
         shortfalls = [
             (mid, r) for mid, r in plan.skipped
             if r.startswith("not enough vehicles") or r.startswith("needs struck-out")
         ]
+        shortfalls.sort(key=lambda pair: _shortfall_magnitude(pair[1]))
         for mid, reason in shortfalls[:5]:
             mm = by_id.get(mid)
             cap = getattr(mm, "caption", "") if mm is not None else ""
