@@ -43,6 +43,12 @@ class FakeClient:
         # mission ids whose alarm route should simulate a 404 (confirmed live
         # 2026-10-01: resolved/removed between poll and dispatch).
         self.gone_missions: set[int] = set()
+        # mission_id -> [(vehicle_id, type_id), ...] -- the on-scene roster
+        # GameClient.fetch_on_scene_vehicles would parse off the mission
+        # detail page (everyone's vehicles, not just ours). Empty/unset by
+        # default, matching "nothing fetched this cycle".
+        self.on_scene_rosters: dict[int, list[tuple[int, int]]] = {}
+        self.on_scene_fetches: list[int] = []
 
     async def fetch_missions(self):
         return self._missions
@@ -87,6 +93,10 @@ class FakeClient:
         self.recalled.append(vehicle_id)
         return True
 
+    async def fetch_on_scene_vehicles(self, mission_id):
+        self.on_scene_fetches.append(mission_id)
+        return self.on_scene_rosters.get(mission_id, [])
+
 
 def m(mid, mtype, pos=NEAR, status="unknown", vehicle_state=0):
     return SimpleNamespace(id=mid, caption=f"M{mid}", mission_type_id=mtype, position=pos,
@@ -108,7 +118,7 @@ class RunnerTests(unittest.TestCase):
         catalog = MissionCatalog.from_payload(json.loads(FIXTURE.read_text(encoding="utf-8")))
         cls.resolver = MissionRequirementResolver(catalog, library)
 
-    def _runner(self, client, on_log=None, strikes=None, alarm_tracker=None):
+    def _runner(self, client, on_log=None, strikes=None, alarm_tracker=None, recall_cadence=None):
         # No-op sleep so the test is instant.
         async def no_sleep(_):
             return None
@@ -117,6 +127,7 @@ class RunnerTests(unittest.TestCase):
             client, self.resolver, DispatchPolicy(radius_km=40),
             timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
             on_log=on_log, strikes=strikes, alarm_tracker=alarm_tracker,
+            recall_cadence=recall_cadence,
         )
 
     def test_cycle_dispatches_planned_vehicles(self):
@@ -705,6 +716,10 @@ class RunnerTests(unittest.TestCase):
         v101 = SimpleNamespace(id=101, type_id=0, is_available=False, position=BUILDING,
                                building_id=1, fms=4, target_type="mission", target_id=1)
         client = FakeClient([m1], [v100, v101], [b()])
+        # The on-scene roster cleanup() fetches confirms both LFs are really
+        # there (everyone's roster, which here is only ever us) -- only 1 is
+        # needed, so the other is surplus.
+        client.on_scene_rosters[1] = [(100, 0), (101, 0)]
         runner = DispatchRunner(
             client, self.resolver, DispatchPolicy(radius_km=40),
             timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
@@ -721,6 +736,88 @@ class RunnerTests(unittest.TestCase):
         client = FakeClient([mission], [nef], [b()])
         asyncio.run(self._runner(client).run_cycle())  # patient_only off
         self.assertEqual(client.recalled, [])
+
+    # -- automatic recall (Sasha, 2026-10-27: D4) ---------------------------
+    def test_automatic_recall_is_off_without_a_recall_cadence(self):
+        # recall_cadence is optional -- omitting it must not fetch rosters
+        # or recall anything, even for an obviously-surplus green mission.
+        m1 = m(1, 1, status="green")
+        v100 = SimpleNamespace(id=100, type_id=0, is_available=False, position=BUILDING,
+                               building_id=1, fms=4, target_type="mission", target_id=1)
+        client = FakeClient([m1], [v100], [b()])
+        client.on_scene_rosters[1] = [(100, 0)]
+        asyncio.run(self._runner(client).run_cycle())
+        self.assertEqual(client.recalled, [])
+        self.assertEqual(client.on_scene_fetches, [])
+
+    def test_automatic_recall_stops_en_route_on_first_sight_of_green(self):
+        from app.domain.dispatch import RecallCadence
+
+        m1 = m(1, 1, status="green")
+        en_route = SimpleNamespace(id=100, type_id=0, is_available=False, position=BUILDING,
+                                   building_id=1, fms=3, target_type="mission", target_id=1)
+        client = FakeClient([m1], [en_route], [b()])
+        cadence = RecallCadence()
+        asyncio.run(self._runner(client, recall_cadence=cadence).run_cycle())
+        self.assertEqual(client.recalled, [100])
+        self.assertIn(1, cadence.fired_once)
+        self.assertIn(1, cadence.last_checked)
+
+    def test_automatic_recall_pulls_s4_surplus_once_everyone_is_counted(self):
+        from app.domain.dispatch import RecallCadence
+
+        m1 = m(1, 1, status="green")  # firetrucks:1
+        v100 = SimpleNamespace(id=100, type_id=0, is_available=False, position=BUILDING,
+                               building_id=1, fms=4, target_type="mission", target_id=1)
+        v101 = SimpleNamespace(id=101, type_id=0, is_available=False, position=BUILDING,
+                               building_id=1, fms=4, target_type="mission", target_id=1)
+        client = FakeClient([m1], [v100, v101], [b()])
+        client.on_scene_rosters[1] = [(100, 0), (101, 0)]  # both ours, confirmed on the page
+        cadence = RecallCadence()
+        asyncio.run(self._runner(client, recall_cadence=cadence).run_cycle())
+        self.assertEqual(len(client.recalled), 1)
+        self.assertIn(client.recalled[0], {100, 101})
+        self.assertEqual(client.on_scene_fetches, [1])
+
+    def test_automatic_recall_does_not_refire_within_15_minutes(self):
+        from app.domain.dispatch import RecallCadence
+
+        m1 = m(1, 1, status="green")
+        v100 = SimpleNamespace(id=100, type_id=0, is_available=False, position=BUILDING,
+                               building_id=1, fms=4, target_type="mission", target_id=1)
+        v101 = SimpleNamespace(id=101, type_id=0, is_available=False, position=BUILDING,
+                               building_id=1, fms=4, target_type="mission", target_id=1)
+        client = FakeClient([m1], [v100, v101], [b()])
+        client.on_scene_rosters[1] = [(100, 0), (101, 0)]
+        cadence = RecallCadence()
+        runner = self._runner(client, recall_cadence=cadence)
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(len(client.recalled), 1)
+        # A second cycle moments later: fired_once already covers it, and
+        # last_checked is nowhere near 15 minutes old -- no re-fetch, no
+        # second recall attempt.
+        asyncio.run(runner.run_cycle())
+        self.assertEqual(len(client.recalled), 1)
+        self.assertEqual(client.on_scene_fetches, [1])
+
+    def test_automatic_recall_leaves_a_mission_with_no_fetched_roster_untouched(self):
+        # The roster fetch itself can legitimately come back empty (page
+        # error, no table found) -- GameClient.fetch_on_scene_vehicles
+        # already returns [] for that; the runner must not then treat it as
+        # "confirmed nothing there" and recall anyway.
+        from app.domain.dispatch import RecallCadence
+
+        m1 = m(1, 1, status="green")
+        v100 = SimpleNamespace(id=100, type_id=0, is_available=False, position=BUILDING,
+                               building_id=1, fms=4, target_type="mission", target_id=1)
+        client = FakeClient([m1], [v100], [b()])
+        # client.on_scene_rosters left empty -> fetch_on_scene_vehicles returns []
+        cadence = RecallCadence()
+        asyncio.run(self._runner(client, recall_cadence=cadence).run_cycle())
+        self.assertEqual(client.recalled, [])
+        # Still marked checked/fired -- the cadence itself isn't stuck retrying
+        # every cycle just because the fetch came back empty once.
+        self.assertIn(1, cadence.fired_once)
 
     def test_hilferuf_shares_own_uncrewable_mission(self):
         # Own mission needs a firetruck; we only have police -> can't crew ->

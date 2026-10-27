@@ -11,11 +11,14 @@ from app.domain.dispatch import (
     MissionSource,
     ModeScope,
     ParasiteAggressiveness,
+    RecallCadence,
     _infer_own_user_id,
     _reserve_vehicle_group,
     _TOWED_WITH_SELF_PROPELLED_ALTERNATIVE,
     assigned_from_vehicles,
+    due_for_reconciliation,
     plan_dispatches,
+    plan_reconciliation,
 )
 from app.domain.resolver import MissionRequirementResolver
 
@@ -39,14 +42,14 @@ FAR = (53.5500, 9.9900)     # Hamburg, ~250 km
 
 def mission(mid, mtype, pos, is_alliance=False, average_credits=0, created_at=None, vehicle_state=0,
             patients_count=0, possible_patients_count=0, missing_text="", is_event=False,
-            user_id=None, caption=None):
+            user_id=None, caption=None, status=None):
     return SimpleNamespace(
         id=mid, caption=caption if caption is not None else f"M{mid}", mission_type_id=mtype,
         position=pos,
         is_alliance=is_alliance, average_credits=average_credits, created_at=created_at,
         vehicle_state=vehicle_state, missing_text=missing_text,
         patients_count=patients_count, possible_patients_count=possible_patients_count,
-        is_event=is_event, user_id=user_id,
+        is_event=is_event, user_id=user_id, status=status,
     )
 
 
@@ -1193,47 +1196,135 @@ class DispatchPlannerTests(unittest.TestCase):
                                target_id=mid, fms=fms, is_available=False,
                                position=BUILDING, building_id=1)
 
-    def test_cleanup_recalls_surplus(self):
-        from app.domain.dispatch import plan_cleanup
+    def _everyone(self, *vehs):
+        """on_scene_everyone-shaped roster from the same (id, type_id, mid,
+        fms) fixtures _assigned() builds -- only the fms==4 ones (everyone's
+        on-scene roster is what GameClient.fetch_on_scene_vehicles returns)."""
+        by_mid: dict[int, list] = {}
+        for v in vehs:
+            if v.fms == 4:
+                by_mid.setdefault(v.target_id, []).append((v.id, v.type_id))
+        return by_mid
+
+    def test_reconciliation_recalls_surplus(self):
         m = mission(1, 1, NEAR)  # needs firetrucks:1
         vehs = [self._assigned(100, LF, 1), self._assigned(101, LF, 1)]  # 2 LFs, 1 needed
-        recalls = plan_cleanup([m], vehs, [building()], self.resolver)
+        recalls = plan_reconciliation([m], vehs, self.resolver, None, self._everyone(*vehs), {1})
         self.assertEqual(len(recalls), 1)
         self.assertIn(recalls[0][0], {100, 101})
+        self.assertEqual(recalls[0][1], 1)
 
-    def test_cleanup_keeps_needed(self):
-        from app.domain.dispatch import plan_cleanup
+    def test_reconciliation_keeps_needed(self):
         m = mission(1, 1, NEAR)
-        recalls = plan_cleanup([m], [self._assigned(100, LF, 1)], [building()], self.resolver)
+        vehs = [self._assigned(100, LF, 1)]
+        recalls = plan_reconciliation([m], vehs, self.resolver, None, self._everyone(*vehs), {1})
         self.assertEqual(recalls, [])
 
-    def test_cleanup_skips_unknown_requirement(self):
-        from app.domain.dispatch import plan_cleanup
+    def test_reconciliation_skips_unknown_requirement(self):
         m = mission(1, 4242, NEAR)  # not in catalogue -> can't judge -> leave alone
-        recalls = plan_cleanup([m], [self._assigned(100, LF, 1)], [building()], self.resolver)
+        vehs = [self._assigned(100, LF, 1)]
+        recalls = plan_reconciliation([m], vehs, self.resolver, None, self._everyone(*vehs), {1})
         self.assertEqual(recalls, [])
 
-    def test_cleanup_keeps_transporting_vehicle(self):
-        from app.domain.dispatch import plan_cleanup
+    def test_reconciliation_keeps_transporting_vehicle(self):
         m = mission(1, 1, NEAR)  # needs 1 firetruck; the RTW is extra but transporting
         vehs = [self._assigned(100, LF, 1, fms=4), self._assigned(101, 28, 1, fms=5)]
-        recalls = plan_cleanup([m], vehs, [building()], self.resolver)
+        # fms=5 (transporting) is never on-scene -- it's not even in the
+        # on-scene roster (everyone's fetch wouldn't list it there either).
+        recalls = plan_reconciliation([m], vehs, self.resolver, None, self._everyone(*vehs), {1})
         self.assertEqual(recalls, [])
 
-    def test_cleanup_recalls_idle_extra(self):
-        from app.domain.dispatch import plan_cleanup
+    def test_reconciliation_recalls_idle_extra(self):
         m = mission(1, 1, NEAR)
         vehs = [self._assigned(100, LF, 1, fms=4), self._assigned(101, 28, 1, fms=4)]
-        recalls = plan_cleanup([m], vehs, [building()], self.resolver)
+        recalls = plan_reconciliation([m], vehs, self.resolver, None, self._everyone(*vehs), {1})
         self.assertEqual([r[0] for r in recalls], [101])  # idle RTW not needed
 
-    def test_cleanup_fire_personnel_keeps_minimum(self):
-        from app.domain.dispatch import plan_cleanup
+    def test_reconciliation_fire_personnel_keeps_minimum(self):
         resolver = self._fire_resolver(3)  # 3 firefighters -> one LF suffices
         m = mission(1, 900, NEAR)
         vehs = [self._assigned(100, LF, 1), self._assigned(101, LF, 1)]
-        recalls = plan_cleanup([m], vehs, [building()], resolver)
+        recalls = plan_reconciliation([m], vehs, resolver, None, self._everyone(*vehs), {1})
         self.assertEqual(len(recalls), 1)
+
+    def test_reconciliation_skips_mission_without_a_fetched_roster(self):
+        # Sasha's own words: "if we over-recall we have a problem" -- a
+        # mission not in on_scene_everyone (not fetched this cycle, or the
+        # fetch failed) must NEVER be treated as "confirmed surplus".
+        m = mission(1, 1, NEAR)
+        vehs = [self._assigned(100, LF, 1), self._assigned(101, LF, 1)]
+        recalls = plan_reconciliation([m], vehs, self.resolver, None, {}, {1})
+        self.assertEqual(recalls, [])
+
+    def test_reconciliation_ignores_a_mission_outside_due_ids(self):
+        # Even an obviously-surplus mission is left alone if it's not in
+        # due_ids (the cadence gate already decided it's not due yet).
+        m = mission(1, 1, NEAR)
+        vehs = [self._assigned(100, LF, 1), self._assigned(101, LF, 1)]
+        recalls = plan_reconciliation([m], vehs, self.resolver, None, self._everyone(*vehs), set())
+        self.assertEqual(recalls, [])
+
+    def test_reconciliation_does_not_recall_a_vehicle_the_roster_cannot_confirm(self):
+        # One of our two LFs doesn't actually show up in the fetched roster
+        # (a parsing miss, a lagging fetch) -- it must never be treated as
+        # surplus just because it's "not in needed_ids"; only a vehicle id
+        # this fetch BOTH knows is ours AND can see present is a candidate.
+        m = mission(1, 1, NEAR)
+        vehs = [self._assigned(100, LF, 1), self._assigned(101, LF, 1)]
+        everyone = {1: [(100, LF)]}  # 101 missing from the roster entirely
+        recalls = plan_reconciliation([m], vehs, self.resolver, None, everyone, {1})
+        self.assertEqual(recalls, [])
+
+    def test_reconciliation_counts_other_players_before_recalling_ours(self):
+        # The mission needs only 1 firetruck. We have 1 LF on scene -- but
+        # the fetched roster shows ANOTHER player's LF there too (id 999,
+        # not one of ours). With both counted, 2 on scene > 1 needed, so our
+        # own LF is genuinely surplus and gets recalled; Sasha: "count other
+        # peoples vehicles too but we can obviously only recall our own."
+        m = mission(1, 1, NEAR)
+        ours = [self._assigned(100, LF, 1)]
+        everyone = {1: [(100, LF), (999, LF)]}
+        recalls = plan_reconciliation([m], ours, self.resolver, None, everyone, {1})
+        self.assertEqual(recalls, [(100, 1, "surplus once everyone on scene is counted")])
+
+    def test_reconciliation_never_recalls_another_players_vehicle(self):
+        # Mission needs firetrucks:1; three LFs are on scene (two other
+        # players' + ours). Our ownership bias keeps a non-owned vehicle
+        # preferred as the "needed" one, so the SECOND other-player LF ends
+        # up "surplus" right alongside ours -- but it is never ours to
+        # recall. (Explicitly mutation-checked, 2026-10-27: looping over
+        # every pool id instead of verified_our_ids made this test fail, as
+        # it must -- see the recall core's own commit for the before/after.)
+        m = mission(1, 1, NEAR)
+        ours = [self._assigned(100, LF, 1)]
+        everyone = {1: [(998, LF), (999, LF), (100, LF)]}
+        recalls = plan_reconciliation([m], ours, self.resolver, None, everyone, {1})
+        recalled_ids = [r[0] for r in recalls]
+        self.assertNotIn(998, recalled_ids)
+        self.assertNotIn(999, recalled_ids)
+
+    def test_reconciliation_stops_our_en_route_vehicle_on_a_green_mission(self):
+        # Sasha: "a green mission... all S3 can be stopped" -- no counting
+        # needed at all, green alone is enough.
+        m = mission(1, 1, NEAR, status="green")
+        en_route = self._assigned(100, LF, 1, fms=3)
+        recalls = plan_reconciliation([m], [en_route], self.resolver, None, {}, {1})
+        self.assertEqual(recalls, [(100, 1, "green mission, still en route")])
+
+    def test_reconciliation_leaves_en_route_vehicle_on_a_non_green_mission(self):
+        m = mission(1, 1, NEAR, status="yellow")
+        en_route = self._assigned(100, LF, 1, fms=3)
+        recalls = plan_reconciliation([m], [en_route], self.resolver, None, {}, {1})
+        self.assertEqual(recalls, [])
+
+    def test_reconciliation_skips_a_mission_no_longer_in_the_feed(self):
+        # Mirrors plan_cleanup's old behaviour: a mission we have a vehicle
+        # on but that's dropped out of the feed entirely (likely done) is
+        # left alone -- not our call to make without the mission object.
+        vehs = [self._assigned(100, LF, 1)]
+        recalls = plan_reconciliation([], vehs, self.resolver, None, self._everyone(*vehs), {1})
+        self.assertEqual(recalls, [])
+
 
     def test_vehicle_position_derived_from_building(self):
         # Vehicles carry no coordinates (real API); distance uses their building.
@@ -1966,6 +2057,41 @@ class DispatchPlannerTests(unittest.TestCase):
                 derived |= present
 
         self.assertEqual(derived, _TOWED_WITH_SELF_PROPELLED_ALTERNATIVE)
+
+
+class DueForReconciliationTests(unittest.TestCase):
+    def test_due_the_first_time_a_mission_is_seen_green(self):
+        cadence = RecallCadence()
+        due = due_for_reconciliation([mission(1, 1, NEAR, status="green")], {1}, cadence, now=1000.0)
+        self.assertEqual(due, {1})
+
+    def test_not_due_again_once_fired_for_that_green_mission(self):
+        cadence = RecallCadence(fired_once={1})
+        due = due_for_reconciliation([mission(1, 1, NEAR, status="green")], {1}, cadence, now=1000.0)
+        self.assertEqual(due, set())
+
+    def test_due_again_after_15_minutes_even_once_fired(self):
+        cadence = RecallCadence(last_checked={1: 0.0}, fired_once={1})
+        due = due_for_reconciliation([mission(1, 1, NEAR, status="green")], {1}, cadence, now=901.0)
+        self.assertEqual(due, {1})
+
+    def test_not_due_before_15_minutes_have_passed(self):
+        cadence = RecallCadence(last_checked={1: 1000.0}, fired_once={1})
+        due = due_for_reconciliation([mission(1, 1, NEAR, status="yellow")], {1}, cadence, now=1899.0)
+        self.assertEqual(due, set())
+
+    def test_not_due_for_a_non_green_mission_never_checked(self):
+        # Only a GREEN mission gets the "first time seen" exemption -- a
+        # red/yellow mission waits for the normal 15-minute interval.
+        cadence = RecallCadence()
+        due = due_for_reconciliation([mission(1, 1, NEAR, status="yellow")], {1}, cadence, now=1000.0)
+        self.assertEqual(due, set())
+
+    def test_only_candidate_ids_are_ever_considered(self):
+        cadence = RecallCadence()
+        missions = [mission(1, 1, NEAR, status="green"), mission(2, 1, NEAR, status="green")]
+        due = due_for_reconciliation(missions, {1}, cadence, now=1000.0)
+        self.assertEqual(due, {1})
 
 
 if __name__ == "__main__":

@@ -96,17 +96,50 @@ is this file's checkboxes plus the commit log.
 
 ## Milestone 3 — automatic recall
 
-- [ ] 13. Design and implement the reconciliation core (dispatch.py): S4-only counting (ours +
-      others), surplus-our-S4 recall, "stop our S3 on an already-green mission."
-- [ ] 14. Wire into `DispatchRunner.run_cycle` ([runner.py](../app/core/runner.py)): in-process
-      `last_checked: dict[int, float]` + `fired_once: set[int]`, first-green-or-15-minutes cadence.
-- [ ] 15. Rewire `cleanup()` to call the same core unconditionally (every mission, no cadence);
-      remove `plan_cleanup`'s old S3/S4-blind implementation once the new core covers its cases.
-- [ ] 16. Write + pass AC-M3-01 through AC-M3-06, including the explicit mutation check for
-      AC-M3-05 (remove the "ours only" filter, confirm the test fails, put the filter back).
-- [ ] 17. `python -m pytest tests/test_dispatch.py tests/test_runner.py -x -q` green; independent,
-      adversarial review specifically targeting over-recall scenarios (opus, explicit prompt: "try
-      to find an input that causes a needed vehicle to be recalled").
+- [x] 13. Design and implement the reconciliation core (dispatch.py): S4-only counting (ours +
+      others), surplus-our-S4 recall, "stop our S3 on an already-green mission." **Design note,
+      significant deviation from the plan's original Contract sketch**: the Contract assumed other
+      players' vehicles are visible in the same `vehicles` feed ours come from — FALSE, confirmed in
+      code (`GameClient.fetch_vehicles`'s own docstring: "Your **entire** fleet") and live
+      (Sasha logged the bot into a browser session, 2026-10-27, to check). The combined "everyone's
+      on-scene" count instead comes from a NEW `GameClient.fetch_on_scene_vehicles(mission_id)`,
+      parsing the mission detail page's `#mission_vehicle_at_mission` table (live-verified: real
+      vehicle id + `vehicle_type_id` per row, server-rendered not AJAX — see
+      [client.py](../app/game/client.py)'s `_parse_on_scene_vehicles`/`_ON_SCENE_ROW`). A mission
+      absent from that fetch (not due, or the fetch failed) gets NO S4 check at all — never treated
+      as "confirmed surplus" (see `plan_reconciliation`'s docstring). `select_coverage` is reused
+      over the combined (ours + others, real ids) pool with a custom `distance_of` bias that prefers
+      keeping non-owned vehicles as "needed" first, so our own surplus is what gets freed —
+      intentionally conservative (may miss a safe recall if the tie-break goes the other way; never
+      over-recalls). Only a vehicle id BOTH our own fleet AND the fetched roster confirm present is
+      ever a recall candidate (`verified_our_ids`) — a parsing miss or stale fetch for one of our own
+      vehicles simply excludes it, never defaults it to "surplus".
+- [x] 14. Wire into `DispatchRunner.run_cycle` ([runner.py](../app/core/runner.py)):
+      `RecallCadence` (dispatch.py) replaces the plan's raw dict+set sketch — same semantics
+      (`last_checked`/`fired_once`), owned by `AccountRunner` like `StrikeTracker`/`AlarmTracker` so
+      a reconnect doesn't reset it. `due_for_reconciliation` is a separate pure function (not
+      folded into the core) so the runner knows which missions to spend an extra page-fetch on
+      BEFORE fetching. **Bug caught by testing, fixed in `due_for_reconciliation`**: the "never
+      checked" default must be `now` itself, not `0.0` — a 0.0 sentinel made the 15-minute-elapsed
+      branch trivially true for ANY real epoch `now` on a mission's very first sighting, firing an
+      immediate check for every non-green candidate instead of only once-on-green.
+- [x] 15. Rewired `cleanup()` to call `plan_reconciliation` unconditionally (every mission we have a
+      vehicle on, no cadence gate) — `plan_cleanup` was fully deleted (confirmed unused anywhere
+      else) along with its 6 dedicated tests, rewritten as `plan_reconciliation` equivalents plus new
+      coverage for the roster/ownership edge cases the old function never had to consider.
+- [x] 16. AC-M3-01 through AC-M3-06 covered across `tests/test_dispatch.py` (`plan_reconciliation`
+      unit tests + `DueForReconciliationTests`), `tests/test_runner.py` (automatic-pass wiring +
+      cleanup rewiring), `tests/test_client_dispatch.py` (`_parse_on_scene_vehicles` +
+      `fetch_on_scene_vehicles`). **Mutation check performed and recorded**: changed the recall
+      loop's `for vid in verified_our_ids:` to `for vid in {p.id for p in pool}:` (iterating every
+      on-scene id, not just verified-ours) — the first test scenario written did NOT catch this (a
+      real gap: the scenario could never produce a non-owned "surplus" id in the first place, since
+      the ownership bias always kept a non-owned vehicle "needed" when there was only one of each).
+      Rewrote `test_reconciliation_never_recalls_another_players_vehicle` with 3 on-scene LFs (2
+      others' + 1 ours, mission needs 1) so a non-owned vehicle genuinely ends up marked surplus;
+      confirmed the mutation now fails it, reverted the mutation, confirmed green again.
+- [x] 17. `python -m pytest tests/ -q --ignore=tests/test_web.py` — 548 passed, 12 subtests passed.
+      Independent adversarial review: pending, folded into Milestone 4's `code-reviewer` pass.
 
 ## Milestone 4 — SMART validation, cleanup, full regression, PR
 

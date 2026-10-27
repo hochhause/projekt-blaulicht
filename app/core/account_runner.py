@@ -17,7 +17,7 @@ import logging
 
 from ..domain.alarms import AlarmTracker
 from ..domain.catalog import MissionCatalog
-from ..domain.dispatch import DispatchPolicy
+from ..domain.dispatch import DispatchPolicy, RecallCadence
 from ..domain.requirements import RequirementEngine
 from ..domain.resolver import MissionRequirementResolver
 from ..domain.strikes import StrikeTracker
@@ -83,6 +83,15 @@ class AccountRunner:
         # to survive a restart") -- a real account restart makes a fresh
         # AccountRunner -> fresh tracker, same as StrikeTracker.
         self._alarms = AlarmTracker()
+        # D4's automatic-recall cadence state (see RecallCadence) -- owned
+        # HERE for the same reconnect-survival reason as _strikes/_alarms
+        # above: a reconnect must not reset "have we already fired on this
+        # green mission" or "when did we last check it", or the 15-minute/
+        # once-on-green cadence would silently restart on every transient
+        # failure. In-memory only (Sasha, 2026-10-27: "doesn't need to
+        # survive a restart") -- a real account restart makes a fresh
+        # AccountRunner -> fresh cadence state.
+        self._recall_cadence = RecallCadence()
         # Mission ids whose casualty count has ever been authoritatively
         # revealed (see MissionRequirementResolver.effective_count_revealed) —
         # owned here, not by the resolver, and handed to each newly-built
@@ -120,7 +129,7 @@ class AccountRunner:
             client, resolver, self._policy,
             on_log=self._on_log, on_stat=self._on_stat, timing=self._timing,
             text_engine=text_engine, strikes=self._strikes, alarm_tracker=self._alarms,
-            vehicle_cap=self._vehicle_cap,
+            recall_cadence=self._recall_cadence, vehicle_cap=self._vehicle_cap,
             transport_enabled=self._transport_enabled, transport_only=self._transport_only,
         )
         self._log(f"connected — {len(resolver.catalog)} mission types loaded")

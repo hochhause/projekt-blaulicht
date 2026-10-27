@@ -11,7 +11,7 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 
-from app.game.client import _parse_dispatch_failures
+from app.game.client import _parse_dispatch_failures, _parse_on_scene_vehicles
 
 try:
     import httpx  # noqa: F401
@@ -72,6 +72,69 @@ class ParseDispatchFailuresTests(unittest.TestCase):
         self.assertEqual(_parse_dispatch_failures(html), {})
 
 
+# Trimmed from a LIVE mission detail page (Sasha logged the bot into a
+# browser session, 2026-10-27, to confirm the roster is server-rendered, not
+# AJAX-injected) -- the real <tr> tag has the id attribute on its own line
+# with surrounding whitespace, not a contiguous `<tr id="...">` literal.
+_LIVE_ON_SCENE_TABLE = """
+<table id="mission_vehicle_at_mission" class="table table-striped">
+<thead><tr><th>Fahrzeug</th></tr></thead>
+<tbody>
+<tr
+    id="vehicle_row_81048893"
+>
+  <td><span class="building_list_fms building_list_fms_4">4</span></td>
+  <td rowspan="">
+    <a href="/vehicles/81048893" vehicle_type_id="103">\U0001F7E2FuStW (DGL) #I-1</a>
+  </td>
+  <td class="hidden-xs"><a href="/profile/2641503">HyperCoderio</a></td>
+</tr>
+<tr
+    id="vehicle_row_125535599"
+>
+  <td><a href="/vehicles/125535599" vehicle_type_id="32">\U0001F7E2GW-Messtechnik</a></td>
+</tr>
+</tbody>
+</table>
+<table id="mission_vehicle_driving">
+<tr id="vehicle_row_999999"><a vehicle_type_id="7">en route, not on scene</a></tr>
+</table>
+"""
+
+
+class ParseOnSceneVehiclesTests(unittest.TestCase):
+    def test_parses_every_row_in_the_on_scene_table(self):
+        rows = _parse_on_scene_vehicles(_LIVE_ON_SCENE_TABLE)
+        self.assertEqual(rows, [(81048893, 103), (125535599, 32)])
+
+    def test_the_en_route_table_is_never_counted(self):
+        # The "Fahrzeuge auf Anfahrt" table uses the exact same row id shape
+        # -- a sloppy regex spanning both tables would double-count S3 as S4.
+        rows = _parse_on_scene_vehicles(_LIVE_ON_SCENE_TABLE)
+        self.assertNotIn((999999, 7), rows)
+
+    def test_missing_table_returns_empty_not_an_error(self):
+        # A page-shape change or an unrelated page must fail closed (treated
+        # by the caller the same as "not fetched"), never raise.
+        self.assertEqual(_parse_on_scene_vehicles("<html>no such table</html>"), [])
+
+    def test_empty_on_scene_table_returns_empty(self):
+        html = '<table id="mission_vehicle_at_mission"><tbody></tbody></table>'
+        self.assertEqual(_parse_on_scene_vehicles(html), [])
+
+    def test_a_row_missing_the_type_id_does_not_leak_into_the_next_row(self):
+        # Bounded the same way as _DISPATCH_FAILURE's own regex: a row
+        # lacking vehicle_type_id for any reason must not let the match run
+        # on into the following row and misattribute ITS type.
+        html = (
+            '<table id="mission_vehicle_at_mission"><tbody>'
+            '<tr id="vehicle_row_1"><td>no type id here</td></tr>'
+            '<tr id="vehicle_row_2"><a vehicle_type_id="30">HLF 20</a></tr>'
+            "</tbody></table>"
+        )
+        self.assertEqual(_parse_on_scene_vehicles(html), [(2, 30)])
+
+
 class FakeSession:
     """Just enough of GameSession for dispatch_many: token fetch + POST."""
 
@@ -124,6 +187,37 @@ class DispatchManyRejectionTests(unittest.TestCase):
         result = asyncio.run(client.dispatch(1, 125521931))
         self.assertTrue(result.ok)
         self.assertIn(125521931, result.rejected)
+
+
+class _OnScenePageSession:
+    """Just enough of GameSession for fetch_on_scene_vehicles: a plain GET."""
+
+    def __init__(self, page_text=None, raises=False):
+        self._page_text = page_text
+        self._raises = raises
+
+    async def get_text(self, path):
+        if self._raises:
+            raise RuntimeError("boom")
+        return self._page_text
+
+
+@unittest.skipUnless(HAVE_HTTPX, "httpx not installed")
+class FetchOnSceneVehiclesTests(unittest.TestCase):
+    def test_returns_every_on_scene_vehicle(self):
+        from app.game.client import GameClient
+        client = GameClient(_OnScenePageSession(_LIVE_ON_SCENE_TABLE))
+        rows = asyncio.run(client.fetch_on_scene_vehicles(4448998042))
+        self.assertEqual(rows, [(81048893, 103), (125535599, 32)])
+
+    def test_a_failed_fetch_returns_empty_not_an_exception(self):
+        # Sasha: "if we over-recall we have a problem" -- a network/page
+        # error here must fail closed (treated as "not fetched"), never
+        # propagate and never silently fabricate a roster.
+        from app.game.client import GameClient
+        client = GameClient(_OnScenePageSession(raises=True))
+        rows = asyncio.run(client.fetch_on_scene_vehicles(1))
+        self.assertEqual(rows, [])
 
 
 if __name__ == "__main__":

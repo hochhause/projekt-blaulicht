@@ -16,6 +16,7 @@ never verified and is intentionally not attempted.
                       fetch_einsaetze     GET  /einsaetze.json (public)
     read (undocumented but required)
                       fetch_missions      GET  /map/missions_json
+                      fetch_on_scene_vehicles GET /missions/{id} (HTML, parsed)
     act (form POST / GET, not an API)
                       dispatch, recall, transport_patient, transport_prisoner
 """
@@ -77,6 +78,50 @@ def _parse_dispatch_failures(html: str) -> dict[int, str]:
     id, with the reason text — see ``_DISPATCH_FAILURE``. Empty if the game
     accepted every vehicle (the common case)."""
     return {int(vid): reason.strip() for vid, reason in _DISPATCH_FAILURE.findall(html)}
+
+
+# The mission detail page's "Fahrzeuge an der Einsatzstelle" (on-scene, S4)
+# table, id="mission_vehicle_at_mission" — live-verified 2026-10-27 against a
+# real account (Sasha logged the bot into a browser session to confirm this
+# exists server-rendered, not AJAX-injected): a plain GET of /missions/{id}
+# with no query string already carries the full roster. Each row looks like
+#   <tr
+#       id="vehicle_row_81048893"
+#   >
+#     <td>...</td>
+#     <td rowspan=""><a href="/vehicles/81048893" vehicle_type_id="103">...
+# i.e. the <tr ...> and its id attribute can have arbitrary whitespace/
+# newlines between them (NOT a single contiguous literal) — this is DELIBERATELY
+# tolerant of that, unlike a naive `<tr id="...">` literal match which was
+# tested live and silently matched zero rows.
+#
+# Bounded the same way as _DISPATCH_FAILURE above: the gap between the row
+# open tag and `vehicle_type_id="..."` is "any char that doesn't start a
+# tr tag", not a bare lazy dot-match, so a row missing that attribute for any
+# reason can't let the match run on into the NEXT row and misattribute its
+# type.
+_ON_SCENE_TABLE = re.compile(
+    r'<table id="mission_vehicle_at_mission"[^>]*>((?:(?!</table>).)*?)</table>',
+    re.DOTALL,
+)
+_ON_SCENE_ROW = re.compile(
+    r'<tr[^>]*\bid="vehicle_row_(\d+)"[^>]*>'
+    r'(?:(?!</?tr\b).)*?'
+    r'vehicle_type_id="(\d+)"',
+    re.DOTALL,
+)
+
+
+def _parse_on_scene_vehicles(html: str) -> list[tuple[int, int]]:
+    """``(vehicle_id, type_id)`` for EVERY vehicle in the mission detail
+    page's on-scene table — every player's, not just ours. Empty if the
+    table isn't found at all (page shape changed, or the mission has
+    nothing on scene) — the caller treats that identically to a fetch
+    failure (never assumes zero means "confirmed surplus")."""
+    m = _ON_SCENE_TABLE.search(html)
+    if not m:
+        return []
+    return [(int(vid), int(tid)) for vid, tid in _ON_SCENE_ROW.findall(m.group(1))]
 
 
 _NO_REJECTIONS: "MappingProxyType[int, str]" = MappingProxyType({})
@@ -337,6 +382,26 @@ class GameClient:
             logger.exception("sharing mission %s to alliance failed", mission_id)
             return False
         return True
+
+    async def fetch_on_scene_vehicles(self, mission_id: int) -> list[tuple[int, int]]:
+        """``(vehicle_id, type_id)`` for EVERY vehicle currently on scene
+        (S4) at this mission, across ALL players.
+
+        ``fetch_vehicles`` only ever shows OUR OWN fleet (the game has no
+        "everyone's vehicles" API) — this is the only way to see a shared
+        mission's true combined on-scene headcount, which the automatic
+        recall core (``plan_reconciliation``) needs to tell a genuine
+        surplus from a mission that only LOOKS over-crewed because we can't
+        see who else responded. Returns ``[]`` on any failure (page error,
+        unexpected shape) — the caller treats that the same as "not fetched
+        this cycle", never as "confirmed nobody's there".
+        """
+        try:
+            page = await self._s.get_text(f"/missions/{mission_id}")
+        except Exception:  # noqa: BLE001
+            logger.exception("fetching on-scene roster for mission %s failed", mission_id)
+            return []
+        return _parse_on_scene_vehicles(page)
 
     async def recall(self, vehicle_id: int) -> bool:
         """Recall an en-route vehicle (``backalarm``)."""

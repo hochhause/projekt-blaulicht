@@ -24,11 +24,13 @@ from ..domain.dispatch import (
     DispatchPolicy,
     HilferufAggressiveness,
     MissionRequirementResolver,
+    RecallCadence,
     _infer_own_user_id,
     is_own_mission,
     assigned_from_vehicles,
-    plan_cleanup,
+    due_for_reconciliation,
     plan_dispatches,
+    plan_reconciliation,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,6 +142,7 @@ class GameClientLike(Protocol):
     async def send_transport(self, action_url: str) -> bool: ...
     async def share_mission(self, mission_id: int) -> bool: ...
     async def recall(self, vehicle_id: int) -> bool: ...
+    async def fetch_on_scene_vehicles(self, mission_id: int) -> list[tuple[int, int]]: ...
 
 
 @dataclass
@@ -235,6 +238,7 @@ class DispatchRunner:
         text_engine=None,
         strikes=None,
         alarm_tracker=None,
+        recall_cadence=None,
         vehicle_cap: int = 0,
         transport_enabled: bool = True,
         transport_only: bool = False,
@@ -250,6 +254,11 @@ class DispatchRunner:
         # None is a valid, fully-supported value (alarm tracking is optional;
         # tests and scripts that don't care about it just omit it).
         self._alarms = alarm_tracker
+        # D4's automatic recall cadence state (see RecallCadence) — owned by
+        # AccountRunner for the same reconnect-survival reason as _strikes/
+        # _alarms. None disables the automatic recall pass entirely (the
+        # manual cleanup() button is unaffected -- it always runs).
+        self._recall_cadence = recall_cadence
         self._vehicle_cap = vehicle_cap
         # This account's own id — lets plan_dispatches (and patient-recall,
         # below) tell a genuinely-own mission apart from one merely visible
@@ -572,17 +581,83 @@ class DispatchRunner:
         if getattr(getattr(self._policy, "patient_scope", None), "value", "off") != "off":
             await self._recall_cleared_patient_missions(missions, vehicles)
 
+        if self._recall_cadence is not None:
+            await self._run_reconciliation(missions, vehicles, now)
+
         self._log(f"cycle done: {report.summary()}")
         return report
+
+    @staticmethod
+    def _candidate_mission_ids(vehicles) -> set[int]:
+        """Mission ids we have ANY vehicle (en route or on scene) on —
+        the only missions :func:`plan_reconciliation` could ever find
+        something of ours to recall from."""
+        return {
+            int(getattr(v, "target_id"))
+            for v in vehicles
+            if getattr(v, "target_type", None) == "mission"
+            and getattr(v, "target_id", None) is not None
+            and getattr(v, "fms", None) in (3, 4)
+        }
+
+    async def _fetch_on_scene_rosters(self, mission_ids) -> dict[int, list]:
+        """Fetch GameClient.fetch_on_scene_vehicles for each of *mission_ids*,
+        sleeping between requests like every other sequential game action
+        here. A mission whose fetch fails or returns nothing simply gets no
+        key — see plan_reconciliation's docstring for why that's never
+        treated as "confirmed empty"."""
+        rosters: dict[int, list] = {}
+        for mid in mission_ids:
+            rows = await self._client.fetch_on_scene_vehicles(mid)
+            if rows:
+                rosters[mid] = rows
+            await self._timing.sleep(self._timing.dispatch_gap())
+        return rosters
+
+    async def _run_reconciliation(self, missions, vehicles, now: float) -> None:
+        """The automatic recall pass (D4): cadence-gated per mission (see
+        RecallCadence/due_for_reconciliation), unlike the manual cleanup()
+        button below, which always checks every candidate."""
+        cadence = self._recall_cadence
+        candidates = self._candidate_mission_ids(vehicles)
+        due = due_for_reconciliation(missions, candidates, cadence, now)
+        if not due:
+            return
+        on_scene_everyone = await self._fetch_on_scene_rosters(due)
+        recalls = plan_reconciliation(
+            missions, vehicles, self._resolver, self._text_engine, on_scene_everyone, due
+        )
+        if recalls:
+            veh_by_id = {v.id: v for v in vehicles}
+            cap_by_id = {m.id: getattr(m, "caption", "") for m in missions}
+            for vehicle_id, mid, reason in recalls:
+                name = _vehicle_name(veh_by_id.get(vehicle_id), vehicle_id)
+                if await self._client.recall(vehicle_id):
+                    self._log(f"auto-recalled {name}: {reason} at #{mid} {cap_by_id.get(mid, '')!r}")
+                await self._timing.sleep(self._timing.dispatch_gap())
+        by_id = {m.id: m for m in missions}
+        for mid in due:
+            cadence.last_checked[mid] = now
+            mission = by_id.get(mid)
+            if mission is not None and getattr(mission, "status", None) == "green":
+                cadence.fired_once.add(mid)
 
     async def cleanup(self) -> int:
         """One-shot: recall OUR vehicles that are surplus to what each mission
         needs (over-dispatch, from manual play or earlier cycles). See
-        :func:`plan_cleanup`."""
+        :func:`plan_reconciliation`. Unlike the automatic pass, this always
+        checks every mission we have a vehicle on — a manual click ignores
+        the 15-minute/once-on-green cadence entirely."""
         vehicles = await self._client.fetch_vehicles(self._vehicle_cap)
         missions = await self._client.fetch_missions()
-        buildings = await self._buildings_for_cycle()
-        recalls = plan_cleanup(missions, vehicles, buildings, self._resolver, self._text_engine)
+        candidates = self._candidate_mission_ids(vehicles)
+        if not candidates:
+            self._log("cleanup: nothing surplus — no vehicles currently assigned to a mission")
+            return 0
+        on_scene_everyone = await self._fetch_on_scene_rosters(candidates)
+        recalls = plan_reconciliation(
+            missions, vehicles, self._resolver, self._text_engine, on_scene_everyone, candidates
+        )
         veh_by_id = {v.id: v for v in vehicles}
         cap_by_id = {m.id: getattr(m, "caption", "") for m in missions}
         if not recalls:
@@ -590,11 +665,11 @@ class DispatchRunner:
             return 0
         self._log(f"cleanup: recalling {len(recalls)} surplus vehicle(s)")
         done = 0
-        for vehicle_id, mid in recalls:
+        for vehicle_id, mid, reason in recalls:
             name = _vehicle_name(veh_by_id.get(vehicle_id), vehicle_id)
             if await self._client.recall(vehicle_id):
                 done += 1
-                self._log(f"recalled {name}: surplus at #{mid} {cap_by_id.get(mid, '')!r}")
+                self._log(f"recalled {name}: {reason} at #{mid} {cap_by_id.get(mid, '')!r}")
             await self._timing.sleep(self._timing.dispatch_gap())
         self._log(f"cleanup done: recalled {done} vehicle(s)")
         return done

@@ -742,58 +742,167 @@ def plan_dispatches(
     return plan
 
 
-def plan_cleanup(missions, vehicles, buildings, resolver, text_engine=None):
-    """Find OUR vehicles that are surplus to a mission's needs — for the manual
-    'cleanup' button.
+_RECALL_INTERVAL_SECONDS = 15 * 60  # Sasha: "once every 15min otherwise"
 
-    For every mission we have vehicles on (en route or on scene), keep the minimal
-    subset of *our* vehicles that meets its requirement (vehicle classes + fire
-    personnel), and mark the rest for recall. A vehicle transporting a patient
-    (FMS 5) is always kept. Missions whose requirement we can't resolve at all are
-    left untouched (we won't pull vehicles off something we can't judge).
 
-    Returns a list of ``(vehicle_id, mission_id)`` to recall.
+@dataclass(frozen=True)
+class _OnSceneVehicle:
+    """One row from GameClient.fetch_on_scene_vehicles — real id + type_id,
+    for EITHER ours or another player's vehicle (we can't tell which from
+    this alone; plan_reconciliation cross-checks against our own fleet)."""
+
+    id: int
+    type_id: int
+
+
+@dataclass
+class RecallCadence:
+    """Per-mission state for the automatic recall core (D4): when it was
+    last checked, and whether it's already fired once for this mission.
+
+    In-memory only (Sasha, 2026-10-27: "doesn't need to survive a restart")
+    — owned by AccountRunner like StrikeTracker/AlarmTracker, so a transient
+    reconnect doesn't silently wipe it (see AccountRunner's own docstring
+    for why that matters there), but a real restart makes a fresh one.
     """
-    building_pos = {
-        b.id: b.position
-        for b in buildings
-        if getattr(b, "position", None) and getattr(b, "id", None) is not None
-    }
+
+    last_checked: dict[int, float] = field(default_factory=dict)
+    fired_once: set[int] = field(default_factory=set)
+
+
+def due_for_reconciliation(
+    missions, candidate_ids, cadence: RecallCadence, now: float
+) -> set[int]:
+    """Which of *candidate_ids* (mission ids we have ANY vehicle on) are due
+    for an automatic recall check this cycle.
+
+    Sasha: "doesn't need to call every cycle. call it once the first time we
+    see a mission green for that mission only and once every 15min
+    otherwise." Pure/read-only — never mutates *cadence*; the caller updates
+    it for whichever of these it actually processes.
+    """
     by_mid = {m.id: m for m in missions}
-    ours: dict[int, list] = {}
+    due: set[int] = set()
+    for mid in candidate_ids:
+        mission = by_mid.get(mid)
+        is_green = mission is not None and getattr(mission, "status", None) == "green"
+        if is_green and mid not in cadence.fired_once:
+            due.add(mid)
+        # Default to *now* itself, NOT 0.0 — a candidate never checked before
+        # must wait out a genuine 15 minutes like any other, not be treated
+        # as "900+ seconds overdue" just because any real epoch time is
+        # enormously larger than a zero sentinel. Only the green/fired_once
+        # branch above ever gives a mission an immediate first check.
+        elif now - cadence.last_checked.get(mid, now) >= _RECALL_INTERVAL_SECONDS:
+            due.add(mid)
+    return due
+
+
+def plan_reconciliation(missions, vehicles, resolver, text_engine, on_scene_everyone, due_ids):
+    """Automatic recall core (D4/D6): stop OUR still-en-route (S3) vehicles
+    on an already-green mission, and pull back OUR on-scene (S4) surplus
+    once a mission is fully covered by EVERYONE, not just us.
+
+    *on_scene_everyone* maps mission_id -> list of ``(vehicle_id, type_id)``
+    for every vehicle currently on scene there, ours and others' alike (see
+    ``GameClient.fetch_on_scene_vehicles``) — our own fleet feed
+    (``fetch_vehicles``) only ever shows OUR vehicles, so this is the only
+    way to tell a genuine surplus from a mission that only LOOKS
+    over-crewed because we can't see who else responded. A mission_id
+    absent from this dict (not fetched this call, or the fetch found
+    nothing) simply gets no S4 check — NEVER treated as "assume surplus".
+
+    *due_ids* (from :func:`due_for_reconciliation`, or — for the manual
+    cleanup button — every mission we have a vehicle on, unconditionally)
+    is the only set of missions considered; nothing outside it is touched,
+    not even obviously-green ones.
+
+    Vehicles are matched to the real on-scene roster by id, not trusted
+    blindly from our own bookkeeping: a mission_id present in
+    *on_scene_everyone* but where our own fleet's on-scene vehicle for it
+    doesn't actually appear in that roster (a stale fetch, a parsing miss)
+    is treated as unverifiable for THAT vehicle and never recalled — only a
+    vehicle id this function can see in both the fetched roster AND our own
+    fleet is ever a candidate.
+
+    Returns ``list[(vehicle_id, mission_id, reason)]`` for the runner to
+    execute and log — only ever OUR vehicle ids, since another player's
+    vehicle is never ours to recall even though it was counted above.
+    """
+    by_mid = {m.id: m for m in missions}
+
+    our_en_route: dict[int, list] = {}
+    our_on_scene: dict[int, list] = {}
     for v in vehicles:
         if getattr(v, "target_type", None) != "mission":
             continue
         mid = getattr(v, "target_id", None)
-        if mid is not None:
-            ours.setdefault(int(mid), []).append(v)
+        if mid is None:
+            continue
+        fms = getattr(v, "fms", None)
+        if fms == 3:
+            our_en_route.setdefault(int(mid), []).append(v)
+        elif fms == 4:
+            our_on_scene.setdefault(int(mid), []).append(v)
 
-    recalls: list[tuple[int, int]] = []
-    for mid, assigned_vehicles in ours.items():
+    recalls: list[tuple[int, int, str]] = []
+    for mid in due_ids:
         mission = by_mid.get(mid)
         if mission is None:
             continue  # not in the feed (likely done) — leave it to the game
+
+        # Green means the game itself confirms "fully crewed, runs to
+        # completion" regardless of who's there (docs/live-data-model.md) —
+        # any of our own vehicles still converging on it can be stopped
+        # outright, no counting needed (Sasha: "a green mission... all S3
+        # can be stopped").
+        if getattr(mission, "status", None) == "green":
+            for v in our_en_route.get(mid, ()):
+                recalls.append((v.id, mid, "green mission, still en route"))
+
+        everyone = on_scene_everyone.get(mid)
+        ours_here = our_on_scene.get(mid, [])
+        if everyone is None or not ours_here:
+            continue  # no roster fetched, or nothing of ours there to recall
+
         reqs = _derive_requirements(mission, resolver, text_engine)
         mtype = resolver.catalog.get(getattr(mission, "mission_type_id", None))
         min_fire = int(getattr(mtype, "min_fire_personnel", 0) or 0) if mtype is not None else 0
         if not reqs and min_fire <= 0:
             continue  # requirement unknown -> don't touch this mission
-        pos = getattr(mission, "position", None)
-        needed: set[int] = set()
+
+        our_ids = {v.id for v in ours_here}
+        pool = [_OnSceneVehicle(vid, tid) for vid, tid in everyone]
+        # Only a vehicle id THIS fetch actually confirms is ours-and-present
+        # is ever a recall candidate (see docstring) — never a default.
+        verified_our_ids = our_ids & {p.id for p in pool}
+        if not verified_our_ids:
+            continue
+
+        # Bias the greedy coverage pick toward keeping OTHER players'
+        # vehicles as the "needed" ones: we can't recall theirs anyway, so
+        # preferring them frees up more of ours when the combined total
+        # already covers the need (real distance is meaningless here — every
+        # candidate is already on scene).
+        def _bias(v, _ours=our_ids):
+            return 0 if v.id not in _ours else 1
+
+        needed_ids: set[int] = set()
         if reqs:
-            cov = select_coverage(reqs, assigned_vehicles, distance_of=_distance_fn(pos, building_pos))
-            needed |= set(cov.vehicle_ids)
+            cov = select_coverage(reqs, pool, distance_of=_bias)
+            needed_ids |= set(cov.vehicle_ids)
         if min_fire > 0:
             extra, _short = _fire_personnel_topup(
-                list(needed), assigned_vehicles, resolver, min_fire, pos, building_pos
+                list(needed_ids), pool, resolver, min_fire,
+                getattr(mission, "position", None), {},
             )
-            needed |= set(extra)
-        for v in assigned_vehicles:
-            if v.id in needed:
+            needed_ids |= set(extra)
+
+        for vid in verified_our_ids:
+            if vid in needed_ids:
                 continue
-            if getattr(v, "fms", None) == 5:
-                continue  # carrying a patient — let it deliver
-            recalls.append((v.id, mid))
+            recalls.append((vid, mid, "surplus once everyone on scene is counted"))
+
     return recalls
 
 
