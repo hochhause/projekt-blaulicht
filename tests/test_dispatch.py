@@ -70,10 +70,10 @@ class DispatchPlannerTests(unittest.TestCase):
         catalog = MissionCatalog.from_payload(json.loads(FIXTURE.read_text(encoding="utf-8")))
         self.resolver = MissionRequirementResolver(catalog, library)
 
-    def plan(self, missions, vehicles, policy=None, assigned=None):
+    def plan(self, missions, vehicles, policy=None, assigned=None, en_route=None):
         return plan_dispatches(
             missions, vehicles, [building()], self.resolver,
-            policy or DispatchPolicy(radius_km=40), assigned=assigned,
+            policy or DispatchPolicy(radius_km=40), assigned=assigned, en_route=en_route,
         )
 
     def test_simple_dispatch(self):
@@ -1423,19 +1423,87 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertNotIn(4, planned_ids)
 
     def test_reservation_suppressed_when_assigned_already_covers_the_need(self):
-        # If we've ALREADY sent a matching vehicle (tracked via `assigned`,
-        # from the live vehicle feed) that fully covers the mentioned
-        # category, the outstanding need nets to zero and nothing is
-        # reserved -- even though missing_text hasn't caught up yet.
+        # If we've ALREADY sent a matching vehicle that's still EN ROUTE (S3)
+        # and fully covers the mentioned category, the outstanding need nets
+        # to zero and nothing is reserved. missing_text's own "1 Boot" is
+        # already net of on-scene (S4) vehicles (docs/live-data-model.md), so
+        # it keeps showing "1 Boot" needed the whole time our boat is en
+        # route -- that's expected, not "hasn't caught up yet" -- and the
+        # en-route boat is what nets it to zero on OUR side.
         ours = mission(1, 1, NEAR, vehicle_state=1,
                        missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
         fresh = mission(2, 1, NEAR2, vehicle_state=0,
                         missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
         boat_for_fresh = vehicle(100, 70)
-        assigned = {1: [70]}  # a boat already assigned to mission 1
-        plan = self.plan([ours, fresh], [boat_for_fresh], assigned=assigned)
+        assigned = {1: [70]}       # a boat already assigned (S3+S4) to mission 1
+        en_route = {1: [70]}       # ... specifically still en route (S3)
+        plan = self.plan([ours, fresh], [boat_for_fresh], assigned=assigned, en_route=en_route)
         planned_ids = {p.mission_id for p in plan.planned}
         self.assertIn(2, planned_ids)
+
+    # -- S3/S4 delta scoping (Sasha, 2026-10-27) -------------------------------
+    # missing_text is already net of on-scene (S4) vehicles
+    # (docs/live-data-model.md: "Noch benötigt = fehlend − Auf Anfahrt") --
+    # _apply_delta must subtract only en-route (S3) against a revealed
+    # requirement, never S4 again on top, or it silently under-reports what's
+    # still needed. See docs/dispatch-pipeline-rebuild.{plan,acceptance}.md.
+
+    def test_revealed_requirement_subtracts_en_route_only_not_on_scene_too(self):
+        # AC-M1-01: missing_text says "1 ELW 1" (already net of the one ELW1
+        # on scene). The SECOND, en-route ELW1 is what nets this to zero --
+        # the on-scene one must NOT also be subtracted a second time.
+        m = mission(1, 1, NEAR, vehicle_state=1,
+                    missing_text='{"vehicles":"1 ELW 1","personnel":"","other":""}')
+        spare_elw1 = vehicle(200, 3)
+        assigned = {1: [3, 3]}   # one on-scene + one en-route ELW1
+        en_route = {1: [3]}      # ... only the en-route one
+        plan = self.plan([m], [spare_elw1], assigned=assigned, en_route=en_route)
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "already covered")])
+
+    def test_revealed_requirement_without_en_route_still_dispatches(self):
+        # AC-M1-02 (the original live symptom, reproduced without any stale-
+        # tracking bug): same revealed need, one ELW1 on scene, but nothing
+        # actually en route -- one more ELW1 must still be sent.
+        m = mission(1, 1, NEAR, vehicle_state=1,
+                    missing_text='{"vehicles":"1 ELW 1","personnel":"","other":""}')
+        spare_elw1 = vehicle(200, 3)
+        assigned = {1: [3]}      # the one on-scene ELW1 only
+        plan = self.plan([m], [spare_elw1], assigned=assigned, en_route={})
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].vehicle_ids, (200,))
+
+    def test_catalogue_fallback_still_subtracts_en_route_and_on_scene(self):
+        # AC-M1-03, regression guard: a mission that has NEVER revealed
+        # missing_text uses the raw catalogue total (un-netted) -- both
+        # en-route and on-scene vehicles must still come off it, unchanged
+        # from before the S3/S4 split existed.
+        m = mission(1, 3, NEAR)  # type 3: firetrucks:1, police_cars:1, no missing_text
+        spare = vehicle(200, FUSTW)
+        assigned = {1: [LF, FUSTW]}   # one firetruck (on scene) + one police car (en route)
+        en_route = {1: [FUSTW]}
+        plan = self.plan([m], [spare], assigned=assigned, en_route=en_route)
+        self.assertEqual(plan.planned, [])
+        self.assertEqual(plan.skipped, [(1, "already covered")])
+
+    def test_casualty_layer_keeps_subtracting_en_route_and_on_scene(self):
+        # AC-M1-07, non-regression: the casualty-driven layer (ambulances,
+        # NEF, etc.) is NOT scoped by delta_scope -- patients_count reflects
+        # real remaining casualties, which neither an en-route nor an
+        # on-scene ambulance changes on its own, so both must still count.
+        # (Mission type 1 also needs a firetruck and the NEF-generosity
+        # heuristic adds NEFs -- neither is provisioned here, so the mission
+        # stays short on THOSE; the point is ambulances specifically must
+        # NOT also show up short, which would mean an on-scene RTW got
+        # double-subtracted against.)
+        m = mission(1, 1, NEAR, patients_count=2, possible_patients_count=2)
+        spare_rtw = vehicle(200, 28)
+        assigned = {1: [28, 28]}   # one on-scene + one en-route RTW
+        en_route = {1: [28]}
+        plan = self.plan([m], [spare_rtw], assigned=assigned, en_route=en_route)
+        self.assertEqual(plan.planned, [])
+        [(_mid, reason)] = plan.skipped
+        self.assertNotIn("ambulances", reason)
 
     # -- unstick-first ordering (Sasha, 2026-10-07) ----------------------------
     # "a 30 vehicle mission that waits for 1 single LF can be unstuck, freeing
@@ -1669,7 +1737,7 @@ class DispatchPlannerTests(unittest.TestCase):
         self.resolver.effective_count_revealed(cycle1)  # cycle 1: establishes sticky memory
         cycle2 = mission(1, 3, NEAR, vehicle_state=0)
         reserved: set[int] = set()
-        _reserve_vehicle_group(reserved, cycle2, mtype, self.resolver, assigned={},
+        _reserve_vehicle_group(reserved, cycle2, mtype, self.resolver, en_route={}, assigned={},
                                patient_governed=False)
         self.assertTrue(reserved, "reservation should still fire after vehicle_state reverts to 0")
 

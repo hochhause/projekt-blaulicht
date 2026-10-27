@@ -57,6 +57,17 @@ class Requirement:
     """Subset of :attr:`type_ids` flagged ``is_matchless`` — these must be
     dispatched as their exact type, not substituted."""
 
+    delta_scope: str = "full"
+    """Which already-assigned vehicles ``_apply_delta`` (dispatch.py) should
+    subtract before dispatching more: ``"full"`` (default) subtracts both
+    en-route (S3) and on-scene (S4) vehicles — the right rule for a raw,
+    un-netted count (the catalogue fallback, and the casualty-driven layer,
+    where neither an S3 nor an S4 vehicle has removed a patient/prisoner on
+    its own). ``"en_route_only"`` subtracts S3 only — the right rule once a
+    count has come from a mission's revealed ``missing_text``, which per
+    docs/live-data-model.md is already "Am Einsatzort fehlend" (net of
+    arrived/S4 vehicles): subtracting S4 again would double-count it."""
+
 
 @dataclass
 class Resolution:

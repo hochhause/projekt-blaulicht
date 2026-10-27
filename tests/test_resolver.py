@@ -603,6 +603,49 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(res.requirements, [])
         self.assertEqual(res.unmatched, [])
 
+    def test_missing_text_revealed_then_gone_is_fully_covered_not_catalogue(self):
+        # AC-M1-04 (Sasha, 2026-10-27): once missing_text has revealed a real
+        # category, a LATER cycle where it shows nothing at all (the raw
+        # field itself absent, not merely empty-but-present) means "we have
+        # everything" -- must NOT re-derive the catalogue's firetrucks:2
+        # estimate for fixture type 2.
+        m = SimpleNamespace(id=1, mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"1 ELW 1","personnel":"","other":""}')
+        first = self.resolver.resolve_mission(m)
+        self.assertTrue(first.requirements)  # sanity: it did reveal something
+
+        m.missing_text = ""  # gone entirely on a later cycle
+        second = self.resolver.resolve_mission(m)
+        self.assertEqual(second.requirements, [])
+        self.assertEqual(second.unmatched, [])
+
+    def test_missing_text_never_revealed_still_uses_catalogue(self):
+        # AC-M1-05, regression guard: a mission that has NEVER revealed
+        # anything still falls back to the catalogue estimate -- the two
+        # "nothing revealed right now" states are not conflated.
+        m = SimpleNamespace(id=2, mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0, missing_text="")
+        res = self.resolver.resolve_mission(m)
+        self.assertTrue(res.requirements)  # the catalogue's firetrucks/platform/chief estimate
+
+    def test_missing_text_revealed_again_after_going_quiet_is_a_fresh_need(self):
+        # AC-M1-06: revealed, then gone (covered), then revealed again with a
+        # genuinely new category -- the "ever revealed" memory must not
+        # suppress this later, real need.
+        m = SimpleNamespace(id=3, mission_type_id=2, patients_count=0, possible_patients_count=0,
+                            prisoners_count=0, possible_prisoners_count=0,
+                            missing_text='{"vehicles":"1 ELW 1","personnel":"","other":""}')
+        self.resolver.resolve_mission(m)
+        m.missing_text = ""
+        covered = self.resolver.resolve_mission(m)
+        self.assertEqual(covered.requirements, [])
+
+        m.missing_text = '{"vehicles":"1 Rüstwagen oder HLF","personnel":"","other":""}'
+        third = self.resolver.resolve_mission(m)
+        self.assertTrue(third.requirements)
+        self.assertEqual(third.requirements[0].delta_scope, "en_route_only")
+
     def test_resolve_mission_other_group_feuerloeschpumpe_resolves_to_loeschfahrzeug(self):
         # Live-verified 2026-08-31: "Feuerlöschpumpe (z. B. LF)" in the
         # `other` group is a plain category (same shape as `vehicles`), not a

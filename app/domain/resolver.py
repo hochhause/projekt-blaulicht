@@ -201,6 +201,7 @@ class MissionRequirementResolver:
         missing_resolver: MissingTextResolver | None = None,
         capacity_table: dict[int, dict[str, int]] | None = None,
         ever_revealed: set[int] | None = None,
+        missing_text_ever_revealed: set[int] | None = None,
     ) -> None:
         self._catalog = catalog
         self._library = library
@@ -227,6 +228,14 @@ class MissionRequirementResolver:
         # reconnect lands mid-mission. Plain `set()` (not persisted) if the
         # caller doesn't care, e.g. in tests.
         self._ever_revealed: set[int] = ever_revealed if ever_revealed is not None else set()
+        # Mission ids that have EVER revealed a parseable `missing_text` blob
+        # (see missing_text_ever_revealed below). Deliberately NOT persisted
+        # across a restart (Sasha, 2026-10-27: "it doesn't need to survive a
+        # restart") -- same default-unless-injected pattern as `ever_revealed`
+        # above, so a caller that wants restart-durability can still supply one.
+        self._missing_text_ever_revealed: set[int] = (
+            missing_text_ever_revealed if missing_text_ever_revealed is not None else set()
+        )
 
     def effective_count_revealed(self, mission) -> bool:
         """Whether this mission has EVER shown a responder on scene — sticky,
@@ -265,6 +274,30 @@ class MissionRequirementResolver:
                 self._ever_revealed.add(mid)
             return True
         return mid is not None and mid in self._ever_revealed
+
+    def missing_text_ever_revealed(self, mission) -> bool:
+        """Whether this mission has EVER revealed a parseable ``missing_text``
+        blob — sticky, per mission id, for this resolver's lifetime. Same
+        in-process-only pattern as :meth:`effective_count_revealed`, but keyed
+        on the ``missing_text`` reveal itself rather than ``vehicle_state``
+        (Sasha, 2026-10-27: use the live reveal, not the sticky responder
+        flag, so a mission type our own catalogue doesn't recognise still
+        becomes top-up/VGE-eligible the moment the game reveals its need).
+
+        Lets :meth:`vehicle_requirements` tell apart two different "nothing
+        revealed right now" states: a mission that has NEVER revealed
+        anything (genuinely untouched — the catalogue estimate still
+        applies) from one that WAS revealed and has since gone quiet again
+        (its vehicle-class need is fully met — "once it's gone we have
+        everything," Sasha's words) and must NOT be re-derived from the
+        catalogue a second time. Deliberately NOT persisted across a
+        restart (Sasha: "it doesn't need to survive a restart")."""
+        mid = getattr(mission, "id", None)
+        if parse_missing_text(getattr(mission, "missing_text", "")).revealed:
+            if mid is not None:
+                self._missing_text_ever_revealed.add(mid)
+            return True
+        return mid is not None and mid in self._missing_text_ever_revealed
 
     def resolve(self, mission_type_id: int) -> Resolution:
         """Resolve base requirements for a mission type.
@@ -345,16 +378,30 @@ class MissionRequirementResolver:
         the casualty-count layer :meth:`_casualty_counts` adds) to know what
         an already-open mission still needs.
 
-        Branches on ``revealed``, not "has anything in it": once the game
-        hands back a parseable blob, EMPTY ``vehicles``/``personnel`` groups
-        are the authoritative "nothing more needed" — not "unknown, guess
-        from the catalogue" (docs/live-data-model.md). Conflating the two
-        would re-derive a stale catalogue requirement for a mission that's
-        already fully crewed on the vehicle side (only a capacity/``other``
-        gap remaining, say).
+        THREE-way branch on the live reveal (Sasha, 2026-10-27), not two:
+        1. Currently revealed — resolve from the blob, as always. Every
+           requirement this produces is tagged ``delta_scope="en_route_only"``
+           (see :attr:`Requirement.delta_scope`'s own docstring): per
+           docs/live-data-model.md, ``missing_text`` is already "Am
+           Einsatzort fehlend" — net of arrived (S4) vehicles — so the
+           caller's delta must subtract only en-route (S3) ones, never S4
+           again on top.
+        2. Not currently revealed, but WAS revealed before
+           (:meth:`missing_text_ever_revealed`) — "once it's gone we have
+           everything": the vehicle-class need is fully met. Returns no
+           requirement at all — deliberately NOT the catalogue fallback,
+           which would resurrect a stale requirement for a mission that's
+           already fully crewed on the vehicle side.
+        3. Never revealed — genuinely untouched. The catalogue's class/chance
+           estimate applies, tagged ``delta_scope="full"`` (the default): a
+           raw, un-netted total, so both en-route and on-scene vehicles must
+           still be subtracted from it.
         """
         groups = parse_missing_text(getattr(mission, "missing_text", ""))
         if groups.revealed:
+            mid = getattr(mission, "id", None)
+            if mid is not None:
+                self._missing_text_ever_revealed.add(mid)
             reqs: list[Requirement] = []
             unmatched: list[str] = []
             if groups.vehicles:
@@ -425,7 +472,20 @@ class MissionRequirementResolver:
                     reqs.extend(vehicle.requirements)
                     unmatched.extend(headcount.unmatched)
                     unmatched.extend(vehicle.unmatched)
+            # Every requirement derived from a revealed missing_text is
+            # already net of on-scene (S4) vehicles (see this method's
+            # docstring) -- tag them all here, in one place, rather than
+            # threading delta_scope through every sub-helper above.
+            reqs = [replace(r, delta_scope="en_route_only") for r in reqs]
             return reqs, unmatched
+
+        if self.missing_text_ever_revealed(mission):
+            # Was revealed before, now shows nothing -- the vehicle-class
+            # need is fully met ("once it's gone we have everything," Sasha,
+            # 2026-10-27). NOT the catalogue fallback below, which would
+            # resurrect a stale requirement for an already-fully-crewed
+            # mission.
+            return [], []
 
         counts: dict[str, int] = {}
         for cls, n in mtype.requirements.items():

@@ -36,22 +36,39 @@ is this file's checkboxes plus the commit log.
 
 ## Milestone 1 — the delta fix + missing-text memory
 
-- [ ] 1. Add `delta_scope: str = "full"` to `Requirement` ([requirements.py](../app/domain/requirements.py)).
-- [ ] 2. Add `_missing_text_ever_revealed` set + `missing_text_ever_revealed(mission)` to
+- [x] 1. Add `delta_scope: str = "full"` to `Requirement` ([requirements.py](../app/domain/requirements.py)).
+- [x] 2. Add `_missing_text_ever_revealed` set + `missing_text_ever_revealed(mission)` to
       `MissionRequirementResolver` ([resolver.py](../app/domain/resolver.py)); restructure
       `vehicle_requirements`'s branch into the three-way revealed / ever-revealed-now-gone / never-
       revealed shape from the plan's Contract section, tagging `delta_scope` accordingly.
-- [ ] 3. Split [`assigned_from_vehicles`](../app/domain/dispatch.py:352) into
-      `en_route_from_vehicles`/`on_scene_from_vehicles` (filtered on `fms == 3`/`fms == 4`,
-      `target_type == "mission"`); add a `_merge` used wherever the old combined semantics are
-      still correct (casualty layer, `_reserve_vehicle_group`, patient-only mode).
-- [ ] 4. Update [`_apply_delta`](../app/domain/dispatch.py:1344) to take `(en_route, on_scene)` and
-      branch per-requirement on `delta_scope`.
-- [ ] 5. Update every call site (`plan_dispatches`, `_priority_pass`, `_plan_one`, `plan_cleanup`)
-      to compute and pass both dicts through.
-- [ ] 6. Write AC-M1-01 through AC-M1-07 as failing/xfail stubs, then make them pass.
-- [ ] 7. `python -m pytest tests/test_dispatch.py tests/test_resolver.py -x -q` green; independent
-      review (opus) against this milestone's tasks and AC-M1 criteria.
+- [x] 3. Add [`en_route_from_vehicles`](../app/domain/dispatch.py:352) alongside (not replacing)
+      `assigned_from_vehicles` (filtered on `fms == 3`, `target_type == "mission"`). Design note
+      (differs from the plan's original sketch): no separate `on_scene_from_vehicles`/`_merge` was
+      needed in M1 — `_apply_delta`'s `"full"` branch keeps using the existing combined `assigned`
+      dict directly (it's already the S3+S4 union `_apply_delta` wants for that scope); on-scene-
+      only (`fms == 4`) extraction is deferred to M3, which is the first place that actually needs
+      S4 in isolation (the recall core).
+- [x] 4. Update [`_apply_delta`](../app/domain/dispatch.py:1344) to take `(requirements, en_route,
+      assigned, mission_id)` and branch per-requirement on `delta_scope` (`"en_route_only"` ->
+      `en_route`, `"full"` -> `assigned`).
+- [x] 5. Update every IN-SCOPE call site (`plan_dispatches`'s reservation call, its SMART-efficiency
+      estimate, both `_plan_one` calls, `_plan_one`'s own Rule-1 branch) to pass `en_route` through.
+      `_outstanding` and `_reserve_vehicle_group` keep their original single-`assigned`-shaped
+      public signature where only `app/domain/group.py` still calls them (out of scope this round)
+      — `_reserve_vehicle_group` gained one positional `en_route` param since dispatch.py's own two
+      call sites need the real split; group.py's one call site was updated to pass its existing
+      `global_assigned` dict as both `en_route` and `assigned` (one line, behaviour-preserving by
+      construction — verified: `test_group.py` unchanged, all green). `_outstanding` needed no
+      signature change (its only remaining caller is group.py).
+- [x] 6. Wrote AC-M1-01 through AC-M1-07 directly as passing tests (not stub-first — see plan
+      header's note on adapting the skill's ceremony for a solo build); one existing test
+      (`test_reservation_suppressed_when_assigned_already_covers_the_need`) needed updating since
+      its synthetic `assigned`-only fixture no longer disambiguates en-route from on-scene.
+- [x] 7. `python -m pytest tests/ -q --ignore=tests/test_web.py` — 501 passed, 12 subtests passed
+      (494 pre-existing + 7 new). `tests/test_web.py` fails to even collect on a pre-existing,
+      unrelated environment issue (installed `pydantic-core` version mismatch) — confirmed
+      unrelated to this change (a raw import-time `SystemError`, nothing in this diff touches
+      `app/web/`). Independent review: pending (see Milestone 2 — reviewing both together).
 
 ## Milestone 2 — VGE / top-up / priority-pass unification
 

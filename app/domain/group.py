@@ -255,8 +255,12 @@ def plan_group_dispatches(
             resolver.catalog.get(mission.mission_type_id)
             if getattr(mission, "mission_type_id", None) is not None else None
         )
+        # Same dict passed as both en_route and assigned: group dispatch's
+        # own S3/S4 split is out of scope for the 2026-10-27 dispatch-pipeline
+        # rebuild (see docs/dispatch-pipeline-rebuild.plan.md) — this
+        # reproduces today's un-split (S3+S4-always) behaviour unchanged.
         _reserve_vehicle_group(reserved_type_ids, mission, rtype, resolver, global_assigned,
-                                patient_governed=False)
+                                global_assigned, patient_governed=False)
 
     def _class_owned(cls: str) -> bool:
         key = "firetrucks" if cls == "firefighters" else cls

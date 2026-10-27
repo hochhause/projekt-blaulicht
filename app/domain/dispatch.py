@@ -367,6 +367,29 @@ def assigned_from_vehicles(vehicles) -> dict[int, list[int]]:
     return assigned
 
 
+def en_route_from_vehicles(vehicles) -> dict[int, list[int]]:
+    """Map mission id → vehicle type IDs currently EN ROUTE to it only (S3,
+    ``fms == 3``) — excludes vehicles already on scene (S4).
+
+    Needed because a mission's revealed ``missing_text`` is already net of
+    on-scene (S4) vehicles (see ``Requirement.delta_scope``'s docstring and
+    docs/live-data-model.md) — subtracting an S4 vehicle from it a second
+    time via the combined :func:`assigned_from_vehicles` dict would double-
+    count it. ``_apply_delta`` picks between this and the combined dict per
+    requirement, by its ``delta_scope``."""
+    en_route: dict[int, list[int]] = {}
+    for vehicle in vehicles:
+        if getattr(vehicle, "target_type", None) != "mission":
+            continue
+        if getattr(vehicle, "fms", None) != 3:
+            continue
+        mission_id = getattr(vehicle, "target_id", None)
+        type_id = getattr(vehicle, "type_id", None)
+        if mission_id is not None and type_id is not None:
+            en_route.setdefault(int(mission_id), []).append(int(type_id))
+    return en_route
+
+
 def plan_dispatches(
     missions,
     vehicles,
@@ -374,12 +397,21 @@ def plan_dispatches(
     resolver: MissionRequirementResolver,
     policy: DispatchPolicy,
     assigned: dict[int, list[int]] | None = None,
+    en_route: dict[int, list[int]] | None = None,
     text_engine=None,
     now: float | None = None,
     strikes=None,
     own_user_id: int | None = None,
 ) -> DispatchPlan:
     """Plan this cycle's dispatches.
+
+    *en_route* maps mission id → type IDs of vehicles currently EN ROUTE only
+    (S3, ``fms == 3``) — defaults to deriving it from *vehicles* itself
+    (:func:`en_route_from_vehicles`) when not given, so a real caller (the
+    runner) never needs to compute it separately; a test may still inject it
+    directly. Needed alongside *assigned* (S3+S4 combined) because a
+    requirement derived from a revealed ``missing_text`` is already net of
+    on-scene (S4) vehicles — see ``Requirement.delta_scope``'s docstring.
 
     *assigned* maps mission id → type IDs of vehicles already en route (the
     delta). *text_engine* (a RequirementEngine) parses a mission's live
@@ -455,11 +487,18 @@ def plan_dispatches(
     # stable figure, not momentary availability (see DispatchPolicy's docstring).
     type_counts = Counter(v.type_id for v in vehicles)
 
+    # En-route (S3) only — defaults to deriving it from `vehicles` (see this
+    # function's own docstring); needed alongside the combined `assigned`
+    # (S3+S4) param so `_apply_delta` can pick the right one per
+    # requirement's `delta_scope` (Sasha, 2026-10-27).
+    if en_route is None:
+        en_route = en_route_from_vehicles(vehicles)
+
     # PRIORITY PASS — spread/top-up (missions we're on) and, in parasite mode,
     # leech targets. Runs first, bypassing filters/order/batch.
     handled, priority_batch, reserved_type_ids = _priority_pass(
-        plan, missions, pool, resolver, policy, assigned or {}, building_pos, text_engine, own_user_id,
-        type_counts=type_counts,
+        plan, missions, pool, resolver, policy, assigned or {}, en_route, building_pos, text_engine,
+        own_user_id, type_counts=type_counts,
     )
 
     # Gather in-range, category-allowed missions with their distance, the mission
@@ -537,7 +576,7 @@ def plan_dispatches(
             continue
         # Reservation for any mission we could act on that's already open and
         # short a vehicle category -- see _reserve_vehicle_group's docstring.
-        _reserve_vehicle_group(reserved_type_ids, mission, mtype, resolver, assigned,
+        _reserve_vehicle_group(reserved_type_ids, mission, mtype, resolver, en_route, assigned,
                                 patient_governed=(governing == "patient"))
         # Unstick-first: does this mission already have vehicles ARRIVED (see
         # plan_dispatches' own docstring for the "total minus raw-still-
@@ -595,7 +634,7 @@ def plan_dispatches(
         if policy.order is DispatchOrder.SMART:
             base = _derive_requirements(mission, resolver, text_engine,
                                          patient_only=(governing == "patient"))
-            outstanding = _apply_delta(base, assigned, mission.id)
+            outstanding = _apply_delta(base, en_route, assigned, mission.id)
             vehicles_needed = sum(r.count for r in outstanding)
             # A mission may ALSO need a minimum firefighter headcount beyond
             # its class counts (_plan_one tops this up with extra firetrucks
@@ -616,7 +655,7 @@ def plan_dispatches(
     # exempt from batch_size -- see plan_dispatches' own docstring.
     fillable.sort(key=lambda t: t[0])
     for _ratio, mission, governing in fillable:
-        outcome = _plan_one(mission, pool, resolver, policy, assigned, building_pos,
+        outcome = _plan_one(mission, pool, resolver, policy, en_route, assigned, building_pos,
                             text_engine, allow_partial=False,
                             patient_only=False, shortfalls=plan.shortfalls)
         if isinstance(outcome, str):
@@ -669,7 +708,7 @@ def plan_dispatches(
             [v for v in pool if v.type_id not in reserved_type_ids]
             if is_fresh_send and reserved_type_ids else pool
         )
-        outcome = _plan_one(mission, call_pool, resolver, policy, assigned, building_pos,
+        outcome = _plan_one(mission, call_pool, resolver, policy, en_route, assigned, building_pos,
                             text_engine, allow_partial=allow_partial,
                             patient_only=(governing == "patient"), shortfalls=plan.shortfalls)
         if isinstance(outcome, str):
@@ -848,9 +887,18 @@ def _derive_requirements(mission, resolver, text_engine, patient_only=False):
 
 
 def _outstanding(mission, resolver, text_engine, assigned, patient_only=False):
-    """Post-delta requirements still to send (catalogue/revealed minus en-route)."""
+    """Post-delta requirements still to send (catalogue/revealed minus en-route).
+
+    Kept at its original single-``assigned`` shape deliberately: its only
+    remaining caller once ``_priority_pass`` routes through ``_plan_one``
+    (2026-10-27 rework) is ``app/domain/group.py``'s SMART-efficiency
+    estimate, which is OUT OF SCOPE for that rework (see
+    docs/dispatch-pipeline-rebuild.plan.md) and deliberately keeps today's
+    un-split (S3+S4-always) behaviour, unchanged. In-scope callers use
+    ``_apply_delta`` directly with the real en-route/assigned split.
+    """
     return _apply_delta(
-        _derive_requirements(mission, resolver, text_engine, patient_only), assigned, mission.id
+        _derive_requirements(mission, resolver, text_engine, patient_only), assigned, assigned, mission.id
     )
 
 
@@ -920,8 +968,8 @@ def _abundance_vehicle(pool, mission_pos, building_pos):
     return min(candidates, key=_distance_fn(mission_pos, building_pos))
 
 
-def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_pos, text_engine,
-                    own_user_id=None, type_counts=None):
+def _priority_pass(plan, missions, pool, resolver, policy, assigned, en_route, building_pos,
+                    text_engine, own_user_id=None, type_counts=None):
     """Handle patient-care/top-up reinforcement, parasite missions, and
     official Verbandsgroßeinsatz missions BEFORE the normal filtered pass.
 
@@ -1026,7 +1074,7 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, building_po
             # on it, or mission_source no longer covers its source) would
             # lose reservation entirely -- exposing exactly the fresh-send
             # poaching `_reserve_vehicle_group` exists to prevent.
-            _reserve_vehicle_group(reserved, mission, mtype, resolver, assigned,
+            _reserve_vehicle_group(reserved, mission, mtype, resolver, en_route, assigned,
                                     patient_governed=patient_here)
         on_it_here = on_it and (patient_here or top_up_here)
         if not (on_it_here or is_parasite):
@@ -1196,7 +1244,7 @@ def _add_water_rescue_escort(chosen, pool, resolver, mission_pos, building_pos):
     return extra
 
 
-def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
+def _plan_one(mission, pool, resolver, policy, en_route, assigned, building_pos=None,
               text_engine=None, allow_partial=False, patient_only=False, shortfalls=None):
     """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string.
 
@@ -1219,6 +1267,7 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
     """
     building_pos = building_pos or {}
     assigned = assigned or {}
+    en_route = en_route or {}
 
     base = _derive_requirements(mission, resolver, text_engine, patient_only)
     # Personnel requirement (min firefighters) — not applicable in patient-only mode.
@@ -1248,11 +1297,18 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
     # cause a harmless extra send rather than a silent stall -- deliberately
     # preferred over the stall for now; the underlying assigned-tracking
     # gets revisited properly in a follow-up pass, not as part of this fix.
+    #
+    # 2026-10-27: this layers on TOP of the separate S3/S4 delta-scoping fix
+    # below (`_apply_delta`'s `en_route`/`assigned` split) — that fix removes
+    # the specific double-counting bug that caused most of the live-observed
+    # "red but already covered" cases; this rule remains as a safety net for
+    # the DIFFERENT failure mode (genuinely stale/wrong `assigned` entries,
+    # not a scoping bug) and needs no change itself.
     if getattr(mission, "status", None) == "red":
         requirements = list(base)
         fire_needed = min_fire
     else:
-        requirements = _apply_delta(base, assigned, mission.id)
+        requirements = _apply_delta(base, en_route, assigned, mission.id)
         # Firefighters already en route count toward the personnel minimum.
         fire_needed = max(0, min_fire - _fire_crew(resolver, assigned.get(mission.id, []))) if min_fire else 0
 
@@ -1341,21 +1397,32 @@ def _plan_one(mission, pool, resolver, policy, assigned, building_pos=None,
     return mission_plan, chosen
 
 
-def _apply_delta(requirements, assigned, mission_id):
-    """Reduce requirement counts by vehicles already en route to this mission.
+def _apply_delta(requirements, en_route, assigned, mission_id):
+    """Reduce requirement counts by vehicles already accounted for at this
+    mission — scoped PER REQUIREMENT by its ``delta_scope`` (Sasha,
+    2026-10-27; see ``Requirement.delta_scope``'s own docstring and
+    docs/live-data-model.md's "Noch benötigt = fehlend − Auf Anfahrt"):
 
-    A multi-role vehicle already assigned (e.g. an HLF) reduces *every*
-    requirement it qualifies for — matching how one counts toward both an LF and
-    an RW.
+    * ``"en_route_only"`` — a requirement derived from a revealed
+      ``missing_text``, already net of on-scene (S4) vehicles — subtract only
+      *en_route* (S3), never *assigned* (which would double-count S4).
+    * ``"full"`` (default) — the catalogue fallback, or the casualty-driven
+      layer (neither of which is netted against anything) — subtract
+      *assigned* (S3+S4 combined, i.e. :func:`assigned_from_vehicles`'s
+      output), same as before this split existed.
+
+    A multi-role vehicle already counted (e.g. an HLF) reduces *every*
+    requirement it qualifies for — matching how one counts toward both an LF
+    and an RW.
     """
-    if not assigned:
-        return list(requirements)
-    types = assigned.get(mission_id, [])
-    if not types:
-        return list(requirements)
+    if not requirements:
+        return []
+    en_route_types = (en_route or {}).get(mission_id, [])
+    assigned_types = (assigned or {}).get(mission_id, [])
 
     reduced = []
     for requirement in requirements:
+        types = en_route_types if requirement.delta_scope == "en_route_only" else assigned_types
         covered = sum(1 for t in types if t in requirement.type_ids)
         new_count = max(0, requirement.count - covered)
         if new_count > 0:
@@ -1363,11 +1430,17 @@ def _apply_delta(requirements, assigned, mission_id):
     return reduced
 
 
-def _reserve_vehicle_group(reserved, mission, mtype, resolver, assigned, patient_governed):
+def _reserve_vehicle_group(reserved, mission, mtype, resolver, en_route, assigned, patient_governed):
     """Add *mission*'s outstanding vehicle-category type IDs to *reserved*
     (in place), if it qualifies (Sasha, 2026-09-11 — see the full rationale
     in :func:`plan_dispatches`). Shared by :func:`plan_dispatches`' main loop
     and :func:`_priority_pass` so the two reservation paths can't drift apart.
+
+    *en_route* (S3-only) vs *assigned* (S3+S4): passed straight to
+    :func:`_apply_delta`, which picks per requirement by ``delta_scope`` —
+    see that function's docstring (Sasha, 2026-10-27). ``app/domain/group.py``'s
+    own call site passes the same merged dict for both (out of scope for that
+    fix; see docs/dispatch-pipeline-rebuild.plan.md).
 
     Qualifies when: NOT patient-governed (vehicle categories aren't part of
     patient-only resolution), the mission type is known, and the mission has
@@ -1385,5 +1458,5 @@ def _reserve_vehicle_group(reserved, mission, mtype, resolver, assigned, patient
     if patient_governed or mtype is None or not resolver.effective_count_revealed(mission):
         return
     vreqs, _unmatched = resolver.vehicle_requirements(mission, mtype)
-    for req in _apply_delta(vreqs, assigned, mission.id):
+    for req in _apply_delta(vreqs, en_route, assigned, mission.id):
         reserved.update(req.type_ids)
