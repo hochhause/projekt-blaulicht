@@ -95,10 +95,23 @@ def _parse_dispatch_failures(html: str) -> dict[int, str]:
 # tolerant of that, unlike a naive `<tr id="...">` literal match which was
 # tested live and silently matched zero rows.
 #
-# Bounded the same way as _DISPATCH_FAILURE above: every gap is "any char
-# that doesn't start a tr tag", not a bare lazy dot-match, so a row missing
-# an expected piece for any reason can't let the match run on into the NEXT
-# row and misattribute its FMS/type.
+# _ON_SCENE_ROW is bounded the same way as _DISPATCH_FAILURE above: every gap
+# is "any char that doesn't start a tr tag", not a bare lazy dot-match, so a
+# row missing an expected piece for any reason can't let the match run on
+# into the NEXT row and misattribute its FMS/type.
+#
+# _ON_SCENE_TABLE (the outer match) is weaker — it stops at the first LITERAL
+# `</table>`, nested or not, so a genuinely nested `<table>` inside this one
+# (a tooltip, say) would silently truncate the roster after that point. Not
+# fixable with a tighter anchor: the real page's own `</tbody>` close tag is
+# itself absent from the raw response (confirmed live — the browser's lenient
+# HTML parser inserts it when building the DOM; this code reads the raw text,
+# which doesn't have it). Code review, 2026-10-27: confirmed live, twice, on
+# real missions, that no nested `<table>` occurs inside this one in practice
+# — and even if it ever did, `plan_reconciliation`'s `verified_our_ids` cross-
+# check means a truncated roster can only ever cause FEWER recalls (a vehicle
+# missing from the roster is never treated as confirmed present), never a
+# wrong one — a reliability concern if it ever fires, not a safety one.
 #
 # Live-verified 2026-10-27 (real account, real mission): this table's rows
 # are NOT all FMS 4 despite its name — a vehicle actively transporting a

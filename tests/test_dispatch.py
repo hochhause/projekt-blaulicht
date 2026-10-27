@@ -1247,6 +1247,87 @@ class DispatchPlannerTests(unittest.TestCase):
         recalls = plan_reconciliation([m], vehs, resolver, None, self._everyone(*vehs), {1})
         self.assertEqual(len(recalls), 1)
 
+    def test_reconciliation_does_not_recall_vehicles_still_needed_on_a_revealed_mission(self):
+        # CRITICAL (code review, 2026-10-27, caught before this ever shipped):
+        # _derive_requirements, once missing_text is revealed, returns a
+        # count ALREADY NET of on-scene (S4) vehicles -- the exact "fehlend"
+        # semantic D0/D5 built the dispatch-side fix around. Feeding that
+        # net count straight to select_coverage over the on-scene pool would
+        # double-subtract S4 in the RECALL direction. Mission truly needs 3
+        # LF; 2 are on scene (ours); the game's own missing_text correctly
+        # reveals "1 more needed" (3 - 2 = 1, already netted). BOTH on-scene
+        # LFs are still genuinely needed -- recalling either would be
+        # exactly the catastrophic "over-recall" outcome Sasha warned about.
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        catalog = MissionCatalog({900: MissionType(
+            id=900, name="NeedsThreeLF", average_credits=100,
+            requirements={"firetrucks": 3},
+        )})
+        resolver = MissionRequirementResolver(catalog, self.lib_for_engine)
+        m = mission(1, 900, NEAR,
+                    missing_text='{"vehicles":"1 Löschfahrzeuge (LF)","personnel":"","other":""}')
+        vehs = [self._assigned(100, LF, 1), self._assigned(101, LF, 1)]  # our 2 on-scene LFs
+        recalls = plan_reconciliation([m], vehs, resolver, None, self._everyone(*vehs), {1})
+        self.assertEqual(recalls, [])
+
+    def test_reconciliation_protects_a_fully_satisfied_class_even_while_another_is_short(self):
+        # Second, more severe half of the same code-review finding: mission
+        # needs 3 LF + 1 FuStW. Four of our LFs are on scene -- firetrucks is
+        # fully satisfied, so missing_text OMITS it entirely from the blob
+        # (confirmed: resolve_mission returns [] for an empty "vehicles"
+        # group), leaving only "1 Funkstreifenwagen" mentioned. Without this
+        # fix, select_coverage would see a requirements list containing ONLY
+        # the FuStW line, find nothing in the pool to satisfy it, and treat
+        # ALL FOUR of our LFs as unconditionally surplus -- even though the
+        # mission's own catalogue need for LF (3) is still very real, just
+        # not currently mentioned because it happens to already be met.
+        # Deliberately conservative, not precise: this protects the WHOLE
+        # class (all 4 LFs), not just 3 of them -- we have no safe way to
+        # tell "exactly met" from "genuinely over" once missing_text goes
+        # silent (see the sibling "known limitation" test below).
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        catalog = MissionCatalog({900: MissionType(
+            id=900, name="NeedsThreeLFOneFuStW", average_credits=100,
+            requirements={"firetrucks": 3, "police_cars": 1},
+        )})
+        resolver = MissionRequirementResolver(catalog, self.lib_for_engine)
+        m = mission(1, 900, NEAR,
+                    missing_text='{"vehicles":"1 FuStW","personnel":"","other":""}')
+        vehs = [self._assigned(100, LF, 1), self._assigned(101, LF, 1),
+                self._assigned(102, LF, 1), self._assigned(103, LF, 1)]  # 4 on scene, only 3 needed
+        recalls = plan_reconciliation([m], vehs, resolver, None, self._everyone(*vehs), {1})
+        self.assertEqual(recalls, [])
+
+    def test_reconciliation_known_limitation_a_fully_silent_class_is_never_checked(self):
+        # Deliberate, documented scope limitation (not a bug): once a class
+        # is FULLY satisfied, the game's missing_text omits it from the blob
+        # entirely (confirmed: resolver.resolve_mission returns requirements
+        # == [] when "vehicles" is empty) -- there is no Requirement object
+        # left for the restoration fix to recover a true total from, and
+        # falling back to the catalogue's raw total would be UNSAFE for an
+        # overlay mission (catalogue under-counts those -- see
+        # docs/live-data-model.md's "additive_overlays"), risking recalling
+        # a genuinely-still-needed vehicle. So a mission with NOTHING left
+        # in missing_text at all gets no S4-surplus check -- conservative
+        # (misses a real surplus), never unsafe (never over-recalls).
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        catalog = MissionCatalog({900: MissionType(
+            id=900, name="NeedsThreeLF", average_credits=100,
+            requirements={"firetrucks": 3},
+        )})
+        resolver = MissionRequirementResolver(catalog, self.lib_for_engine)
+        m = mission(1, 900, NEAR, missing_text='{"vehicles":"","personnel":"","other":""}')
+        vehs = [self._assigned(100, LF, 1), self._assigned(101, LF, 1),
+                self._assigned(102, LF, 1), self._assigned(103, LF, 1)]  # 4 on scene, only 3 needed
+        recalls = plan_reconciliation([m], vehs, resolver, None, self._everyone(*vehs), {1})
+        self.assertEqual(recalls, [])
+
     def test_reconciliation_skips_mission_without_a_fetched_roster(self):
         # Sasha's own words: "if we over-recall we have a problem" -- a
         # mission not in on_scene_everyone (not fetched this cycle, or the

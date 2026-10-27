@@ -879,6 +879,29 @@ def plan_reconciliation(missions, vehicles, resolver, text_engine, on_scene_ever
         if not verified_our_ids:
             continue
 
+        # CRITICAL (caught by code review before this ever shipped):
+        # _derive_requirements, for a revealed missing_text, returns the
+        # count ALREADY NET of on-scene (S4) vehicles — delta_scope=
+        # "en_route_only", the exact "fehlend" semantic D0/D5 built the
+        # dispatch-side fix around (docs/live-data-model.md: "Noch benötigt
+        # = fehlend − Auf Anfahrt"). Handing that net count straight to
+        # select_coverage against the on-scene pool would double-subtract
+        # S4 in the RECALL direction: e.g. a mission needing 3 LF with 2
+        # already on scene reveals "1 LF still missing" -- feeding count=1
+        # to select_coverage over our 2 on-scene LFs marks only 1 as
+        # "needed" and recalls the other, even though the true total need
+        # (3) requires both. Restore the true total before judging surplus:
+        # add back how many of *pool* already satisfy each such
+        # requirement's type_ids (mirrors _apply_delta's own per-
+        # requirement-line counting, inverted). A "full"-scoped requirement
+        # (catalogue fallback, never netted against on-scene) passes
+        # through unchanged.
+        reqs = [
+            replace(r, count=r.count + sum(1 for v in pool if v.type_id in r.type_ids))
+            if r.delta_scope == "en_route_only" else r
+            for r in reqs
+        ]
+
         # Bias the greedy coverage pick toward keeping OTHER players'
         # vehicles as the "needed" ones: we can't recall theirs anyway, so
         # preferring them frees up more of ours when the combined total
@@ -897,6 +920,32 @@ def plan_reconciliation(missions, vehicles, resolver, text_engine, on_scene_ever
                 getattr(mission, "position", None), {},
             )
             needed_ids |= set(extra)
+
+        # CRITICAL, second half of the same code-review finding: once a
+        # vehicle CLASS is fully satisfied, missing_text omits it from the
+        # blob entirely (confirmed: resolver.resolve_mission returns [] for
+        # an empty "vehicles" group) -- there is then no Requirement object
+        # for that class at all, so select_coverage above has nothing
+        # telling it any on-scene vehicle of that class is "needed", and
+        # EVERY one of them would otherwise fall into the recall loop below
+        # as if unconditionally surplus -- even while a DIFFERENT class on
+        # the same mission is still short (confirmed: missing_text only
+        # lists what's still outstanding, nothing about what's already met).
+        # Protect every on-scene vehicle belonging to a class the mission
+        # TYPE's own catalogue could need (`mtype.requirements`/`chances`)
+        # but that isn't represented by any currently-active requirement at
+        # all -- deliberately the full class, not a minimal subset: we never
+        # guess whether it's exactly met or genuinely over-supplied (that
+        # would need the same unavailable "true total" this whole feature
+        # started from), so the safe choice is "needed", never "surplus".
+        if mtype is not None:
+            active_type_ids = frozenset(tid for r in reqs for tid in r.type_ids)
+            relevant_classes = set(getattr(mtype, "requirements", None) or {})
+            relevant_classes |= set(getattr(mtype, "chances", None) or {})
+            for cls in relevant_classes:
+                class_type_ids = frozenset(resolver.library.class_map.by_class.get(cls, ()))
+                if class_type_ids and not (class_type_ids & active_type_ids):
+                    needed_ids |= {p.id for p in pool if p.type_id in class_type_ids}
 
         for vid in verified_our_ids:
             if vid in needed_ids:

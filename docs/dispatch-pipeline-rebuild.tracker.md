@@ -172,7 +172,31 @@ is this file's checkboxes plus the commit log.
       `building_list_fms_N` span and filtering to FMS 4 only (`app/game/client.py`) — re-verified
       against the same live page afterward: the FMS-5 NAW is now correctly excluded, the 3 genuinely
       on-scene vehicles are kept.
-- [ ] 23. `code-reviewer` subagent pass over the full diff; address required changes.
+- [x] 23. `code-reviewer` subagent pass over the full diff — **BLOCKED on a CRITICAL finding, fixed
+      before anything shipped**: `plan_reconciliation` fed a revealed mission's `missing_text`-derived
+      requirement count (already net of on-scene/S4 vehicles — delta_scope="en_route_only", the exact
+      "fehlend" semantic D0/D5 built the dispatch-side fix around) straight into `select_coverage`
+      against the on-scene pool, double-subtracting S4 in the RECALL direction: a mission needing 3 LF
+      with 2 on scene reveals "1 more needed" → feeding count=1 to select_coverage over the 2 on-scene
+      LFs marked only 1 as needed and would have recalled the other, genuinely-still-needed one — the
+      exact catastrophic outcome Sasha named as the project's top priority to avoid. No test had
+      covered a REVEALED mission going through `plan_reconciliation` at all (every existing test used
+      an unrevealed/catalogue-fallback mission). Two-part fix in `plan_reconciliation`: (1) restore the
+      true total before judging surplus — add back how many on-scene pool vehicles already satisfy
+      each `en_route_only`-scoped requirement's `type_ids` (mirrors `_apply_delta`'s own per-
+      requirement counting, inverted); (2) a SECOND, more severe half of the same finding — once a
+      class is FULLY satisfied, `missing_text` omits it from the blob entirely (confirmed:
+      `resolve_mission` returns `requirements=[]` for an empty "vehicles" group), leaving literally no
+      Requirement object for that class — every on-scene vehicle of it would otherwise look
+      unconditionally surplus even while a DIFFERENT class on the same mission is still short. Fixed
+      by protecting every on-scene vehicle of any mission-type-relevant class
+      (`mtype.requirements`/`chances`) not represented by any currently-active requirement at all —
+      deliberately the whole class, not a minimal subset, since there's no safe way to tell "exactly
+      met" from "genuinely over" once missing_text goes silent (and the catalogue's raw total is
+      unsafe to fall back on for an overlay mission, which it under-counts). Both halves mutation-
+      checked (disabled each in turn, confirmed the right test fails, reverted, confirmed green).
+      A second, focused review pass confirmed the fix; see that review's own findings for any further
+      follow-up. 553 tests passed, 12 subtests passed.
 - [x] 24. No PR: Sasha's explicit instruction this round — push straight to `master` himself (via the
       session), then redeploy the running container directly. Superseded by that decision.
 
