@@ -161,7 +161,17 @@ is this file's checkboxes plus the commit log.
       version mismatch in this environment — confirmed unrelated again, no `app/web/` diff this
       round touches FastAPI's own import chain; the Jinja template addition was verified separately
       by rendering it directly with `jinja2.Environment`, both the populated and empty-state paths).
-- [ ] 22. By-hand live check against the real account (AC-M4-04).
+- [x] 22. By-hand live check against the real account (AC-M4-04) — read-only: fetched real missions/
+      vehicles/mission-detail pages via an authenticated browser session (no `recall()`/write calls
+      made), then ran the real, unmodified `_parse_on_scene_vehicles` regex against genuinely live
+      HTML. **Caught a real bug this way, not by inspection**: the `#mission_vehicle_at_mission`
+      table's name is misleading — it also lists a vehicle actively transporting a patient away
+      (FMS 5, confirmed on a real mission: an NAW mid-transport), not just FMS 4. Counting that
+      vehicle toward "everyone's on-scene coverage" could have misjudged one of OUR genuinely-still-
+      needed vehicles as surplus once it left. Fixed by parsing each row's own
+      `building_list_fms_N` span and filtering to FMS 4 only (`app/game/client.py`) — re-verified
+      against the same live page afterward: the FMS-5 NAW is now correctly excluded, the 3 genuinely
+      on-scene vehicles are kept.
 - [ ] 23. `code-reviewer` subagent pass over the full diff; address required changes.
 - [x] 24. No PR: Sasha's explicit instruction this round — push straight to `master` himself (via the
       session), then redeploy the running container directly. Superseded by that decision.

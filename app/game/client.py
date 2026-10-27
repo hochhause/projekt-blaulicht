@@ -95,11 +95,25 @@ def _parse_dispatch_failures(html: str) -> dict[int, str]:
 # tolerant of that, unlike a naive `<tr id="...">` literal match which was
 # tested live and silently matched zero rows.
 #
-# Bounded the same way as _DISPATCH_FAILURE above: the gap between the row
-# open tag and `vehicle_type_id="..."` is "any char that doesn't start a
-# tr tag", not a bare lazy dot-match, so a row missing that attribute for any
-# reason can't let the match run on into the NEXT row and misattribute its
-# type.
+# Bounded the same way as _DISPATCH_FAILURE above: every gap is "any char
+# that doesn't start a tr tag", not a bare lazy dot-match, so a row missing
+# an expected piece for any reason can't let the match run on into the NEXT
+# row and misattribute its FMS/type.
+#
+# Live-verified 2026-10-27 (real account, real mission): this table's rows
+# are NOT all FMS 4 despite its name — a vehicle actively transporting a
+# patient/prisoner away (FMS 5) still shows up here too, e.g.
+#   <td><span class="building_list_fms building_list_fms_5">5</span></td>
+#   <td ...><a href="/vehicles/82900774" vehicle_type_id="74">...NAW...
+# Counting that toward "everyone's on-scene coverage" would be WRONG: it's
+# actively leaving and (ambulance-class vehicles especially) typically never
+# comes back to THIS mission — if its presence lets select_coverage treat
+# the requirement as already met, one of OUR genuinely-still-needed vehicles
+# could be misjudged surplus and recalled while the FMS-5 one is mid-exit.
+# Only FMS 4 is kept, matching the same "an FMS-5 vehicle is never ours to
+# touch" rule the old plan_cleanup enforced explicitly (plan_reconciliation's
+# own en_route/on_scene split achieves the same thing for OUR side by only
+# ever grouping fms==3/4; this does the equivalent for the fetched roster).
 _ON_SCENE_TABLE = re.compile(
     r'<table id="mission_vehicle_at_mission"[^>]*>((?:(?!</table>).)*?)</table>',
     re.DOTALL,
@@ -107,21 +121,29 @@ _ON_SCENE_TABLE = re.compile(
 _ON_SCENE_ROW = re.compile(
     r'<tr[^>]*\bid="vehicle_row_(\d+)"[^>]*>'
     r'(?:(?!</?tr\b).)*?'
+    r'building_list_fms_(\d+)'
+    r'(?:(?!</?tr\b).)*?'
     r'vehicle_type_id="(\d+)"',
     re.DOTALL,
 )
 
 
 def _parse_on_scene_vehicles(html: str) -> list[tuple[int, int]]:
-    """``(vehicle_id, type_id)`` for EVERY vehicle in the mission detail
-    page's on-scene table — every player's, not just ours. Empty if the
-    table isn't found at all (page shape changed, or the mission has
-    nothing on scene) — the caller treats that identically to a fetch
-    failure (never assumes zero means "confirmed surplus")."""
+    """``(vehicle_id, type_id)`` for EVERY vehicle genuinely on scene (FMS 4)
+    in the mission detail page's on-scene table — every player's, not just
+    ours; an FMS-5 row (mid-transport) in the same table is excluded, see
+    ``_ON_SCENE_ROW``'s comment. Empty if the table isn't found at all (page
+    shape changed, or the mission has nothing on scene) — the caller treats
+    that identically to a fetch failure (never assumes zero means "confirmed
+    surplus")."""
     m = _ON_SCENE_TABLE.search(html)
     if not m:
         return []
-    return [(int(vid), int(tid)) for vid, tid in _ON_SCENE_ROW.findall(m.group(1))]
+    return [
+        (int(vid), int(tid))
+        for vid, fms, tid in _ON_SCENE_ROW.findall(m.group(1))
+        if fms == "4"
+    ]
 
 
 _NO_REJECTIONS: "MappingProxyType[int, str]" = MappingProxyType({})

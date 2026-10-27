@@ -75,7 +75,11 @@ class ParseDispatchFailuresTests(unittest.TestCase):
 # Trimmed from a LIVE mission detail page (Sasha logged the bot into a
 # browser session, 2026-10-27, to confirm the roster is server-rendered, not
 # AJAX-injected) -- the real <tr> tag has the id attribute on its own line
-# with surrounding whitespace, not a contiguous `<tr id="...">` literal.
+# with surrounding whitespace, not a contiguous `<tr id="...">` literal. The
+# second row (82900774, an NAW) is a REAL row from a real live mission that
+# day, included verbatim: FMS 5 (mid-transport, "Patient: Melanie O.") in the
+# SAME "Fahrzeuge an der Einsatzstelle" table as the FMS 4 rows -- the table
+# name is misleading, it is NOT exclusively on-scene vehicles.
 _LIVE_ON_SCENE_TABLE = """
 <table id="mission_vehicle_at_mission" class="table table-striped">
 <thead><tr><th>Fahrzeug</th></tr></thead>
@@ -90,22 +94,45 @@ _LIVE_ON_SCENE_TABLE = """
   <td class="hidden-xs"><a href="/profile/2641503">HyperCoderio</a></td>
 </tr>
 <tr
+    id="vehicle_row_82900774"
+>
+  <td><span class="building_list_fms building_list_fms_5">5</span></td>
+  <td rowspan="">
+    <a href="/vehicles/82900774" vehicle_type_id="74">\U0001F7E2NAW #I-23</a>
+    <br>Patient: Melanie O.
+  </td>
+  <td class="hidden-xs"><a href="/profile/2641503">HyperCoderio</a></td>
+</tr>
+<tr
     id="vehicle_row_125535599"
 >
+  <td><span class="building_list_fms building_list_fms_4">4</span></td>
   <td><a href="/vehicles/125535599" vehicle_type_id="32">\U0001F7E2GW-Messtechnik</a></td>
 </tr>
 </tbody>
 </table>
 <table id="mission_vehicle_driving">
-<tr id="vehicle_row_999999"><a vehicle_type_id="7">en route, not on scene</a></tr>
+<tr id="vehicle_row_999999">
+  <td><span class="building_list_fms building_list_fms_3">3</span></td>
+  <a vehicle_type_id="7">en route, not on scene</a>
+</tr>
 </table>
 """
 
 
 class ParseOnSceneVehiclesTests(unittest.TestCase):
-    def test_parses_every_row_in_the_on_scene_table(self):
+    def test_parses_every_fms4_row_in_the_on_scene_table(self):
         rows = _parse_on_scene_vehicles(_LIVE_ON_SCENE_TABLE)
         self.assertEqual(rows, [(81048893, 103), (125535599, 32)])
+
+    def test_an_fms5_row_in_the_same_table_is_excluded(self):
+        # Live-verified 2026-10-27: the "on-scene" table also lists a
+        # vehicle actively transporting a patient away (FMS 5) -- counting
+        # it toward "everyone's coverage" would be wrong (it's leaving and
+        # typically never comes back), which could misjudge one of OUR
+        # genuinely-still-needed vehicles as surplus.
+        rows = _parse_on_scene_vehicles(_LIVE_ON_SCENE_TABLE)
+        self.assertNotIn((82900774, 74), rows)
 
     def test_the_en_route_table_is_never_counted(self):
         # The "Fahrzeuge auf Anfahrt" table uses the exact same row id shape
@@ -128,8 +155,20 @@ class ParseOnSceneVehiclesTests(unittest.TestCase):
         # on into the following row and misattribute ITS type.
         html = (
             '<table id="mission_vehicle_at_mission"><tbody>'
-            '<tr id="vehicle_row_1"><td>no type id here</td></tr>'
-            '<tr id="vehicle_row_2"><a vehicle_type_id="30">HLF 20</a></tr>'
+            '<tr id="vehicle_row_1"><span class="building_list_fms building_list_fms_4">4</span>'
+            "no type id here</tr>"
+            '<tr id="vehicle_row_2"><span class="building_list_fms building_list_fms_4">4</span>'
+            '<a vehicle_type_id="30">HLF 20</a></tr>'
+            "</tbody></table>"
+        )
+        self.assertEqual(_parse_on_scene_vehicles(html), [(2, 30)])
+
+    def test_a_row_missing_the_fms_span_does_not_leak_into_the_next_row(self):
+        html = (
+            '<table id="mission_vehicle_at_mission"><tbody>'
+            '<tr id="vehicle_row_1"><a vehicle_type_id="30">no fms span here</a></tr>'
+            '<tr id="vehicle_row_2"><span class="building_list_fms building_list_fms_4">4</span>'
+            '<a vehicle_type_id="30">HLF 20</a></tr>'
             "</tbody></table>"
         )
         self.assertEqual(_parse_on_scene_vehicles(html), [(2, 30)])
