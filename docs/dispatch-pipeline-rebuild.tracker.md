@@ -143,18 +143,28 @@ is this file's checkboxes plus the commit log.
 
 ## Milestone 4 — SMART validation, cleanup, full regression, PR
 
-- [ ] 18. Build the SMART validation fixture (AC-M4-01); compare against the theoretical best
-      combination; document the result in the plan (confirm unchanged, or report a gap to Sasha
-      before changing anything).
-- [ ] 19. Remove the dead "awaiting arrival" relabel + its test (D8, AC-M4-02).
-- [ ] 20. Update `WORKFLOW.md` with this round's changes (closing the gap left after the Rule 1
-      hotfix, where this was skipped under an explicit scope limit).
-- [ ] 21. Full suite: `python -m pytest tests/ -x -q`, record real output + exit code (AC-M4-03).
-- [ ] 22. By-hand live check against the real account (AC-M4-04) — pause, run one cycle, compare
-      shortfall/mission-breakdown before/after for a previously-affected mission if still open.
+- [x] 18. SMART validation (AC-M4-01): `test_order_smart_beats_credits_high_when_pool_is_shared`
+      (tests/test_dispatch.py, pre-existing) already IS the theoretical-best-combination fixture the
+      plan asked for — the classic knapsack counter-example (one expensive vehicle-hungry mission vs.
+      two cheaper ones worth more combined), confirming SMART picks the combination worth MORE total
+      credits (190 > 150), not just the single highest-credit mission (what `CREDITS_HIGH` picks
+      instead, confirmed by the same test). No gap found against "maximize credits-worth of missions
+      turned green this cycle" — no rewrite, per the plan's own D3 ruling.
+- [x] 19. Removed the dead "awaiting arrival" relabel (`app/core/runner.py::_mission_breakdown`) —
+      confirmed no dedicated test still existed for it (only a stale comment reference, fixed to point
+      at `test_red_mission_ignores_stale_assigned_tracking_and_re_requests_in_full`, which already
+      proves the red+stale-assigned case now correctly resolves to "not enough vehicles").
+- [x] 20. Updated `WORKFLOW.md`: superseded the stale §4/§6 Leitungsteam-reservation entry (D1 removed
+      it for a revealed VGE mission) and added a new top-level log entry for this whole round.
+- [x] 21. Full suite: `python -m pytest tests/ -q --ignore=tests/test_web.py` — 548 passed, 12
+      subtests passed. `tests/test_web.py` still excluded (pre-existing, unrelated pydantic-core
+      version mismatch in this environment — confirmed unrelated again, no `app/web/` diff this
+      round touches FastAPI's own import chain; the Jinja template addition was verified separately
+      by rendering it directly with `jinja2.Environment`, both the populated and empty-state paths).
+- [ ] 22. By-hand live check against the real account (AC-M4-04).
 - [ ] 23. `code-reviewer` subagent pass over the full diff; address required changes.
-- [ ] 24. Open the PR: human-readable body (what/why/what to watch), dense evidence (test output,
-      the by-hand check's findings) in a follow-up comment, link this plan.
+- [x] 24. No PR: Sasha's explicit instruction this round — push straight to `master` himself (via the
+      session), then redeploy the running container directly. Superseded by that decision.
 
 ## Follow-ups (non-blocking, collected during the build)
 

@@ -387,14 +387,6 @@ class DispatchRunner:
                     explanation = f"sent {len(mp.vehicle_ids)}, still short: {missing}"
             elif reason is not None:
                 bot_status, explanation = _bucket_skip_reason(reason)
-                # Same red/"already covered" contradiction as above, for the
-                # skip path: "already covered" means our OWN tracking saw
-                # nothing left to dispatch WITHOUT sending anything new this
-                # cycle -- on a mission still showing red, that's exactly the
-                # same "satisfied but nothing's arrived" state, just reached
-                # via last cycle's send instead of this one's.
-                if bot_status == "already covered" and live_status == "red":
-                    bot_status = "awaiting arrival"
             else:
                 continue  # not actually considered this cycle (shouldn't normally happen)
             is_alliance = not is_own_mission(m, self._own_user_id)

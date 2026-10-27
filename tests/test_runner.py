@@ -268,10 +268,14 @@ class RunnerTests(unittest.TestCase):
     # -- mission breakdown (Sasha, 2026-09-22) ----------------------------
     def test_cycle_reports_mission_breakdown_fully_staffed(self):
         # "fully staffed" + red here is a deliberate, confirmed-still-correct
-        # one-cycle-lag artifact (re-checked 2026-10-26, see the
-        # "awaiting arrival" tests below for the case that ISN'T): the live
-        # status was polled before we dispatched THIS cycle, so a mission
-        # with zero vehicles before now always still shows red in this row.
+        # one-cycle-lag artifact: the live status was polled before we
+        # dispatched THIS cycle, so a mission with zero vehicles before now
+        # always still shows red in this row. (D8, 2026-10-27: the
+        # "awaiting arrival" relabel this comment used to point to for the
+        # case that ISN'T has been removed -- Rule 1 made it structurally
+        # unreachable, see test_red_mission_ignores_stale_assigned_tracking_
+        # and_re_requests_in_full below, which now correctly gets
+        # "not enough vehicles" instead.)
         missions = [m(1, 1, status="red")]
         client = FakeClient(missions, [v(100, 0)], [b()])  # type 1 needs 1 firetruck; LF supplied
         report = asyncio.run(self._runner(client).run_cycle())
