@@ -197,6 +197,35 @@ class StoreTests(unittest.TestCase):
         aid = self.store.add_account("x", "x@e.com")
         self.assertEqual(self.store.mission_interactions(aid), {})
 
+    def test_alarm_counts_increment_and_order(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.store.add_alarm_counts(aid, {1: 2, 2: 1})
+        self.store.add_alarm_counts(aid, {1: 3})
+        self.store.add_alarm_counts(aid, {3: 0})  # zero is ignored
+        rows = self.store.alarm_counts(aid)
+        self.assertEqual(rows, [
+            {"alarm_count": 1, "missions": 5},
+            {"alarm_count": 2, "missions": 1},
+        ])
+
+    def test_clear_alarm_counts_on_restart(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.store.add_alarm_counts(aid, {1: 3})
+        self.assertTrue(self.store.alarm_counts(aid))
+        self.store.clear_alarm_counts(aid)
+        self.assertEqual(self.store.alarm_counts(aid), [])
+
+    def test_alarm_counts_scoped_per_account(self):
+        a1 = self.store.add_account("a", "a@e.com")
+        a2 = self.store.add_account("b", "b@e.com")
+        self.store.add_alarm_counts(a1, {1: 1})
+        self.assertEqual(len(self.store.alarm_counts(a1)), 1)
+        self.assertEqual(self.store.alarm_counts(a2), [])
+
+    def test_alarm_counts_empty_when_unset(self):
+        aid = self.store.add_account("x", "x@e.com")
+        self.assertEqual(self.store.alarm_counts(aid), [])
+
 
 if __name__ == "__main__":
     unittest.main()

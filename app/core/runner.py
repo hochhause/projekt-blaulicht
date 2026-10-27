@@ -170,6 +170,11 @@ class CycleReport:
     # record across cycles, not an overwrite -- a mission's last-interaction
     # time must survive cycles where nothing new was sent to it.
     mission_interactions: dict[int, float] = field(default_factory=dict)
+    # alarm_count -> how many missions just closed (dropped out of the live
+    # feed) after that many real sends THIS cycle (see AlarmTracker). Empty
+    # most cycles; the orchestrator folds any entries into the persisted
+    # per-account distribution (see Store.add_alarm_counts).
+    alarm_counts_closed: dict[int, int] = field(default_factory=dict)
 
     def summary(self) -> str:
         return (
@@ -229,6 +234,7 @@ class DispatchRunner:
         on_stat: Callable[[int, int], None] | None = None,
         text_engine=None,
         strikes=None,
+        alarm_tracker=None,
         vehicle_cap: int = 0,
         transport_enabled: bool = True,
         transport_only: bool = False,
@@ -239,6 +245,11 @@ class DispatchRunner:
         self._policy = policy
         self._text_engine = text_engine
         self._strikes = strikes
+        # Per-mission real-alarm counter (see app.domain.alarms.AlarmTracker) —
+        # owned by AccountRunner so it survives a reconnect, same as _strikes.
+        # None is a valid, fully-supported value (alarm tracking is optional;
+        # tests and scripts that don't care about it just omit it).
+        self._alarms = alarm_tracker
         self._vehicle_cap = vehicle_cap
         # This account's own id — lets plan_dispatches (and patient-recall,
         # below) tell a genuinely-own mission apart from one merely visible
@@ -548,6 +559,11 @@ class DispatchRunner:
                 self._on_stat(sent, 1)
             if sent:
                 report.mission_interactions[mid] = now
+                if self._alarms is not None and mission_plan.counts_as_alarm:
+                    self._alarms.record(mid)
+
+        if self._alarms is not None:
+            report.alarm_counts_closed = self._alarms.finalize({m.id for m in missions})
 
         hilferuf_mode = getattr(self._policy, "hilferuf_mode", HilferufAggressiveness.OFF)
         if hilferuf_mode is not HilferufAggressiveness.OFF:

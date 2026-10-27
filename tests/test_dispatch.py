@@ -306,6 +306,17 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(len(plan.planned), 2)
         self.assertIn((3, "beyond batch size"), [(mid, r) for mid, r in plan.skipped])
 
+    # -- alarm-counter tagging (Sasha, 2026-10-27: "how often we need to
+    # alarm to each mission" -- a parasite send or S5 processing doesn't
+    # count, only a real send/reinforcement does) --------------------------
+    def test_normal_dispatch_counts_as_an_alarm_by_default(self):
+        plan = plan_dispatches(
+            [mission(1, 1, NEAR)], [vehicle(100, LF)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertTrue(plan.planned[0].counts_as_alarm)
+
     # -- parasite mode --------------------------------------------------------
     def test_parasite_leeches_shared_mission_with_spare(self):
         # A shared mission others are on (vehicle_state=1), type our fleet can't
@@ -324,6 +335,7 @@ class DispatchPlannerTests(unittest.TestCase):
         # despite being far and over the cash cap.
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].mission_id, 1)
+        self.assertFalse(plan.planned[0].counts_as_alarm)  # a parasite send, never OUR alarm
 
     def test_parasite_off_leaves_shared_mission_to_filters(self):
         para = mission(1, 3, FAR, is_alliance=True, vehicle_state=1)
@@ -365,6 +377,7 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertNotEqual(sent.vehicle_ids[0], 100)  # NOT the RTW
         self.assertIn(sent.vehicle_ids[0], {101, 102, 103})  # a plain spare LF
         self.assertFalse(sent.satisfied)  # a pure leech claim, not a real contribution
+        self.assertFalse(sent.counts_as_alarm)
 
     def test_parasite_mode_all_grabs_untouched_mission_too(self):
         # ParasiteAggressiveness.ALL drops the "someone's already on it"
@@ -448,6 +461,9 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertIn(sent.vehicle_ids[0], {101, 102, 103})  # an LF, never the scarce FUSTW
         self.assertFalse(sent.satisfied)
         self.assertIn("police_cars", sent.shortfall)
+        # A parasite's "useful" _plan_one-routed contribution is retagged too
+        # -- not just the plain claim-a-spare fallback (Sasha, 2026-10-27).
+        self.assertFalse(sent.counts_as_alarm)
 
     def test_parasite_scarce_threshold_zero_means_no_floor(self):
         # Same fleet as above, but the floor is off (default-equivalent) ->
@@ -497,6 +513,7 @@ class DispatchPlannerTests(unittest.TestCase):
         sent = plan.planned[0]
         self.assertEqual(sent.vehicle_ids, (100,))  # the scarce FUSTW, sent anyway
         self.assertTrue(sent.satisfied)
+        self.assertTrue(sent.counts_as_alarm)  # OUR reinforcement, not a parasite's
 
     # -- Verbandsgroßeinsatz (VGE) compliance override -------------------------
 
@@ -530,6 +547,7 @@ class DispatchPlannerTests(unittest.TestCase):
         )
         self.assertEqual(len(plan.planned), 1)
         self.assertFalse(plan.planned[0].satisfied)  # pure leech, free
+        self.assertFalse(plan.planned[0].counts_as_alarm)
 
     def test_vge_mission_graduates_to_normal_dispatch_once_revealed(self):
         # D1: once missing_text is revealed, a VGE mission is treated like
@@ -550,6 +568,7 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(set(plan.planned[0].vehicle_ids), {100, 101})
         self.assertTrue(plan.planned[0].satisfied)
+        self.assertTrue(plan.planned[0].counts_as_alarm)  # graduated -- a real send now
 
     def test_vge_mission_gets_nothing_more_once_already_on_it(self):
         # Once our one participation vehicle is in (tracked via `assigned`),
@@ -1506,6 +1525,11 @@ class DispatchPlannerTests(unittest.TestCase):
         plan = plan_dispatches([m], [spare_lf], [building()], self.resolver, policy, assigned=assigned)
         self.assertEqual(len(plan.planned), 1)
         self.assertEqual(plan.planned[0].vehicle_ids, (100,))
+        # NOTE: `assigned={1: [LF]}` makes this mission `on_it`, which forces
+        # is_parasite False (parasite requires NOT on_it) -- it's handled by
+        # the main loop's own normal governing, not _priority_pass's parasite
+        # branch, so it's OUR reinforcement and DOES count as a real alarm.
+        self.assertTrue(plan.planned[0].counts_as_alarm)
 
     def test_topup_reinforcement_tops_up_firefighter_minimum(self):
         # AC-M2-07: an on_it, top-up-covered mission below its
@@ -1524,6 +1548,7 @@ class DispatchPlannerTests(unittest.TestCase):
         plan = plan_dispatches([m], [lf], [building()], resolver, policy, assigned={1: [900000]})
         self.assertEqual(len(plan.planned), 1)
         self.assertIn(100, plan.planned[0].vehicle_ids)
+        self.assertTrue(plan.planned[0].counts_as_alarm)  # OUR reinforcement
 
     def test_topup_reinforcement_prefers_seg_elw_on_mass_casualty(self):
         # AC-M2-08: an on_it, top-up-covered mass-casualty mission now gets
@@ -1545,6 +1570,7 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertTrue(mp.satisfied)
         self.assertIn(10, mp.vehicle_ids)      # SEG-ELW preferred
         self.assertNotIn(11, mp.vehicle_ids)
+        self.assertTrue(mp.counts_as_alarm)  # OUR reinforcement
 
     def test_parasite_mzb_send_gets_water_rescue_escort(self):
         # AC-M2-09: a parasite-sent MZB now gets its opportunistic
@@ -1559,6 +1585,7 @@ class DispatchPlannerTests(unittest.TestCase):
         plan = plan_dispatches([m], [mzb, diver, water], [building()], self.resolver, policy)
         self.assertTrue(plan.planned)
         self.assertEqual(set(plan.planned[0].vehicle_ids), {100, 101, 102})
+        self.assertFalse(plan.planned[0].counts_as_alarm)  # still a parasite send
 
     # -- S3/S4 delta scoping (Sasha, 2026-10-27) -------------------------------
     # missing_text is already net of on-scene (S4) vehicles

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 
+from ..domain.alarms import AlarmTracker
 from ..domain.catalog import MissionCatalog
 from ..domain.dispatch import DispatchPolicy
 from ..domain.requirements import RequirementEngine
@@ -73,6 +74,15 @@ class AccountRunner:
         # vehicle's name). Persists across reconnects; a real account restart makes
         # a fresh AccountRunner -> fresh tracker.
         self._strikes = StrikeTracker()
+        # Real-alarm (initial send / reinforcement, never parasite/S5) counter
+        # per mission (see app.domain.alarms.AlarmTracker) -- owned HERE for
+        # the same reason as _strikes above: _connect() rebuilds the
+        # DispatchRunner on every reconnect, so this must live above that or
+        # a transient reconnect would silently reset a mission's in-progress
+        # tally mid-close. In-memory only (Sasha, 2026-10-27: "doesn't need
+        # to survive a restart") -- a real account restart makes a fresh
+        # AccountRunner -> fresh tracker, same as StrikeTracker.
+        self._alarms = AlarmTracker()
         # Mission ids whose casualty count has ever been authoritatively
         # revealed (see MissionRequirementResolver.effective_count_revealed) —
         # owned here, not by the resolver, and handed to each newly-built
@@ -109,7 +119,8 @@ class AccountRunner:
         self._dispatch = DispatchRunner(
             client, resolver, self._policy,
             on_log=self._on_log, on_stat=self._on_stat, timing=self._timing,
-            text_engine=text_engine, strikes=self._strikes, vehicle_cap=self._vehicle_cap,
+            text_engine=text_engine, strikes=self._strikes, alarm_tracker=self._alarms,
+            vehicle_cap=self._vehicle_cap,
             transport_enabled=self._transport_enabled, transport_only=self._transport_only,
         )
         self._log(f"connected — {len(resolver.catalog)} mission types loaded")

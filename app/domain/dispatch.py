@@ -343,6 +343,14 @@ class MissionPlan:
     vehicle_ids: tuple[int, ...]
     satisfied: bool
     shortfall: dict[str, int]
+    # Whether this send should count as a real dispatch "alarm" toward
+    # AlarmTracker (Sasha, 2026-10-27: "a parasite send or a S5 processing
+    # doesn't count only sending and reinforcements and such"). True for
+    # every ordinary initial/reinforcement/patient send; explicitly False
+    # for a parasite's contribution and the VGE-unrevealed one-time
+    # participation spare (see ``_priority_pass``) — both are a free token
+    # claim, not a real attempt to crew the mission.
+    counts_as_alarm: bool = True
 
 
 @dataclass
@@ -1059,7 +1067,8 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, en_route, b
                 spare = _abundance_vehicle(pool, pos, building_pos) if pos is not None else None
                 if spare is not None:
                     plan.planned.append(MissionPlan(mid, getattr(mission, "caption", ""),
-                                                    (spare.id,), False, {}))  # pure leech, free
+                                                    (spare.id,), False, {},
+                                                    counts_as_alarm=False))  # pure leech, free
                     pool[:] = [v for v in pool if v.id != spare.id]
             handled.add(mid)
             continue
@@ -1149,6 +1158,11 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, en_route, b
             )
             if not isinstance(outcome, str):
                 mission_plan, chosen = outcome
+                if is_parasite:
+                    # A parasite's "useful" contribution still isn't OUR
+                    # crewing attempt (see MissionPlan.counts_as_alarm) —
+                    # only on_it_here's own top-up/patient reinforcement does.
+                    mission_plan = replace(mission_plan, counts_as_alarm=False)
                 plan.planned.append(mission_plan)
                 batch_used += 1  # useful contribution -> counts to batch
         if not chosen and is_parasite:
@@ -1156,7 +1170,8 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, en_route, b
             if spare is not None:
                 chosen = [spare.id]
                 plan.planned.append(MissionPlan(mid, getattr(mission, "caption", ""),
-                                                (spare.id,), False, {}))  # pure leech, free
+                                                (spare.id,), False, {},
+                                                counts_as_alarm=False))  # pure leech, free
         if chosen:
             cset = set(chosen)
             pool[:] = [v for v in pool if v.id not in cset]

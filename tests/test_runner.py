@@ -2,13 +2,15 @@ import asyncio
 import json
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 from types import SimpleNamespace
 
 from app.core.runner import DispatchRunner, RunnerTiming
+from app.domain.alarms import AlarmTracker
 from app.domain.assets import AssetLibrary
 from app.domain.catalog import MissionCatalog
-from app.domain.dispatch import DispatchPolicy, HilferufAggressiveness, ModeScope
+from app.domain.dispatch import DispatchPlan, DispatchPolicy, HilferufAggressiveness, MissionPlan, ModeScope
 from app.domain.resolver import MissionRequirementResolver
 
 BASE = Path(__file__).resolve().parent
@@ -106,7 +108,7 @@ class RunnerTests(unittest.TestCase):
         catalog = MissionCatalog.from_payload(json.loads(FIXTURE.read_text(encoding="utf-8")))
         cls.resolver = MissionRequirementResolver(catalog, library)
 
-    def _runner(self, client, on_log=None, strikes=None):
+    def _runner(self, client, on_log=None, strikes=None, alarm_tracker=None):
         # No-op sleep so the test is instant.
         async def no_sleep(_):
             return None
@@ -114,7 +116,7 @@ class RunnerTests(unittest.TestCase):
         return DispatchRunner(
             client, self.resolver, DispatchPolicy(radius_km=40),
             timing=RunnerTiming(between_dispatches=0, sleep=no_sleep),
-            on_log=on_log, strikes=strikes,
+            on_log=on_log, strikes=strikes, alarm_tracker=alarm_tracker,
         )
 
     def test_cycle_dispatches_planned_vehicles(self):
@@ -195,6 +197,51 @@ class RunnerTests(unittest.TestCase):
         )
         report = asyncio.run(runner.run_cycle())
         self.assertEqual(report.mission_interactions, {})
+
+    # -- alarm tracking (Sasha, 2026-10-27: "how often we need to alarm to
+    # each mission" -- only a real send/reinforcement counts, never a
+    # parasite send or S5 processing) -----------------------------------
+    def test_alarm_recorded_on_a_real_send_and_finalized_once_mission_closes(self):
+        client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
+        tracker = AlarmTracker()
+        runner = self._runner(client, alarm_tracker=tracker)
+        report = asyncio.run(runner.run_cycle())
+        self.assertEqual(client.dispatched, [(1, 100)])  # sanity: a real send happened
+        self.assertEqual(report.alarm_counts_closed, {})  # mission still live -- not finalized yet
+
+        client._missions = []  # mission #1 dropped out of the feed -- it's done
+        report2 = asyncio.run(runner.run_cycle())
+        self.assertEqual(report2.alarm_counts_closed, {1: 1})  # closed after exactly 1 alarm
+
+    def test_alarm_not_recorded_when_the_send_is_tagged_as_not_counting(self):
+        # A parasite/VGE-spare send (MissionPlan.counts_as_alarm=False) still
+        # dispatches a real vehicle, but must never feed the alarm tally.
+        client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
+        tracker = AlarmTracker()
+        runner = self._runner(client, alarm_tracker=tracker)
+        fake_plan = DispatchPlan(planned=[
+            MissionPlan(1, "M1", (100,), True, {}, counts_as_alarm=False),
+        ])
+        with unittest.mock.patch("app.core.runner.plan_dispatches", return_value=fake_plan):
+            asyncio.run(runner.run_cycle())
+        self.assertEqual(client.dispatched, [(1, 100)])  # the vehicle really went out
+        self.assertEqual(tracker.finalize(set()), {})     # but it never counted as an alarm
+
+    def test_alarm_not_recorded_when_nothing_actually_went_out(self):
+        # mission_not_found (404): "sent" stays 0 even though a MissionPlan
+        # with counts_as_alarm=True was queued -- must not be recorded.
+        client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
+        client.gone_missions.add(1)
+        tracker = AlarmTracker()
+        report = asyncio.run(self._runner(client, alarm_tracker=tracker).run_cycle())
+        self.assertEqual(report.dispatched, 0)
+        self.assertEqual(tracker.finalize(set()), {})
+
+    def test_runner_works_without_an_alarm_tracker(self):
+        # alarm_tracker is optional -- omitting it must not break a cycle.
+        client = FakeClient([m(1, 1)], [v(100, 0)], [b()])
+        report = asyncio.run(self._runner(client).run_cycle())
+        self.assertEqual(report.alarm_counts_closed, {})
 
     def test_cycle_reports_mission_status_breakdown(self):
         # TODO.md P4: surface live icon status. A snapshot of THIS cycle's

@@ -193,6 +193,23 @@
     {% else %}
     <p class="muted small">—</p>
     {% endfor %}
+
+    <h3>Sends per closed mission</h3>
+    {% if stats.alarm_total_closed %}
+    <p class="muted small" style="margin:2px 0 6px">
+      {{ stats.alarm_total_closed }} mission(s) closed this run
+      {% if stats.alarm_pct_le2 is not none %} · {{ stats.alarm_pct_le2 }}% in ≤2 sends{% endif %}
+    </p>
+    {% for b in stats.alarm_buckets %}
+    <div class="sfrow">
+      <span class="sfname">{{ b.label }}</span>
+      <span class="sfbar"><i style="width:{{ b.pct }}%"></i></span>
+      <span class="sfcount">{{ b.count }}</span>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="muted small">No missions closed yet this run.</p>
+    {% endif %}
   </div>
 
 </div>

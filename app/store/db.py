@@ -89,6 +89,17 @@ CREATE TABLE IF NOT EXISTS mission_interaction (
     last_interacted_at REAL NOT NULL,
     PRIMARY KEY (account_id, mission_id)
 );
+-- How many missions closed after N real alarms (initial send / reinforcement,
+-- never a parasite send or S5 handling -- see AlarmTracker), per account and
+-- per N. Cumulative like `shortfall`, but cleared on every account (re)start
+-- (Sasha, 2026-10-27: "doesn't need to survive a restart") -- same "DB-
+-- stored, per-run" pattern as `shortfall`, not a long-run historical record.
+CREATE TABLE IF NOT EXISTS alarm_count (
+    account_id  INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    alarm_count INTEGER NOT NULL,
+    missions    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (account_id, alarm_count)
+);
 """
 
 
@@ -358,6 +369,35 @@ class Store:
             (account_id,),
         )
         return {r["mission_id"]: r["last_interacted_at"] for r in rows}
+
+    # -- alarm-count distribution (sends-per-closed-mission tally) ----------
+    def add_alarm_counts(self, account_id: int, counts) -> None:
+        """Fold newly-closed missions into the per-account distribution.
+        *counts* maps alarm_count -> how many missions just closed with that
+        many real sends (see AlarmTracker.finalize)."""
+        for n, missions in dict(counts).items():
+            if not missions:
+                continue
+            self._write(
+                "INSERT INTO alarm_count (account_id, alarm_count, missions) VALUES (?, ?, ?) "
+                "ON CONFLICT(account_id, alarm_count) DO UPDATE SET "
+                "missions = missions + excluded.missions",
+                (account_id, int(n), int(missions)),
+            )
+
+    def alarm_counts(self, account_id: int) -> list[dict]:
+        rows = self._all(
+            "SELECT alarm_count, missions FROM alarm_count WHERE account_id = ? "
+            "ORDER BY alarm_count",
+            (account_id,),
+        )
+        return [dict(r) for r in rows]
+
+    def clear_alarm_counts(self, account_id: int) -> None:
+        """Wipe the alarm-count distribution — called on account (re)start,
+        mirroring clear_shortfalls: in-memory semantics (resets on restart),
+        not a long-run historical record."""
+        self._write("DELETE FROM alarm_count WHERE account_id = ?", (account_id,))
 
     # -- app settings ------------------------------------------------------
     def set_setting(self, key: str, value: str) -> None:

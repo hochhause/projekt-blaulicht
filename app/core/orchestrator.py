@@ -297,8 +297,10 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
 
     def factory(account_id: int) -> AccountWorker:
         # A (re)start begins a fresh run: reset the per-run "struggling to field"
-        # tally, mirroring the fresh StrikeTracker inside the runner.
+        # tally, mirroring the fresh StrikeTracker inside the runner. The
+        # alarm-count distribution resets the same way (fresh AlarmTracker).
         store.clear_shortfalls(account_id)
+        store.clear_alarm_counts(account_id)
         runner, config = build_account_runner(store, secret_box, settings, library, account_id, log_store)
         timing = WorkerTiming(poll_seconds=config.poll_seconds, jitter_seconds=config.jitter_seconds)
 
@@ -330,6 +332,9 @@ def default_worker_factory(store, secret_box, settings, log_store=None) -> Calla
                 interactions = getattr(report, "mission_interactions", None) or {}
                 live_ids = {row["mission_id"] for row in breakdown}
                 store.record_mission_interactions(aid, interactions, live_ids)
+            closed = getattr(report, "alarm_counts_closed", None)
+            if closed:
+                store.add_alarm_counts(aid, closed)
 
         return AccountWorker(account_id, runner, timing, on_state=on_state, on_cycle=on_cycle)
 
@@ -354,6 +359,7 @@ def default_group_factory(store, secret_box, settings, log_store=None):
         members = {}
         for account_id in member_ids:
             store.clear_shortfalls(account_id)
+            store.clear_alarm_counts(account_id)
             runner, _cfg = build_account_runner(store, secret_box, settings, library, account_id, log_store)
             members[account_id] = runner
 

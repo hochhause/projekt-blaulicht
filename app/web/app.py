@@ -576,6 +576,31 @@ def _dashboard_stats(store, accounts, color_by_id) -> dict:
         }
         for s in series
     ]
+
+    # Sends-per-closed-mission distribution (Sasha, 2026-10-27): combined
+    # across accounts, bucketed into 1 / 2 / 3+ since the goal is "majority
+    # at 1 or 2 sends" — a finer per-N breakdown isn't needed for that read.
+    # In-memory per-account (see AlarmTracker), so this run only.
+    alarm_totals: dict[int, int] = {}
+    for account in accounts:
+        for row in store.alarm_counts(account.id):
+            n = row["alarm_count"]
+            alarm_totals[n] = alarm_totals.get(n, 0) + row["missions"]
+    total_closed = sum(alarm_totals.values())
+    le2 = sum(c for n, c in alarm_totals.items() if n <= 2)
+    bucket_defs = [
+        ("1 send", lambda n: n == 1),
+        ("2 sends", lambda n: n == 2),
+        ("3+ sends", lambda n: n >= 3),
+    ]
+    bucket_counts = [(label, sum(c for n, c in alarm_totals.items() if pred(n)))
+                      for label, pred in bucket_defs]
+    top_bucket = max((c for _l, c in bucket_counts), default=0) or 1
+    alarm_buckets = [
+        {"label": label, "count": c, "pct": round(c * 100 / top_bucket)}
+        for label, c in bucket_counts
+    ]
+
     return {
         "credits": credits,
         "credits_fmt": f"{credits:,}",
@@ -585,4 +610,7 @@ def _dashboard_stats(store, accounts, color_by_id) -> dict:
         "missions_fmt": f"{missions:,}",
         "accounts": per_account,
         "bars": bars,
+        "alarm_buckets": alarm_buckets,
+        "alarm_total_closed": total_closed,
+        "alarm_pct_le2": round(le2 * 100 / total_closed) if total_closed else None,
     }
