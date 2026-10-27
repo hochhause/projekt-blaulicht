@@ -931,21 +931,29 @@ def plan_reconciliation(missions, vehicles, resolver, text_engine, on_scene_ever
         # as if unconditionally surplus -- even while a DIFFERENT class on
         # the same mission is still short (confirmed: missing_text only
         # lists what's still outstanding, nothing about what's already met).
-        # Protect every on-scene vehicle belonging to a class the mission
-        # TYPE's own catalogue could need (`mtype.requirements`/`chances`)
-        # but that isn't represented by any currently-active requirement at
-        # all -- deliberately the full class, not a minimal subset: we never
-        # guess whether it's exactly met or genuinely over-supplied (that
-        # would need the same unavailable "true total" this whole feature
-        # started from), so the safe choice is "needed", never "surplus".
+        # Protect every on-scene vehicle whose TYPE belongs to a class the
+        # mission TYPE's own catalogue could need (`mtype.requirements`/
+        # `chances`) but ISN'T itself one of the currently-active
+        # requirements' type_ids -- deliberately per-TYPE-ID, not a per-class
+        # all-or-nothing check (code review, 2026-10-27: a class sharing even
+        # one multi-role type with an active class -- e.g. firetrucks and
+        # heavy_rescue_vehicles both include the HLF ids -- must not lose
+        # protection for its OWN non-shared types, like a plain Rüstwagen,
+        # just because the shared id alone is already spoken for elsewhere).
+        # Re-protecting a type an active requirement already fully consumes
+        # is harmless and redundant (select_coverage always exhausts every
+        # matching on-scene vehicle for a requirement still present at all,
+        # since its restored count can never be met by fewer); only the
+        # genuinely-unprotected non-overlapping types change anything.
         if mtype is not None:
             active_type_ids = frozenset(tid for r in reqs for tid in r.type_ids)
             relevant_classes = set(getattr(mtype, "requirements", None) or {})
             relevant_classes |= set(getattr(mtype, "chances", None) or {})
+            protected_type_ids: set[int] = set()
             for cls in relevant_classes:
-                class_type_ids = frozenset(resolver.library.class_map.by_class.get(cls, ()))
-                if class_type_ids and not (class_type_ids & active_type_ids):
-                    needed_ids |= {p.id for p in pool if p.type_id in class_type_ids}
+                protected_type_ids |= set(resolver.library.class_map.by_class.get(cls, ()))
+            protected_type_ids -= active_type_ids
+            needed_ids |= {p.id for p in pool if p.type_id in protected_type_ids}
 
         for vid in verified_our_ids:
             if vid in needed_ids:

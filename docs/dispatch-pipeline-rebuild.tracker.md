@@ -195,8 +195,33 @@ is this file's checkboxes plus the commit log.
       met" from "genuinely over" once missing_text goes silent (and the catalogue's raw total is
       unsafe to fall back on for an overlay mission, which it under-counts). Both halves mutation-
       checked (disabled each in turn, confirmed the right test fails, reverted, confirmed green).
-      A second, focused review pass confirmed the fix; see that review's own findings for any further
-      follow-up. 553 tests passed, 12 subtests passed.
+
+      **A second, focused review pass on this exact fix found a further CRITICAL gap in the same
+      block, also fixed and mutation-checked before shipping**: the omitted-class protection's guard
+      was per-CLASS, all-or-nothing — if a fully-satisfied class shared even one multi-role type id
+      with a currently-active class (confirmed real in this project's own data: `firetrucks` and
+      `heavy_rescue_vehicles` both include the HLF ids 30/90), the WHOLE class lost protection,
+      including its own non-shared types (a plain Rüstwagen, id 4) — which would then look
+      unconditionally surplus and get recalled, even while that class's own real need (1 RW) was still
+      genuinely uncovered. Fixed by making the guard per-TYPE-ID instead: union every relevant class's
+      type_ids, subtract only the type_ids an active requirement already covers, protect everything
+      left. Re-protecting an already-fully-consumed shared type is harmless and redundant (the
+      reviewer proved algebraically that an active, restored requirement's count can never be met by
+      fewer than its full matching on-scene pool, so `select_coverage` always consumes all of it
+      anyway) — only the genuinely-unprotected non-overlapping types change anything. New regression
+      test uses the real HLF/firetrucks/heavy_rescue_vehicles overlap from `data/de/vehicles`, not a
+      synthetic one. 554 tests passed, 12 subtests passed.
+
+      **Known, accepted, pre-existing limitation surfaced by the second review** (not a regression,
+      not blocking): `_run_reconciliation` fetches `missions` once, then fetches each due mission's
+      on-scene roster sequentially with a sleep between — `mission.missing_text` is a snapshot from
+      before that loop starts, while a later-processed mission's roster can be fetched noticeably
+      after. If a pool vehicle matching an active requirement's type leaves the scene in that window,
+      the restoration step would under-restore relative to the true total `missing_text` was computed
+      against. The same snapshot gap already existed in the old `_apply_delta`-based dispatch path
+      before this round; not introduced here. No concrete trigger found (needs an unlucky mid-cycle
+      departure inside a cadence-gated, multi-second window) — recorded as a follow-up to keep in mind
+      if a real case ever surfaces, not acted on this round.
 - [x] 24. No PR: Sasha's explicit instruction this round — push straight to `master` himself (via the
       session), then redeploy the running container directly. Superseded by that decision.
 

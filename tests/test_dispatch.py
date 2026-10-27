@@ -1302,6 +1302,33 @@ class DispatchPlannerTests(unittest.TestCase):
         recalls = plan_reconciliation([m], vehs, resolver, None, self._everyone(*vehs), {1})
         self.assertEqual(recalls, [])
 
+    def test_reconciliation_protects_a_non_overlapping_type_in_a_partially_shared_class(self):
+        # Second-round code review (2026-10-27): the omitted-class guard must
+        # be per-TYPE-ID, not per-class. firetrucks and heavy_rescue_vehicles
+        # genuinely share the HLF ids (30, 90) in this project's own vehicle
+        # data -- a plain all-or-nothing "does this class share ANY type with
+        # an active one" check would skip protecting heavy_rescue_vehicles
+        # entirely just because HLF is shared, leaving its OWN non-shared
+        # type (a plain Rüstwagen, id 4) unprotected and recalled, even
+        # though heavy_rescue_vehicles' real need (1) is still only covered
+        # by that one RW -- the HLF on scene is already fully spoken for by
+        # firetrucks' own unmet shortfall (needs 4, only 2 on scene so far).
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        catalog = MissionCatalog({900: MissionType(
+            id=900, name="LFPlusRW", average_credits=100,
+            requirements={"firetrucks": 4, "heavy_rescue_vehicles": 1},
+        )})
+        resolver = MissionRequirementResolver(catalog, self.lib_for_engine)
+        m = mission(1, 900, NEAR,
+                    missing_text='{"vehicles":"2 Löschfahrzeuge (LF)","personnel":"","other":""}')
+        HLF = 30
+        RW = 4
+        vehs = [self._assigned(100, LF, 1), self._assigned(101, HLF, 1), self._assigned(102, RW, 1)]
+        recalls = plan_reconciliation([m], vehs, resolver, None, self._everyone(*vehs), {1})
+        self.assertEqual(recalls, [])
+
     def test_reconciliation_known_limitation_a_fully_silent_class_is_never_checked(self):
         # Deliberate, documented scope limitation (not a bug): once a class
         # is FULLY satisfied, the game's missing_text omits it from the blob
