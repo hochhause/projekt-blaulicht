@@ -180,7 +180,10 @@ class DispatchPlannerTests(unittest.TestCase):
         # it must be handled ONCE, by the priority pass's parasite branch
         # (which runs first and claims the mission via `handled`), never
         # ALSO by the main loop's top-up branch.
-        m = mission(1, 1, NEAR, is_alliance=True, vehicle_state=1)  # firetrucks:1, begun
+        # missing_text revealed: required for top-up eligibility under D2
+        # (Sasha, 2026-10-27 -- missing_text_ever_revealed, not vehicle_state).
+        m = mission(1, 1, NEAR, is_alliance=True, vehicle_state=1,
+                    missing_text='{"vehicles":"1 Löschfahrzeuge (LF)","personnel":"","other":""}')
         policy = DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
                                  top_up_scope=ModeScope.ALLIANCE)
         plan = plan_dispatches([m], [vehicle(100, LF)], [building()], self.resolver, policy)
@@ -497,11 +500,10 @@ class DispatchPlannerTests(unittest.TestCase):
 
     # -- Verbandsgroßeinsatz (VGE) compliance override -------------------------
 
-    def test_vge_mission_gets_only_a_single_spare_vehicle(self):
-        # Sasha, 2026-10-07: official VGE mission-type ids (here: 41) must
-        # never get a real dispatch, even with parasite entirely off and a
-        # policy that would otherwise fully crew it -- just one participation
-        # spare, same free leech mechanism parasite mode uses.
+    def test_vge_mission_ignored_while_unrevealed_and_parasite_off(self):
+        # D1 (Sasha, 2026-10-27): "adopt the new VGE logic" -- an UNREVEALED
+        # VGE mission now gets no spare at all unless parasite_scope actually
+        # covers it (previously unconditional, regardless of any mode).
         # "[Verband]" caption (confirmed live, 2026-10-07): the real signal a
         # genuinely foreign alliance mission carries -- see
         # _confidently_alliance, which the VGE override deliberately requires
@@ -513,11 +515,41 @@ class DispatchPlannerTests(unittest.TestCase):
             DispatchPolicy(radius_km=40, parasite_scope=ModeScope.OFF,
                             mission_source=frozenset({MissionSource.OWN, MissionSource.ALLIANCE})),
         )
+        self.assertEqual(plan.planned, [])
+
+    def test_vge_mission_gets_a_spare_while_unrevealed_if_parasite_covers_it(self):
+        # Same unrevealed VGE mission, but parasite_scope now covers it --
+        # exactly one free participation spare (the old unconditional
+        # behaviour's one surviving case).
+        vge = mission(1, 41, NEAR, is_alliance=True, vehicle_state=1,
+                      caption="[Verband] VGE")
+        plan = plan_dispatches(
+            [vge], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
+                            mission_source=frozenset({MissionSource.OWN, MissionSource.ALLIANCE})),
+        )
         self.assertEqual(len(plan.planned), 1)
-        mp = plan.planned[0]
-        self.assertEqual(mp.mission_id, 1)
-        self.assertEqual(len(mp.vehicle_ids), 1)  # exactly one spare, not a real crew
-        self.assertFalse(mp.satisfied)
+        self.assertFalse(plan.planned[0].satisfied)  # pure leech, free
+
+    def test_vge_mission_graduates_to_normal_dispatch_once_revealed(self):
+        # D1: once missing_text is revealed, a VGE mission is treated like
+        # any other mission -- full dispatch, no one-vehicle cap, even with
+        # parasite entirely off. (A minimal ad-hoc catalog entry for type 41
+        # is needed here -- the shared fixture catalog only carries the small
+        # sample types 1-4, not the real VGE ids.)
+        catalog = MissionCatalog.from_payload([{"id": "41", "name": "VGE", "requirements": {}}])
+        resolver = MissionRequirementResolver(catalog, self.lib_for_engine)
+        vge = mission(1, 41, NEAR, is_alliance=True, vehicle_state=1, caption="[Verband] VGE",
+                      missing_text='{"vehicles":"1 Löschfahrzeuge (LF), 1 FuStW",'
+                                   '"personnel":"","other":""}')
+        plan = plan_dispatches(
+            [vge], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.OFF,
+                            mission_source=frozenset({MissionSource.OWN, MissionSource.ALLIANCE})),
+        )
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(set(plan.planned[0].vehicle_ids), {100, 101})
+        self.assertTrue(plan.planned[0].satisfied)
 
     def test_vge_mission_gets_nothing_more_once_already_on_it(self):
         # Once our one participation vehicle is in (tracked via `assigned`),
@@ -534,13 +566,15 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(plan.skipped, [])  # handled silently, not reported as skipped
 
     def test_vge_mission_handled_even_with_no_spare_available(self):
-        # No usable vehicle at all for the spare claim -- still marked
-        # handled (no fallback to a real dispatch attempt), just silently
-        # does nothing this cycle.
+        # parasite_scope covers it (so the spare WOULD be attempted), but no
+        # usable vehicle at all exists for the claim -- still marked handled
+        # (no fallback to a real dispatch attempt), just silently does
+        # nothing this cycle.
         vge = mission(1, 41, NEAR, is_alliance=True, vehicle_state=1,
                       caption="[Verband] VGE")
         plan = plan_dispatches(
-            [vge], [], [building()], self.resolver, DispatchPolicy(radius_km=40),
+            [vge], [], [building()], self.resolver,
+            DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE),
         )
         self.assertEqual(plan.planned, [])
         self.assertEqual(plan.skipped, [])
@@ -798,18 +832,26 @@ class DispatchPlannerTests(unittest.TestCase):
         # Sasha, 2026-10-05: "TopUp ... ONLY prioritizes a mission if we're
         # certain we can feed it." So this is a skip, same as normal dispatch
         # without partial_starts, not a partial send.
-        begun = mission(1, 3, NEAR, vehicle_state=1)
+        # missing_text revealed: required for top-up eligibility under D2
+        # (Sasha, 2026-10-27). Revealing switches the requirement source from
+        # the catalogue's class names (firetrucks/police_cars) to these LSSM
+        # category names (Löschfahrzeuge (LF) / FuStW).
+        begun = mission(1, 3, NEAR, vehicle_state=1,
+                        missing_text='{"vehicles":"1 Löschfahrzeuge (LF), 1 FuStW",'
+                                     '"personnel":"","other":""}')
         plan = plan_dispatches(
             [begun], [vehicle(100, LF)], [building()], self.resolver,
             DispatchPolicy(radius_km=40, top_up_scope=ModeScope.BOTH),
         )
         self.assertEqual(plan.planned, [])
-        self.assertEqual(plan.skipped, [(1, "not enough vehicles: short police_cars x1")])
+        self.assertEqual(plan.skipped, [(1, "not enough vehicles: short FuStW x1")])
 
     def test_top_up_sends_once_it_can_fully_crew(self):
         # Same begun mission, but the pool now has both an LF and a FuStW --
         # top-up sends the full set rather than withholding it.
-        begun = mission(1, 3, NEAR, vehicle_state=1)
+        begun = mission(1, 3, NEAR, vehicle_state=1,
+                        missing_text='{"vehicles":"1 Löschfahrzeuge (LF), 1 FuStW",'
+                                     '"personnel":"","other":""}')
         plan = plan_dispatches(
             [begun], [vehicle(100, LF), vehicle(101, FUSTW)], [building()], self.resolver,
             DispatchPolicy(radius_km=40, top_up_scope=ModeScope.BOTH),
@@ -825,7 +867,9 @@ class DispatchPlannerTests(unittest.TestCase):
         from app.domain.strikes import StrikeTracker
 
         strikes = StrikeTracker(threshold=1)  # would strike on the first miss
-        begun = mission(1, 3, NEAR, vehicle_state=1)
+        begun = mission(1, 3, NEAR, vehicle_state=1,
+                        missing_text='{"vehicles":"1 Löschfahrzeuge (LF), 1 FuStW",'
+                                     '"personnel":"","other":""}')
         plan_dispatches(
             [begun], [vehicle(100, LF)], [building()], self.resolver,
             DispatchPolicy(radius_km=40, top_up_scope=ModeScope.BOTH),
@@ -869,12 +913,14 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertEqual(plan.shortfalls.get("police_cars"), 1)
 
     def test_top_up_partial_also_records_shortfall(self):
-        begun = mission(1, 3, NEAR, vehicle_state=1)
+        begun = mission(1, 3, NEAR, vehicle_state=1,
+                        missing_text='{"vehicles":"1 Löschfahrzeuge (LF), 1 FuStW",'
+                                     '"personnel":"","other":""}')
         plan = plan_dispatches(
             [begun], [vehicle(100, LF)], [building()], self.resolver,
             DispatchPolicy(radius_km=40, top_up_scope=ModeScope.BOTH),
         )
-        self.assertEqual(plan.shortfalls.get("police_cars"), 1)
+        self.assertEqual(plan.shortfalls.get("FuStW"), 1)
 
     def test_spread_mission_topped_up_first(self):
         # We're already on mission 1 (assigned an LF) but it still needs police;
@@ -1441,6 +1487,79 @@ class DispatchPlannerTests(unittest.TestCase):
         planned_ids = {p.mission_id for p in plan.planned}
         self.assertIn(2, planned_ids)
 
+    # -- D7: _priority_pass routes through _plan_one (Sasha, 2026-10-27) ------
+    # Closes the four asymmetries the dispatch-pipeline-map artifact found
+    # between _priority_pass's old inline coverage computation and _plan_one:
+    # a parasite/top-up/patient reinforcement used to get none of _plan_one's
+    # rules. See docs/dispatch-pipeline-rebuild.{plan,acceptance}.md D7.
+
+    def test_parasite_reinforcement_on_red_mission_gets_rule1_bypass(self):
+        # AC-M2-06: a parasite contribution to a RED mission now routes
+        # through _plan_one, so Rule 1's red-bypass applies -- a stale/wrong
+        # `assigned` entry no longer silently zeroes the requirement.
+        m = mission(1, 1, NEAR, is_alliance=True, vehicle_state=1)  # firetrucks:1, begun
+        m.status = "red"
+        spare_lf = vehicle(100, LF)
+        assigned = {1: [LF]}  # stale: claims an LF is already there; nothing real is
+        policy = DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
+                                 parasite_scarce_threshold=0)
+        plan = plan_dispatches([m], [spare_lf], [building()], self.resolver, policy, assigned=assigned)
+        self.assertEqual(len(plan.planned), 1)
+        self.assertEqual(plan.planned[0].vehicle_ids, (100,))
+
+    def test_topup_reinforcement_tops_up_firefighter_minimum(self):
+        # AC-M2-07: an on_it, top-up-covered mission below its
+        # min_fire_personnel floor now gets extra firetrucks via _plan_one's
+        # fire-personnel top-up -- previously only a main-loop send got this.
+        catalog = MissionCatalog.from_payload([
+            {"id": "900", "name": "Test", "requirements": {},
+             "additional": {"average_min_fire_personnel": 9}},  # == one LF's crew exactly
+        ])
+        resolver = MissionRequirementResolver(catalog, self.lib_for_engine)
+        m = mission(1, 900, NEAR)
+        policy = DispatchPolicy(radius_km=40, top_up_scope=ModeScope.BOTH)
+        lf = vehicle(100, LF)
+        # on_it via a type that isn't a firetruck, so _fire_crew doesn't count
+        # it as already-assigned crew and trivially zero out fire_needed.
+        plan = plan_dispatches([m], [lf], [building()], resolver, policy, assigned={1: [900000]})
+        self.assertEqual(len(plan.planned), 1)
+        self.assertIn(100, plan.planned[0].vehicle_ids)
+
+    def test_topup_reinforcement_prefers_seg_elw_on_mass_casualty(self):
+        # AC-M2-08: an on_it, top-up-covered mass-casualty mission now gets
+        # the SEG-ELW preference through _plan_one -- _priority_pass's old
+        # inline select_coverage call never passed specialist_type_ids/
+        # preferred_type_ids at all.
+        m = mission(1, 2, NEAR, possible_patients_count=20)
+        ambulances = [vehicle(200 + i, 28) for i in range(20)]
+        nefs = [vehicle(400 + i, 29) for i in range(10)]
+        command = [vehicle(300, 55), vehicle(301, 56)]
+        vehicles = self._mission2_support() + ambulances + nefs + command + [vehicle(10, 59), vehicle(11, 3)]
+        policy = DispatchPolicy(radius_km=40, top_up_scope=ModeScope.BOTH)
+        # on_it via a type that isn't part of this mission's own requirements,
+        # so the delta doesn't trivially zero anything out -- just forces
+        # on_it_here routing through _priority_pass.
+        plan = plan_dispatches([m], vehicles, [building()], self.resolver, policy, assigned={1: [900000]})
+        self.assertTrue(plan.planned)
+        mp = plan.planned[0]
+        self.assertTrue(mp.satisfied)
+        self.assertIn(10, mp.vehicle_ids)      # SEG-ELW preferred
+        self.assertNotIn(11, mp.vehicle_ids)
+
+    def test_parasite_mzb_send_gets_water_rescue_escort(self):
+        # AC-M2-09: a parasite-sent MZB now gets its opportunistic
+        # water-rescue escort through _plan_one -- _priority_pass's old
+        # inline select_coverage call never ran _add_water_rescue_escort.
+        m = self._mzb_mission(is_alliance=True, vehicle_state=1)  # "1 Boot" revealed, begun
+        mzb = vehicle(100, 70, building_id=1)
+        diver = vehicle(101, 63, building_id=1)
+        water = vehicle(102, 64, building_id=1)
+        policy = DispatchPolicy(radius_km=40, parasite_scope=ModeScope.ALLIANCE,
+                                 parasite_scarce_threshold=0)
+        plan = plan_dispatches([m], [mzb, diver, water], [building()], self.resolver, policy)
+        self.assertTrue(plan.planned)
+        self.assertEqual(set(plan.planned[0].vehicle_ids), {100, 101, 102})
+
     # -- S3/S4 delta scoping (Sasha, 2026-10-27) -------------------------------
     # missing_text is already net of on-scene (S4) vehicles
     # (docs/live-data-model.md: "Noch benötigt = fehlend − Auf Anfahrt") --
@@ -1690,11 +1809,18 @@ class DispatchPlannerTests(unittest.TestCase):
     # live flag, or it loses reservation/unstick-first/topup/parasite
     # eligibility the moment the live flag reverts.
 
-    def test_topup_eligibility_persists_after_vehicle_state_reverts_to_zero(self):
+    def test_topup_eligibility_persists_after_missing_text_goes_quiet(self):
+        # D2 (Sasha, 2026-10-27): top-up eligibility now keys off
+        # missing_text_ever_revealed, not vehicle_state -- same sticky
+        # protection against a transient flicker, just a different signal
+        # (missing_text going quiet again means "fully covered", not "never
+        # began" -- see missing_text_ever_revealed's own docstring).
         policy = DispatchPolicy(radius_km=40, top_up_scope=ModeScope.OWN)
-        cycle1 = mission(1, 3, NEAR, vehicle_state=1)
+        cycle1 = mission(1, 3, NEAR, vehicle_state=1,
+                         missing_text='{"vehicles":"1 Löschfahrzeuge (LF), 1 FuStW",'
+                                      '"personnel":"","other":""}')
         self.plan([cycle1], [vehicle(100, LF), vehicle(101, FUSTW)], policy)
-        cycle2 = mission(1, 3, NEAR, vehicle_state=0)
+        cycle2 = mission(1, 3, NEAR, vehicle_state=0, missing_text="")
         plan = self.plan([cycle2], [vehicle(102, FUSTW)], policy)
         self.assertNotIn((1, "not begun (top-up)"), plan.skipped)
 

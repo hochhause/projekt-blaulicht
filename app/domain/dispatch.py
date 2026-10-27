@@ -97,12 +97,21 @@ class HilferufAggressiveness(str, Enum):
 
 # Official Verbandsgroßeinsatz (VGE) mission-type ids (Sasha, 2026-10-07, from
 # their alliance's own list of which mission types the Leitungsteam picks
-# from when starting one). Their alliance's rules (§4/§6) reserve command
-# vehicles (ELW 1/2, AB-Einsatzleitung) on these for the Leitungsteam only,
-# for the first 12h after release -- we have no way to tell whether THIS
-# account is Leitungsteam or whether we're inside that window, so these are
-# always treated as parasite-only (see _priority_pass): claim participation
-# with a single spare vehicle, never a real requirement-driven dispatch.
+# from when starting one). Originally always treated as parasite-only (one
+# spare vehicle, never a real dispatch) because their alliance's rules (§4/
+# §6) reserve command vehicles (ELW 1/2, AB-Einsatzleitung) on these for the
+# Leitungsteam only, for the first 12h after release, and there was no way to
+# tell whether THIS account is Leitungsteam or inside that window.
+#
+# D1 (Sasha, 2026-10-27): "adopt the new VGE logic" -- revised to graduate
+# once missing_text is revealed (see _priority_pass): a revealed VGE mission
+# is now treated like any other mission, full normal dispatch, no cap and no
+# command-vehicle exclusion. Only an UNREVEALED VGE mission still gets the
+# single-spare participation claim, and only when parasite_scope actually
+# covers it. This deliberately drops the Leitungsteam reservation for a
+# revealed mission -- recorded here, not silently dropped, so it's visible
+# and revisable (see docs/dispatch-pipeline-rebuild.plan.md's D1).
+#
 # "Custom" (player-started) Großschadenslagen have no fixed type id at all
 # ("because they are... custom") and so aren't caught by this list.
 _VGE_MISSION_TYPE_IDS = frozenset({41, 42, 43, 44, 45, 159, 216, 250})
@@ -520,15 +529,17 @@ def plan_dispatches(
         else:
             plan.skipped.append((mission.id, "out of scope"))
             continue
-        # Top-up only reinforces missions someone has already begun. Sticky
-        # (resolver.effective_count_revealed), not the raw live flag -- see
-        # that method's docstring for why: vehicle_state reverts to 0 the
-        # moment nobody is CURRENTLY on scene (confirmed live, 2026-10-01),
-        # even on a mission that's genuinely already underway and just had
-        # its responders finish a shift and leave (Sasha, 2026-10-22: riot
-        # missions where our own FuStW already contributed and left, with the
-        # mission still needing more BePol, were being treated as untouched).
-        if governing == "topup" and not resolver.effective_count_revealed(mission):
+        # D2 (Sasha, 2026-10-27): top-up only reinforces missions whose
+        # missing_text has revealed a real need -- the live reveal itself,
+        # not effective_count_revealed's sticky vehicle_state signal (used
+        # until this change). Reasoning (Sasha): this automatically covers a
+        # mission TYPE our own catalogue doesn't recognise yet, since a
+        # missing_text reveal doesn't depend on catalogue completeness the
+        # way vehicle_state-based eligibility implicitly did.
+        # missing_text_ever_revealed is itself sticky (mirrors
+        # effective_count_revealed's own "once it's gone we have everything"
+        # protection against a transient live flicker -- see its docstring).
+        if governing == "topup" and not resolver.missing_text_ever_revealed(mission):
             plan.skipped.append((mission.id, "not begun (top-up)"))
             continue
         pos = getattr(mission, "position", None)
@@ -1027,13 +1038,23 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, en_route, b
         # specific override on an own mission has a real cost the general
         # is_alliance proxy's fallback isn't careful enough to avoid.
         if (_confidently_alliance(mission, own_user_id)
-                and getattr(mission, "mission_type_id", None) in _VGE_MISSION_TYPE_IDS):
-            # Hard compliance override (see _VGE_MISSION_TYPE_IDS) -- skips
-            # every other branch below, including on_it's usual "always keep
-            # reinforcing" exemption: once our one participation vehicle is
-            # in (or if we simply have nothing spare to send), this mission
-            # is DONE for this account, every cycle, period.
-            if not on_it:
+                and getattr(mission, "mission_type_id", None) in _VGE_MISSION_TYPE_IDS
+                and not parse_missing_text(getattr(mission, "missing_text", "")).revealed):
+            # D1 (Sasha, 2026-10-27): "adopt the new VGE logic" -- while
+            # missing_text is UNREVEALED, send a single, free, one-time
+            # participation spare -- but ONLY if parasite_scope actually
+            # covers this mission (previously unconditional, regardless of
+            # any mode). Skips every other branch below, including on_it's
+            # usual "always keep reinforcing" exemption. Once missing_text
+            # IS revealed, this branch is no longer entered at all -- the
+            # mission falls straight through to on_it/parasite/topup/patient
+            # handling below, then the main gather loop, exactly like any
+            # other mission (full normal dispatch, no one-vehicle cap). This
+            # deliberately REMOVES the previous hard compliance override that
+            # reserved command vehicles (ELW 1/2, AB-Einsatzleitung) for the
+            # alliance's Leitungsteam -- see docs/dispatch-pipeline-rebuild.
+            # plan.md's D1 for the full rationale and the explicit ruling.
+            if not on_it and _scope_covers(policy.parasite_scope, True):
                 pos = getattr(mission, "position", None)
                 spare = _abundance_vehicle(pool, pos, building_pos) if pos is not None else None
                 if spare is not None:
@@ -1100,24 +1121,36 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, en_route, b
             if is_parasite and scarce_type_ids else pool
         )
         chosen: list[int] = []
-        if not skip_patient_contribution:
-            reqs = _outstanding(mission, resolver, text_engine, assigned, patient_here)
-            if reqs and pos is not None:
-                cov = select_coverage(reqs, contribution_pool, distance_of=_distance_fn(pos, building_pos))
-                # Patient care and parasite contributions send whatever's
-                # useful regardless; a plain top-up reinforcement (on_it_here
-                # without patient_here, i.e. gated in only via top_up_here)
-                # only sends once it's certain to fully satisfy the mission —
-                # same "only prioritizes if we're certain we can feed it"
-                # rule plan_dispatches' main loop applies to topup governing.
-                allow_send = is_parasite or patient_here or cov.satisfied
-                if cov.vehicle_ids and allow_send:
-                    chosen = list(cov.vehicle_ids)
-                    plan.planned.append(MissionPlan(mid, getattr(mission, "caption", ""),
-                                                    tuple(chosen), cov.satisfied, dict(cov.shortfall)))
-                    if not cov.satisfied:
-                        _note_shortfall(plan.shortfalls, cov.shortfall.keys())
-                    batch_used += 1  # useful contribution -> counts to batch
+        if not skip_patient_contribution and pos is not None:
+            # D7 (Sasha, 2026-10-27 — docs/dispatch-pipeline-rebuild.plan.md):
+            # routed through _plan_one instead of this pass's own inline
+            # select_coverage call, so a parasite/top-up/patient reinforcement
+            # now gets every rule _plan_one carries — Rule 1's red-bypass, the
+            # SEG-ELW preference, the fire-personnel top-up,
+            # max_vehicles_per_mission, and the opportunistic water-rescue
+            # escort — instead of a second, independently-maintained coverage
+            # computation that had silently drifted from _plan_one's over
+            # time (see the dispatch-pipeline-map artifact's "Asymmetries").
+            #
+            # allow_partial mirrors the old `allow_send` rule exactly:
+            # parasite and patient-care contributions send whatever's useful
+            # regardless of full satisfaction; a plain top-up reinforcement
+            # (on_it_here via top_up_scope only) still requires full
+            # satisfaction, same as the main loop's topup governing.
+            allow_partial = is_parasite or patient_here
+            outcome = _plan_one(
+                mission, contribution_pool, resolver, policy, en_route, assigned, building_pos,
+                text_engine, allow_partial=allow_partial, patient_only=patient_here,
+                # A plain top-up miss (allow_partial=False) falls through to
+                # the main loop for a second attempt below (unstick-first
+                # eligible there) -- don't double-tally its shortfall when
+                # that second attempt notes it too.
+                shortfalls=(plan.shortfalls if allow_partial else None),
+            )
+            if not isinstance(outcome, str):
+                mission_plan, chosen = outcome
+                plan.planned.append(mission_plan)
+                batch_used += 1  # useful contribution -> counts to batch
         if not chosen and is_parasite:
             spare = _abundance_vehicle(contribution_pool, pos, building_pos)
             if spare is not None:

@@ -72,17 +72,27 @@ is this file's checkboxes plus the commit log.
 
 ## Milestone 2 — VGE / top-up / priority-pass unification
 
-- [ ] 8. D1: VGE branch in `_priority_pass` checks `missing_text` revealed → falls through to
+- [x] 8. D1: VGE branch in `_priority_pass` checks `missing_text` revealed → falls through to
       normal treatment; unrevealed → spare send gated on `parasite_scope` (not unconditional).
-- [ ] 9. D2: top-up's "not begun" gate in the main loop switches from `effective_count_revealed` to
+- [x] 9. D2: top-up's "not begun" gate in the main loop switches from `effective_count_revealed` to
       the new missing-text-revealed memory (task 2).
-- [ ] 10. D7: route `_priority_pass`'s on_it_here/is_parasite/patient_here coverage decision
-      through `_plan_one` (preserving each caller's `allow_partial`/`patient_only`/scarce-type-pool
-      semantics exactly — see the dispatch-pipeline-map artifact's Fig. 2 for the current shape
-      being replaced); VGE's own spare-claim and `skip_patient_contribution` stay as direct,
-      non-`_plan_one` paths (they never claim to satisfy a requirement).
-- [ ] 11. Write + pass AC-M2-01 through AC-M2-09.
-- [ ] 12. `python -m pytest tests/test_dispatch.py -x -q` green; independent review.
+- [x] 10. D7: routed `_priority_pass`'s on_it_here/is_parasite/patient_here coverage decision
+      through `_plan_one`. `allow_partial = is_parasite or patient_here` reproduces the old
+      `allow_send` rule exactly; a plain top-up miss (allow_partial=False) is deliberately left
+      un-handled so it still falls through to the main loop's second attempt (unstick-first
+      eligible there) — its shortfall is only tallied once (`shortfalls=None` passed for that one
+      case) to avoid double-counting when the second attempt also misses. VGE's own spare-claim and
+      `skip_patient_contribution` stay as direct, non-`_plan_one` paths, unchanged.
+- [x] 11. Wrote + passed AC-M2-01 through AC-M2-09 (9 new tests). Five pre-existing tests needed
+      updating for D1/D2's deliberate behaviour changes: `test_vge_mission_gets_only_a_single_spare_vehicle`
+      split into three (unrevealed+parasite-off, unrevealed+parasite-on, revealed-graduates) since
+      its one scenario no longer covers the now-three-way VGE behaviour; four top-up tests needed a
+      `missing_text` added (they relied on `vehicle_state` alone, the signal D2 replaces) and their
+      expected shortfall-key strings changed from catalogue class names ("police_cars") to LSSM
+      category names ("FuStW") once missing_text became the requirement source.
+- [x] 12. `python -m pytest tests/ -q --ignore=tests/test_web.py` — 507 passed, 12 subtests passed.
+      Independent review: pending (deferred to before the PR, covering M1+M2+M3 together — see
+      Milestone 4).
 
 ## Milestone 3 — automatic recall
 
