@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
@@ -280,6 +280,34 @@ def make_cleanup(store, secret_box, settings, log_store=None):
             await runner.aclose()
 
     return cleanup
+
+
+def make_run_once(store, secret_box, settings, log_store=None):
+    """Return an async ``run_once(account_id) -> CycleReport`` for the panel's
+    shift-click "run once" action (Sasha, 2026-10-28): a single dispatch
+    cycle, right now, with ``batch_size`` uncapped so every actionable
+    mission is handled this one cycle instead of just the first
+    ``batch_size`` of them.
+
+    Same one-shot shape as :func:`make_cleanup` — a fresh, isolated session
+    (works whether or not the account's normal loop is running), one cycle,
+    then closed. Never touches the account's saved config (the uncapped
+    policy is a throwaway override on this one runner instance, not
+    persisted) or its enabled/running state.
+    """
+    from ..domain.assets import AssetLibrary
+
+    library = AssetLibrary.load(settings.vehicles_dir)
+
+    async def run_once(account_id: int):
+        runner, config = build_account_runner(store, secret_box, settings, library, account_id, log_store)
+        runner._policy = replace(config.dispatch_policy(), batch_size=None)
+        try:
+            return await runner.run_cycle()
+        finally:
+            await runner.aclose()
+
+    return run_once
 
 
 def default_worker_factory(store, secret_box, settings, log_store=None) -> Callable[[int], AccountWorker]:

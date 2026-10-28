@@ -140,7 +140,10 @@ def _opt_int(value: str | None) -> int | None:
     return int(value) if value else None
 
 
-def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_store=None, cleanup=None) -> FastAPI:
+def create_app(
+    store, orchestrator, secret_box, settings, auth: AdminAuth, log_store=None,
+    cleanup=None, run_once=None,
+) -> FastAPI:
     app = FastAPI(title="Projekt Blaulicht")
 
     def require_auth(request: Request) -> None:
@@ -502,6 +505,18 @@ def create_app(store, orchestrator, secret_box, settings, auth: AdminAuth, log_s
             except Exception as exc:  # noqa: BLE001 — surface via the account log
                 if log_store is not None:
                     log_store.append(account_id, f"cleanup failed: {exc}")
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/accounts/{account_id}/run-once")
+    async def run_once_account(account_id: int, _=Depends(require_auth)):
+        # Shift-click on Start (dashboard.html) -- one uncapped cycle, right
+        # now, independent of whether the account's normal loop is running.
+        if run_once is not None:
+            try:
+                await run_once(account_id)
+            except Exception as exc:  # noqa: BLE001 — surface via the account log
+                if log_store is not None:
+                    log_store.append(account_id, f"run-once failed: {exc}")
         return RedirectResponse("/", status_code=303)
 
     @app.post("/accounts/{account_id}/disable")

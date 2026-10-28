@@ -100,6 +100,25 @@ class AccountRunnerTests(unittest.TestCase):
                 asyncio.run(runner.run_cycle())
             self.assertEqual(_C.logins, 2)    # reconnected next cycle
 
+    def test_policy_reassigned_before_first_cycle_reaches_the_dispatch_runner(self):
+        # The dashboard's shift-click "run once" action
+        # (orchestrator.make_run_once) builds a runner via the normal
+        # factory, then overrides `._policy` to an uncapped copy BEFORE the
+        # first run_cycle() -- relying on the policy being read lazily at
+        # _connect() time, not baked in at construction (Sasha, 2026-10-28).
+        # Confirms that assumption holds, independent of make_run_once's own
+        # httpx/Store/SecretBox wiring (untested, like make_cleanup).
+        from app.domain.dispatch import DispatchPolicy
+
+        FakeSession, FakeClient = _make_fakes()
+        with mock.patch("app.core.account_runner.GameSession", FakeSession), \
+             mock.patch("app.core.account_runner.GameClient", FakeClient):
+            runner = self._runner()
+            override = DispatchPolicy(batch_size=999)
+            runner._policy = override
+            asyncio.run(runner.run_cycle())
+            self.assertIs(runner._dispatch._policy, override)
+
     def test_own_user_id_inferred_from_an_unshared_mission_and_cached(self):
         # Sasha, 2026-09-14: lets the planner tell a genuinely-own mission
         # apart from one merely alliance-shared, even after it's been

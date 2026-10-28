@@ -96,7 +96,10 @@
         {% elif r.account.enabled %}
           <form method="post" action="/accounts/{{ r.account.id }}/disable"><button>Stop</button></form>
         {% else %}
-          <form method="post" action="/accounts/{{ r.account.id }}/enable"><button class="primary">Start</button></form>
+          <form method="post" action="/accounts/{{ r.account.id }}/enable">
+            <button class="primary" onclick="return startClick(event, this)"
+                    title="Shift-click: run one cycle right now, every actionable mission regardless of batch size — doesn't start continuous polling">Start</button>
+          </form>
         {% endif %}
         <form method="post" action="/accounts/{{ r.account.id }}/cleanup"
               onsubmit="return confirm('Recall surplus vehicles from {{ r.account.label }}\'s missions?')"><button title="Recall vehicles not needed by their mission">Cleanup</button></form>
@@ -228,6 +231,17 @@
 </div>
 
 <script>
+  // Shift-click on Start -> submit to /run-once instead of /enable (Sasha,
+  // 2026-10-28): one uncapped cycle right now, not continuous polling.
+  // Derived from the form's own action rather than a second data attribute,
+  // so there's only ever one place the account id has to be right.
+  function startClick(event, button) {
+    if (event.shiftKey) {
+      button.form.action = button.form.action.replace(/\/enable$/, '/run-once');
+    }
+    return true;
+  }
+
   // Auto-refresh the dashboard every 5s (was a <meta refresh>, which reloaded
   // mid-keystroke and wiped the "Add account" form). Skipped whenever that
   // form has focus or an unsaved value, so it never eats what you're typing.

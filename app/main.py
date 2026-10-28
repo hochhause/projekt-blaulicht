@@ -33,6 +33,7 @@ from .core.orchestrator import (
     default_group_factory,
     default_worker_factory,
     make_cleanup,
+    make_run_once,
 )
 from .core.secrets import SecretBox
 from .store import Store
@@ -67,7 +68,11 @@ def build_app():
         group_factory=default_group_factory(store, secret_box, settings, log_store),
     )
     cleanup = make_cleanup(store, secret_box, settings, log_store)
-    app = create_app(store, orchestrator, secret_box, settings, auth, log_store, cleanup=cleanup)
+    run_once = make_run_once(store, secret_box, settings, log_store)
+    app = create_app(
+        store, orchestrator, secret_box, settings, auth, log_store,
+        cleanup=cleanup, run_once=run_once,
+    )
 
     @app.on_event("startup")
     async def _resume_enabled() -> None:
