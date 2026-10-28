@@ -235,9 +235,20 @@
   // 2026-10-28): one uncapped cycle right now, not continuous polling.
   // Derived from the form's own action rather than a second data attribute,
   // so there's only ever one place the account id has to be right.
+  //
+  // Must preventDefault() and submit() manually when shift is held (Sasha,
+  // 2026-10-28, found live): the browser itself treats a shift-held click on
+  // anything that causes a navigation -- a form submit counts, same as a
+  // plain link -- as "open in a new window", before this handler's own
+  // `return true` ever matters. Letting that native click through (even with
+  // the action already rewritten) opened a second tab for the /run-once
+  // request instead of submitting in place. A JS-initiated .submit() carries
+  // no modifier-key context, so it navigates normally in the same tab.
   function startClick(event, button) {
     if (event.shiftKey) {
+      event.preventDefault();
       button.form.action = button.form.action.replace(/\/enable$/, '/run-once');
+      button.form.submit();
     }
     return true;
   }
