@@ -171,6 +171,40 @@ See `docs/MODES-TODO.md` (full inventory + compatibility matrix).
       approach instead. That's a pre-existing gap, not something this TODO item asked to fix.
 - [x] FMS-5 immediacy: DECIDED to keep as-is (poll each cycle). Event-driven would need the game's
       client-side `radioMessage` JS (browser only) — not worth a headless browser.
+- [ ] **Verbose resend-diagnostic log** (Sasha, 2026-10-30). The dashboard's "Sends per closed mission"
+      panel (`app/domain/alarms.py::AlarmTracker`) shows missions "pretty split" between 1 and 3+ real
+      sends — still too many needing 3+. Goal: explain WHY, bucketed into (1) a new requirement
+      appeared that wasn't in the original catalogue/missing_text estimate, (2) we misresolved/
+      misunderstood a requirement, (3) a vehicle couldn't be sent and had to be resent (dispatch
+      rejection), (4) all else. BLOCKED on Sasha for now (no Anthropic API key, out of budget) — do
+      NOT build the classification call yet; this is scope notes for when it's picked back up.
+      - Checked 2026-10-30: the CURRENT logs genuinely don't have enough to do this retroactively —
+        not a volume problem, the diagnostic data was simply never recorded. `LogStore`
+        (`app/core/logbuffer.py`) is in-memory only, capped at 500 lines/account, free-text with no
+        per-mission structure, doesn't survive a restart. The persisted tables (`shortfall`/
+        `alarm_count`/`mission_breakdown` in `app/store/db.py`) are aggregates or current-cycle
+        snapshots only — none keep a per-mission before/after history.
+      - Category 3 (vehicle rejected, needs resend) is ALREADY fully determinable from existing
+        structured data with no model needed at all — `DispatchResult.rejected`
+        (`app/game/client.py`) at the exact moment of a resend. Auto-tag it; skip classification
+        (and any future model call) for that one case specifically.
+      - For categories 1/2/4: `AlarmTracker` (`app/domain/alarms.py`) has no peek method today — add
+        one (e.g. `current_count(mission_id) -> int`, reading `_counts` before `record()` increments
+        it) so `DispatchRunner.run_cycle` (`app/core/runner.py`, right where `self._alarms.record(mid)`
+        is called) can tell "this is alarm #2+" at the exact point it already has full cycle context
+        (the mission_plan, the raw Mission's current `missing_text`, `result.rejected`).
+      - The actual gap: no before/after snapshot exists anywhere today of what the catalogue/
+        missing_text thought was needed at send #1 vs what's showing at send #N — that comparison is
+        what tells "new requirement" apart from "we misread it", and nothing captures it. Needs a new,
+        small persisted structure (a new DB table, not `alarm_count` — that one's aggregate-only with
+        no room for a reason dimension) keyed by (account_id, mission_id, alarm_number).
+      - Retention: should NOT reset on restart the way `alarm_count` deliberately does (that one's
+        Sasha's own call, "doesn't need to survive a restart") — this is a multi-day diagnostic
+        investigation that needs accumulation instead. CONFIRM with Sasha when resuming, don't assume.
+      - No external API call needed to CAPTURE the data (httpx is already a dependency, but a key
+        isn't available/wanted right now) — once captured, the accumulated cases can be reviewed and
+        categorized directly by Claude in a future session; no separate model/subscription needed for
+        that part, only for a fully automated standing classifier if that's wanted later.
 
 ---
 
