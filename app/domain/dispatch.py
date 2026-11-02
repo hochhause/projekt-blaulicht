@@ -596,7 +596,7 @@ def plan_dispatches(
         # Reservation for any mission we could act on that's already open and
         # short a vehicle category -- see _reserve_vehicle_group's docstring.
         _reserve_vehicle_group(reserved_type_ids, mission, mtype, resolver, en_route, assigned,
-                                patient_governed=(governing == "patient"))
+                                patient_governed=(governing == "patient"), pool=pool)
         # Unstick-first: does this mission already have vehicles ARRIVED (see
         # plan_dispatches' own docstring for the "total minus raw-still-
         # missing" derivation)? If so, it skips the normal order/batch path
@@ -1322,7 +1322,7 @@ def _priority_pass(plan, missions, pool, resolver, policy, assigned, en_route, b
             # lose reservation entirely -- exposing exactly the fresh-send
             # poaching `_reserve_vehicle_group` exists to prevent.
             _reserve_vehicle_group(reserved, mission, mtype, resolver, en_route, assigned,
-                                    patient_governed=patient_here)
+                                    patient_governed=patient_here, pool=pool)
         on_it_here = on_it and (patient_here or top_up_here)
         if not (on_it_here or is_parasite):
             continue
@@ -1740,7 +1740,8 @@ def _apply_delta(requirements, en_route, assigned, mission_id):
     return reduced
 
 
-def _reserve_vehicle_group(reserved, mission, mtype, resolver, en_route, assigned, patient_governed):
+def _reserve_vehicle_group(reserved, mission, mtype, resolver, en_route, assigned, patient_governed,
+                            pool=None):
     """Add *mission*'s outstanding vehicle-category type IDs to *reserved*
     (in place), if it qualifies (Sasha, 2026-09-11 — see the full rationale
     in :func:`plan_dispatches`). Shared by :func:`plan_dispatches`' main loop
@@ -1758,15 +1759,37 @@ def _reserve_vehicle_group(reserved, mission, mtype, resolver, en_route, assigne
     — not the raw live ``vehicle_state``, which reverts to 0 the instant
     nobody is CURRENTLY on scene, even on a mission that's genuinely already
     open and just had its responders finish a shift and step away; see that
-    method's own docstring). Unconditional beyond that: does NOT check
-    whether the current pool looks numerically sufficient, by design (a
-    vehicle can look available/dispatchable yet keep silently failing to
-    actually crew/tow, so a same-cycle "looks satisfiable" check is exactly
-    the kind of signal that failure mode fools — trust the mission's own
-    revealed need instead).
+    method's own docstring).
+
+    *pool* (Sasha, 2026-11-03): per-REQUIREMENT, not per-mission — a class
+    the fleet has enough spare capacity for right now doesn't get reserved
+    at all, even while a DIFFERENT class the same mission also still needs
+    does. Concretely: a mission needing 1 more HLF and 1 more FuStW, with
+    plenty of idle HLF but a short FuStW supply, now reserves ONLY FuStW —
+    reserving the abundant HLF too protected nothing (nothing was actually
+    at risk of being poached) while needlessly starving every other
+    mission that happens to want one. The original 2026-09-11 "don't trust
+    a same-cycle 'looks satisfiable' count" caution (a vehicle can look
+    available yet silently fail to crew/tow) still applies to the classes
+    that ARE short enough to reserve — this only lets the ABUNDANT ones
+    through, where that failure mode has nothing to bite. *pool* omitted
+    (``None``) preserves the original always-reserve-everything behaviour
+    for a caller not yet updated (``app/domain/group.py``, out of scope).
     """
     if patient_governed or mtype is None or not resolver.effective_count_revealed(mission):
         return
     vreqs, _unmatched = resolver.vehicle_requirements(mission, mtype)
     for req in _apply_delta(vreqs, en_route, assigned, mission.id):
+        if pool is not None:
+            available = sum(1 for v in pool if v.type_id in req.type_ids)
+            # Strictly MORE than needed, not merely "enough" (Sasha,
+            # 2026-11-03's exact wording was "enough HLF" meaning real slack,
+            # not a knife's-edge match): if available == count exactly,
+            # there is ZERO surplus -- not reserving would leave this
+            # mission's one and only match up for grabs by whatever fresh
+            # mission happens to get processed first, exactly the race
+            # reservation exists to prevent. Only skip reservation when
+            # there's genuine room to spare beyond this mission's own need.
+            if available > req.count:
+                continue  # genuine surplus -- nothing here to protect
         reserved.update(req.type_ids)

@@ -1623,14 +1623,46 @@ class DispatchPlannerTests(unittest.TestCase):
         plan = self.plan([ally_started, fresh], [vehicle(100, 70)])
         self.assertEqual(plan.shortfalls.get("Boot", 0), 1)
 
-    def test_reservation_applies_even_with_surplus_supply(self):
-        # Deliberately UNCONDITIONAL (Sasha, 2026-09-11): reservation isn't
-        # lifted just because the pool happens to look "enough" for everyone
-        # -- a vehicle can look available yet keep silently failing to
-        # actually crew/tow, so a same-cycle "looks satisfiable" count isn't
-        # trusted. As long as mission 1 still MENTIONS a boat as needed, the
-        # WHOLE class stays held back from fresh dispatch, even with 2 boats
-        # on hand for a 1-boat need.
+    def test_reservation_is_per_requirement_not_per_mission(self):
+        # Sasha, 2026-11-03's exact question: a mission needing BOTH an
+        # abundant class and a genuinely scarce one -- "if a mission requests
+        # HLF and FuStW, we have enough HLF but not enough FuStW, both still
+        # get reserved? can you make it that only FuStW would get reserved
+        # in this case". Mission 1 (on_it) needs 1 firetruck + 1 police car;
+        # the pool has 3 spare LFs (genuine surplus beyond its 1-firetruck
+        # need) but exactly 1 FuStW (zero surplus). A fresh mission needing
+        # ONLY a firetruck must go through; a fresh mission needing ONLY a
+        # FuStW must still be correctly held back.
+        ally_started = mission(1, 3, NEAR, vehicle_state=1,
+                                missing_text='{"vehicles":"1 Löschfahrzeuge (LF), 1 FuStW",'
+                                             '"personnel":"","other":""}')
+        fresh_lf = mission(2, 1, NEAR2, vehicle_state=0)  # plain firetrucks:1
+        fresh_fustw = mission(3, 1, NEAR2, vehicle_state=0,
+                              missing_text='{"vehicles":"1 FuStW","personnel":"","other":""}')
+        pool = [vehicle(100, LF), vehicle(101, LF), vehicle(102, LF), vehicle(103, LF),  # 4 LFs: 1 for
+                vehicle(200, FUSTW)]                                                    # mission 1 + 3 spare
+        plan = self.plan([ally_started, fresh_lf, fresh_fustw], pool)
+        planned_ids = {p.mission_id for p in plan.planned}
+        self.assertIn(1, planned_ids)
+        self.assertIn(2, planned_ids)       # firetrucks: genuinely abundant, not reserved
+        self.assertNotIn(3, planned_ids)    # FuStW: zero surplus, correctly still reserved
+        skip_reasons = dict(plan.skipped)
+        self.assertTrue(skip_reasons[3].startswith("not enough vehicles"))
+
+    def test_reservation_lifted_when_pool_has_genuine_surplus(self):
+        # REVISED 2026-11-03 (Sasha): originally this reservation was
+        # deliberately UNCONDITIONAL regardless of apparent pool sufficiency
+        # (2026-09-11: a vehicle can look available yet silently fail to
+        # crew/tow). Sasha's own live settings (partial_starts off) turned
+        # that caution into a real cost: a mission mentioning BOTH an
+        # abundant class and a genuinely scarce one reserved the abundant
+        # one too, needlessly starving every other mission that also wanted
+        # it. Revised: a class is reserved only when the pool does NOT have
+        # genuine surplus beyond this mission's own need. Here, 2 boats for
+        # mission 1's 1-boat need is real surplus -- nothing to protect, so
+        # mission 2 gets the spare. The narrower "exact match, zero slack"
+        # case (where reservation still correctly holds) is covered by
+        # test_reservation_blocks_fresh_dispatch_when_an_already_open_mission_is_short.
         ally_started = mission(1, 1, NEAR, vehicle_state=1,
                                 missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
         fresh = mission(2, 1, NEAR2, vehicle_state=0,
@@ -1639,7 +1671,7 @@ class DispatchPlannerTests(unittest.TestCase):
         plan = self.plan([ally_started, fresh], boats)
         planned_ids = {p.mission_id for p in plan.planned}
         self.assertIn(1, planned_ids)
-        self.assertNotIn(2, planned_ids)
+        self.assertIn(2, planned_ids)
 
     def test_reservation_lifted_once_the_mention_is_gone(self):
         # Once mission 1's missing_text no longer mentions anything needed
@@ -1668,12 +1700,14 @@ class DispatchPlannerTests(unittest.TestCase):
         # With no patient/top-up scope covering it, its actual DISPATCH now
         # happens via the main loop's ordinary "normal" governing (it falls
         # through _priority_pass's send gate) -- but _priority_pass still
-        # reserves its vehicle type UNCONDITIONALLY for every on_it mission
-        # regardless of that gate, so this still proves what its name claims:
-        # the reservation itself is contributed via the priority pass. A
-        # SECOND boat is idle and unclaimed by mission 1's own dispatch --
-        # reservation must still hold it back from the fresh mission (not
-        # just "whatever's left over").
+        # calls the SAME shared reservation function for every on_it mission
+        # regardless of that gate, so this still proves what its name
+        # claims: the reservation itself is contributed via the priority
+        # pass. REVISED 2026-11-03 (Sasha, see
+        # test_reservation_lifted_when_pool_has_genuine_surplus for the
+        # rationale): with a genuine second, idle boat beyond mission 1's
+        # own 1-boat need, there is real surplus -- nothing to protect, so
+        # the fresh mission gets it too.
         ours = mission(1, 1, NEAR, vehicle_state=1,
                        missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
         fresh = mission(2, 1, NEAR2, vehicle_state=0,
@@ -1682,8 +1716,8 @@ class DispatchPlannerTests(unittest.TestCase):
         assigned = {1: [999]}  # an irrelevant already-assigned type -- doesn't satisfy the boat need
         plan = self.plan([ours, fresh], boats, assigned=assigned)
         planned_ids = {p.mission_id for p in plan.planned}
-        self.assertIn(1, planned_ids)     # priority pass grabs a boat for our own mission
-        self.assertNotIn(2, planned_ids)  # fresh mission blocked despite an idle second boat
+        self.assertIn(1, planned_ids)  # priority pass grabs a boat for our own mission
+        self.assertIn(2, planned_ids)  # and the genuinely-spare second boat goes to the fresh one
 
     def test_reservation_holds_even_when_the_on_it_mission_itself_is_out_of_scope(self):
         # Mission 1 is on_it (we have a vehicle assigned) but ALLIANCE, and
@@ -1691,10 +1725,43 @@ class DispatchPlannerTests(unittest.TestCase):
         # covering it either, it gets zero special treatment: it falls
         # through _priority_pass's send gate, then the main loop skips it as
         # "out of scope" before ever reaching THAT loop's own reservation
-        # call. Its type must still be reserved regardless (an on_it mission
-        # is reserved UNCONDITIONALLY in the priority pass, independent of
-        # whether it goes on to actually get dispatched anywhere) -- a fresh
-        # OWN mission needing the same boat must not poach the only spare.
+        # call. The attempt to reserve its type still happens regardless (an
+        # on_it mission's reservation is contributed in the priority pass,
+        # independent of whether it goes on to actually get dispatched
+        # anywhere) -- with only ONE boat existing at all (zero surplus), a
+        # fresh OWN mission needing the same boat must not poach it.
+        ours_alliance = mission(1, 1, NEAR, is_alliance=True, vehicle_state=1,
+                                 missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        fresh_own = mission(2, 1, NEAR2, vehicle_state=0,
+                            missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        assigned = {1: [999]}  # on_it via an irrelevant type -- doesn't satisfy the boat need
+        policy = DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.OWN}))
+        plan = plan_dispatches([ours_alliance, fresh_own], [vehicle(100, 70)], [building()],
+                               self.resolver, policy, assigned=assigned)
+        self.assertEqual(plan.planned, [])  # neither mission gets anything
+        self.assertEqual(plan.skipped, [
+            (1, "out of scope"),  # mission 1 gets nothing itself...
+            # ...but its reservation still blocks mission 2 -- and the
+            # reservation-blocked diagnostic (Sasha, 2026-11-02) correctly,
+            # factually reports that removing reservation entirely WOULD let
+            # mission 2 through (there's exactly one boat and nothing else
+            # is touching it this cycle), even though the surplus-aware
+            # reservation logic (Sasha, 2026-11-03) still correctly judges
+            # this particular case as worth reserving (zero surplus beyond
+            # mission 1's own need, however permanently unreachable mission
+            # 1 itself is) -- the diagnostic reports a fact to act on if
+            # wanted, not a verdict on whether reserving was the right call.
+            (2, "not enough vehicles: short Boot x1 (reservation-blocked: fillable from the full pool)"),
+        ])
+
+    def test_reservation_lifted_even_when_the_on_it_mission_itself_is_out_of_scope(self):
+        # Sibling of the test above, REVISED 2026-11-03 (Sasha, see
+        # test_reservation_lifted_when_pool_has_genuine_surplus for the
+        # rationale): same out-of-scope on_it mission, but now 2 boats
+        # genuinely exist for its 1-boat need -- real surplus, so the fresh
+        # OWN mission gets the spare one, even though mission 1 (the one
+        # that triggered the reservation ATTEMPT) never gets anything at all
+        # and was never going to.
         ours_alliance = mission(1, 1, NEAR, is_alliance=True, vehicle_state=1,
                                  missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
         fresh_own = mission(2, 1, NEAR2, vehicle_state=0,
@@ -1704,17 +1771,9 @@ class DispatchPlannerTests(unittest.TestCase):
         policy = DispatchPolicy(radius_km=40, mission_source=frozenset({MissionSource.OWN}))
         plan = plan_dispatches([ours_alliance, fresh_own], boats, [building()], self.resolver,
                                policy, assigned=assigned)
-        self.assertEqual(plan.planned, [])  # neither mission gets anything
-        self.assertEqual(plan.skipped, [
-            (1, "out of scope"),  # mission 1 gets nothing itself...
-            # ...but its reservation still blocks mission 2 -- and since 2
-            # boats genuinely exist, the reservation-blocked diagnostic
-            # (Sasha, 2026-11-02, added after this exact scenario turned out
-            # to be live and recurring, not just a hypothetical) correctly
-            # fires: mission 2's shortfall is caused ENTIRELY by holding the
-            # spare for mission 1, which is never going to use it.
-            (2, "not enough vehicles: short Boot x1 (reservation-blocked: fillable from the full pool)"),
-        ])
+        planned_ids = {p.mission_id for p in plan.planned}
+        self.assertEqual(planned_ids, {2})
+        self.assertEqual(dict(plan.skipped).get(1), "out of scope")
 
     def test_reservation_accumulates_across_multiple_open_missions(self):
         # Mission 1 needs a boat, mission 2 needs a GW-Wasserrettung -- both
