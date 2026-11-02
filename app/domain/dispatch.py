@@ -955,6 +955,35 @@ def plan_reconciliation(missions, vehicles, resolver, text_engine, on_scene_ever
             protected_type_ids -= active_type_ids
             needed_ids |= {p.id for p in pool if p.type_id in protected_type_ids}
 
+        # Hard, unconditional incident-command cap (Sasha, 2026-11-02): a
+        # mission NEVER needs more than one LNA or one OrgL, regardless of
+        # what the requirement/protection logic above believed -- this is
+        # the cleanup-pass half of the same rule _cap_incident_command_roles
+        # enforces on the dispatch side. Deliberately overrides the
+        # protection block above (a class it just marked "needed" can still
+        # end up capped here) since this rule has no exceptions. Prefers
+        # keeping OTHER players' vehicles first, same ownership bias as
+        # everywhere else in this function -- we can't recall theirs anyway.
+        for cls, cap in _INCIDENT_COMMAND_CAPS.items():
+            class_type_ids = frozenset(resolver.library.class_map.by_class.get(cls, ()))
+            if not class_type_ids:
+                continue
+            in_class = [p for p in pool if p.type_id in class_type_ids]
+            if len(in_class) <= cap:
+                continue  # no excess -- leave the 0-vs-cap floor to the logic above
+            in_class.sort(key=lambda p: 0 if p.id not in our_ids else 1)
+            keep_ids = {p.id for p in in_class[:cap]}
+            # Once there IS excess, the kept ones must be force-added here --
+            # not just the excess removed -- since kdow_lna/kdow_orgl are
+            # never catalogue-declared classes (purely computed by
+            # resolver._casualty_counts), so neither select_coverage above
+            # nor the omitted-class protection block ever puts them in
+            # needed_ids on their own when the per-cycle requirement doesn't
+            # currently ask for one at all (e.g. a low-casualty mission) --
+            # without this, BOTH would be recalled instead of capped to 1.
+            needed_ids |= keep_ids
+            needed_ids -= {p.id for p in in_class if p.id not in keep_ids}
+
         for vid in verified_our_ids:
             if vid in needed_ids:
                 continue
@@ -1458,6 +1487,49 @@ def _add_water_rescue_escort(chosen, pool, resolver, mission_pos, building_pos):
     return extra
 
 
+# Incident-command roles never scale with patient count (Sasha, 2026-11-02:
+# "any given mission will NEVER need more than one LNA or ORGL respectively"
+# -- found live missions with one of each per patient). Generous on WHEN to
+# trigger the need at all (Sasha: fine to key it off max_patients, a static
+# ceiling, rather than the live patient count -- see resolver.py's
+# _casualty_counts/resolve_patient_only, which already do exactly that and
+# are unchanged by this), but never generous on HOW MANY: at most one LNA
+# and one OrgL, full stop, regardless of what the requirement computation
+# believes is still needed. Applied as an independent, defensive backstop
+# at both the actual send-selection point (_plan_one, below) and the
+# cleanup/reconciliation point (plan_reconciliation) — it holds even if an
+# unidentified cross-cycle bookkeeping gap lets a stale/duplicate
+# requirement slip through the per-cycle math, which is already correct.
+_INCIDENT_COMMAND_CAPS = {"kdow_lna": 1, "kdow_orgl": 1}
+
+
+def _cap_incident_command_roles(chosen, pool, assigned_type_ids, resolver):
+    """Trim *chosen* so the mission never ends up with more than
+    ``_INCIDENT_COMMAND_CAPS[cls]`` of a class, counting vehicles already
+    assigned (en route or on scene, per *assigned_type_ids*) toward the cap.
+
+    Only ever REMOVES vehicles, never adds — the role is already covered by
+    whatever's assigned, so trimming a redundant extra never creates a new
+    shortfall (``satisfied``/``shortfall``, computed before this runs, stay
+    correct: the true need was already met going into this cycle).
+    """
+    if not chosen:
+        return chosen
+    type_by_id = {v.id: v.type_id for v in pool}
+    trimmed = list(chosen)
+    for cls, cap in _INCIDENT_COMMAND_CAPS.items():
+        class_type_ids = set(resolver.library.class_map.by_class.get(cls, ()))
+        if not class_type_ids:
+            continue
+        have = sum(1 for t in assigned_type_ids if t in class_type_ids)
+        room = max(0, cap - have)
+        in_class = [vid for vid in trimmed if type_by_id.get(vid) in class_type_ids]
+        if len(in_class) > room:
+            drop = set(in_class[room:])
+            trimmed = [vid for vid in trimmed if vid not in drop]
+    return trimmed
+
+
 def _plan_one(mission, pool, resolver, policy, en_route, assigned, building_pos=None,
               text_engine=None, allow_partial=False, patient_only=False, shortfalls=None):
     """Return a ``(MissionPlan, chosen_ids)`` pair, or a skip-reason string.
@@ -1561,6 +1633,8 @@ def _plan_one(mission, pool, resolver, policy, en_route, assigned, building_pos=
         shortfall = dict(coverage.shortfall)
     else:
         chosen, satisfied, shortfall = [], True, {}
+
+    chosen = _cap_incident_command_roles(chosen, pool, assigned.get(mission.id, []), resolver)
 
     # Personnel top-up: add fire vehicles until their crew reaches the minimum.
     if fire_needed > 0:

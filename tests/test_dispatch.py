@@ -12,6 +12,7 @@ from app.domain.dispatch import (
     ModeScope,
     ParasiteAggressiveness,
     RecallCadence,
+    _cap_incident_command_roles,
     _infer_own_user_id,
     _reserve_vehicle_group,
     _TOWED_WITH_SELF_PROPELLED_ALTERNATIVE,
@@ -2165,6 +2166,115 @@ class DispatchPlannerTests(unittest.TestCase):
                 derived |= present
 
         self.assertEqual(derived, _TOWED_WITH_SELF_PROPELLED_ALTERNATIVE)
+
+    # -- incident-command hard cap (Sasha, 2026-11-02): a mission never
+    # needs more than one LNA or one OrgL, regardless of patient count --
+    # found live missions with one of each per patient. ------------------
+    def test_cap_incident_command_roles_leaves_a_single_lna_alone(self):
+        pool = [vehicle(200, 55)]  # KdoW-LNA
+        capped = _cap_incident_command_roles([200], pool, [], self.resolver)
+        self.assertEqual(capped, [200])
+
+    def test_cap_incident_command_roles_trims_a_second_lna_in_the_same_pick(self):
+        pool = [vehicle(200, 55), vehicle(201, 55)]
+        capped = _cap_incident_command_roles([200, 201], pool, [], self.resolver)
+        self.assertEqual(len(capped), 1)
+
+    def test_cap_incident_command_roles_counts_an_already_assigned_lna(self):
+        # One LNA already en route/on scene (type 55 in assigned_type_ids) ->
+        # no room left, the newly-chosen one is trimmed entirely.
+        pool = [vehicle(200, 55)]
+        capped = _cap_incident_command_roles([200], pool, [55], self.resolver)
+        self.assertEqual(capped, [])
+
+    def test_cap_incident_command_roles_caps_lna_and_orgl_independently(self):
+        pool = [vehicle(200, 55), vehicle(201, 55), vehicle(202, 56), vehicle(203, 56)]
+        capped = _cap_incident_command_roles([200, 201, 202, 203], pool, [], self.resolver)
+        kept_types = sorted(v.type_id for v in pool if v.id in capped)
+        self.assertEqual(kept_types, [55, 56])
+
+    def test_cap_incident_command_roles_never_touches_other_classes(self):
+        pool = [vehicle(100, LF), vehicle(200, 55), vehicle(201, 55)]
+        capped = _cap_incident_command_roles([100, 200, 201], pool, [], self.resolver)
+        self.assertIn(100, capped)
+        self.assertEqual(len(capped), 2)  # the LF, plus exactly one LNA
+
+    def test_cap_incident_command_roles_empty_input_is_a_noop(self):
+        self.assertEqual(_cap_incident_command_roles([], [], [], self.resolver), [])
+
+    def _mass_casualty_resolver(self):
+        from app.domain.catalog import MissionCatalog, MissionType
+
+        catalog = MissionCatalog({900: MissionType(
+            id=900, name="MassCasualty", average_credits=100, requirements={},
+        )})
+        return MissionRequirementResolver(catalog, self.lib_for_engine)
+
+    def test_dispatcher_never_sends_a_second_lna_while_one_is_already_assigned_and_mission_is_red(self):
+        # Realistic end-to-end reproduction of the suspected actual mechanism
+        # (not just the unit-level cap): Rule 1's red-mission delta-bypass
+        # means a still-red mass-casualty mission re-evaluates kdow_lna
+        # fresh every cycle, ignoring an LNA that's already assigned but
+        # hasn't arrived yet (which is WHY the mission is still red) -- with
+        # a second LNA-type vehicle available, this would dispatch another
+        # one every cycle the mission stays red (plausibly presenting as
+        # "one per patient" on a slow-to-fill mass-casualty mission).
+        resolver = self._mass_casualty_resolver()
+        m = mission(1, 900, NEAR, status="red", possible_patients_count=10)  # >5 -> needs 1 LNA
+        # Satisfy the casualty-driven layer's OTHER demands too (ambulances:
+        # one per patient, NEF-generosity's own heuristic count) so the
+        # mission's overall satisfaction isn't blocked on something unrelated
+        # to what this test is actually about.
+        ambulances = [vehicle(100 + i, 28) for i in range(10)]
+        nefs = [vehicle(150 + i, 29) for i in range(5)]
+        pool = ambulances + nefs + [vehicle(200, 55), vehicle(201, 55)]  # 2 available KdoW-LNA
+        plan = plan_dispatches(
+            [m], pool, [building()], resolver, DispatchPolicy(radius_km=40),
+            assigned={1: [55]},  # one KdoW-LNA already assigned (en route, still red)
+        )
+        self.assertEqual(len(plan.planned), 1)
+        sent_types = {v.type_id for v in pool if v.id in plan.planned[0].vehicle_ids}
+        self.assertNotIn(55, sent_types)  # no second LNA sent -- one's already assigned
+
+    def test_reconciliation_recalls_a_second_lna_down_to_one(self):
+        # Cleanup-pass half of the same rule: two LNAs already on scene
+        # (however that happened) -- recall one, keep exactly one. Patient
+        # count deliberately LOW (<=5, below _casualty_counts' own kdow_lna
+        # threshold) so neither select_coverage nor the omitted-class
+        # protection block has any reason to mark either LNA "needed" on
+        # their own -- this isolates the hard cap as the only thing standing
+        # between "both recalled" and "exactly one kept".
+        resolver = self._mass_casualty_resolver()
+        m = mission(1, 900, NEAR, status="green", possible_patients_count=3)
+        vehs = [self._assigned(200, 55, 1), self._assigned(201, 55, 1)]
+        recalls = plan_reconciliation([m], vehs, resolver, None, self._everyone(*vehs), {1})
+        self.assertEqual(len(recalls), 1)
+        self.assertIn(recalls[0][0], {200, 201})
+
+    def test_reconciliation_leaves_a_single_lna_alone_when_still_genuinely_needed(self):
+        # Regression guard, not the new cap itself: a single LNA that the
+        # normal per-cycle requirement still genuinely calls for (patient
+        # count above _casualty_counts' own threshold) must stay protected
+        # exactly as before this fix -- the new cap only ever ACTS when
+        # there's excess (len(in_class) > cap), so it must be a true no-op
+        # here.
+        resolver = self._mass_casualty_resolver()
+        m = mission(1, 900, NEAR, status="green", possible_patients_count=10)
+        vehs = [self._assigned(200, 55, 1)]
+        recalls = plan_reconciliation([m], vehs, resolver, None, self._everyone(*vehs), {1})
+        self.assertEqual(recalls, [])
+
+    def test_reconciliation_recalls_a_lone_lna_once_patient_count_drops_below_threshold(self):
+        # NOT governed by the new cap (which has no floor -- see its own
+        # docstring/comment) -- this is the PRE-EXISTING, separate "is an LNA
+        # still needed at this patient count" decision. Recorded so a future
+        # change to that separate question doesn't silently get attributed
+        # to this one.
+        resolver = self._mass_casualty_resolver()
+        m = mission(1, 900, NEAR, status="green", possible_patients_count=3)
+        vehs = [self._assigned(200, 55, 1)]
+        recalls = plan_reconciliation([m], vehs, resolver, None, self._everyone(*vehs), {1})
+        self.assertEqual(len(recalls), 1)
 
 
 class DueForReconciliationTests(unittest.TestCase):
