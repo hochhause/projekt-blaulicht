@@ -731,6 +731,28 @@ def plan_dispatches(
                             text_engine, allow_partial=allow_partial,
                             patient_only=(governing == "patient"), shortfalls=plan.shortfalls)
         if isinstance(outcome, str):
+            # Diagnostic (Sasha, 2026-11-02): tell "genuinely out of this
+            # vehicle fleet-wide" apart from "reservation is the only thing
+            # standing in the way" -- a small, easily-fillable mission
+            # skipped only because every matching vehicle is reserved for a
+            # DIFFERENT (possibly permanently unfillable) mission looks
+            # identical to a real shortage otherwise. Re-probes against the
+            # FULL (unfiltered) pool only when reservation actually narrowed
+            # this mission's own pool and the skip was vehicle-related --
+            # read-only (shortfalls=None: must never double-count into the
+            # real per-cycle tally), so this never changes what gets sent,
+            # only what the skip reason SAYS.
+            if (
+                is_fresh_send and reserved_type_ids and call_pool is not pool
+                and outcome.startswith("not enough vehicles")
+            ):
+                unblocked = _plan_one(
+                    mission, pool, resolver, policy, en_route, assigned, building_pos,
+                    text_engine, allow_partial=allow_partial,
+                    patient_only=(governing == "patient"), shortfalls=None,
+                )
+                if not isinstance(unblocked, str):
+                    outcome = f"{outcome} (reservation-blocked: fillable from the full pool)"
             plan.skipped.append((mission.id, outcome))
             continue
         mission_plan, chosen = outcome

@@ -1578,6 +1578,50 @@ class DispatchPlannerTests(unittest.TestCase):
         self.assertNotIn(2, planned_ids)
         skip_reasons = dict(plan.skipped)
         self.assertTrue(skip_reasons[2].startswith("not enough vehicles"))
+        # Diagnostic (Sasha, 2026-11-02): mission 2's shortfall is ENTIRELY
+        # caused by the reservation (the full pool has exactly the boat it
+        # needs) -- the skip reason must say so, not look identical to a
+        # genuine fleet-wide shortage.
+        self.assertIn("reservation-blocked", skip_reasons[2])
+
+    def test_skip_reason_does_not_claim_reservation_blocked_when_genuinely_short(self):
+        # Negative case for the diagnostic above: mission 2 needs a boat
+        # that simply doesn't exist anywhere in the fleet at all -- even the
+        # FULL pool can't fill it, so the skip reason must stay plain, not
+        # falsely suggest reservation is the (sole) problem.
+        ally_started = mission(1, 1, NEAR, vehicle_state=1,
+                                missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        fresh = mission(2, 1, NEAR2, vehicle_state=0,
+                        missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        # No boats in the fleet at all -- an unrelated LF is the only vehicle,
+        # so mission 1 reserves nothing boat-related (nothing to reserve),
+        # and mission 2 is short regardless of reservation.
+        plan = self.plan([ally_started, fresh], [vehicle(100, LF)])
+        skip_reasons = dict(plan.skipped)
+        self.assertIn(2, skip_reasons)
+        self.assertTrue(skip_reasons[2].startswith("not enough vehicles"))
+        self.assertNotIn("reservation-blocked", skip_reasons[2])
+
+    def test_skip_reason_unaffected_when_nothing_is_reserved(self):
+        # No on_it/alliance mission at all this cycle -- reserved_type_ids is
+        # empty, so the diagnostic probe must not even run (and must not
+        # change the plain skip reason for an ordinary, genuine shortage).
+        fresh = mission(1, 1, NEAR, missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        plan = self.plan([fresh], [vehicle(100, LF)])
+        skip_reasons = dict(plan.skipped)
+        self.assertTrue(skip_reasons[1].startswith("not enough vehicles"))
+        self.assertNotIn("reservation-blocked", skip_reasons[1])
+
+    def test_reservation_diagnostic_probe_does_not_double_count_shortfalls(self):
+        # The read-only re-check against the full pool (shortfalls=None)
+        # must never add a second tally entry on top of the real one from
+        # the reservation-filtered attempt.
+        ally_started = mission(1, 1, NEAR, vehicle_state=1,
+                                missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        fresh = mission(2, 1, NEAR2, vehicle_state=0,
+                        missing_text='{"vehicles":"1 Boot","personnel":"","other":""}')
+        plan = self.plan([ally_started, fresh], [vehicle(100, 70)])
+        self.assertEqual(plan.shortfalls.get("Boot", 0), 1)
 
     def test_reservation_applies_even_with_surplus_supply(self):
         # Deliberately UNCONDITIONAL (Sasha, 2026-09-11): reservation isn't
@@ -1662,8 +1706,14 @@ class DispatchPlannerTests(unittest.TestCase):
                                policy, assigned=assigned)
         self.assertEqual(plan.planned, [])  # neither mission gets anything
         self.assertEqual(plan.skipped, [
-            (1, "out of scope"),                        # mission 1 gets nothing itself...
-            (2, "not enough vehicles: short Boot x1"),   # ...but its reservation still blocks mission 2
+            (1, "out of scope"),  # mission 1 gets nothing itself...
+            # ...but its reservation still blocks mission 2 -- and since 2
+            # boats genuinely exist, the reservation-blocked diagnostic
+            # (Sasha, 2026-11-02, added after this exact scenario turned out
+            # to be live and recurring, not just a hypothetical) correctly
+            # fires: mission 2's shortfall is caused ENTIRELY by holding the
+            # spare for mission 1, which is never going to use it.
+            (2, "not enough vehicles: short Boot x1 (reservation-blocked: fillable from the full pool)"),
         ])
 
     def test_reservation_accumulates_across_multiple_open_missions(self):
