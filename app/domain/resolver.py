@@ -724,6 +724,12 @@ class MissionRequirementResolver:
         # text is the ONLY signal a real patient exists -- without it,
         # `_plan_one` sees no requirements at all and skips the mission
         # outright ("no requirements found"), not even a shortfall.
+        #
+        # Folded straight into `patients` (Sasha, 2026-11-03: "probably won't
+        # hurt to send a NEF along too if it makes the coding easier, we have
+        # plenty of either anyway") -- simpler than floor-only-the-ambulance-
+        # count, and it's fine for this one to also feed the NEF-generosity
+        # pairing and incident-command scaling below like any other patient.
         patient_missing = tuple(pm.lower() for pm in getattr(mission, "patient_missing", ()))
         rtw_revealed = sum(1 for pm in patient_missing if "rtw" in pm or "rettungswagen" in pm)
         patients = max(patients, rtw_revealed)

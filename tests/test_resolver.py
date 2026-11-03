@@ -390,6 +390,25 @@ class ResolverTests(unittest.TestCase):
         by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
         self.assertEqual(by.get("ambulances"), 1)
 
+    def test_rtw_revealed_also_gets_the_usual_nef_generosity_pairing(self):
+        # Sasha, 2026-11-03: "probably won't hurt to send a NEF along too if
+        # it makes the coding easier, we have plenty of either anyway" --
+        # an RTW-revealed handover patient is treated like any other
+        # below-5-patients reveal, including the normal NEF-generosity
+        # pairing (deliberately NOT special-cased out). Two RTW asks -> two
+        # ambulances AND two NEFs, same as two ordinary revealed patients.
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=922, name="Person in Wasser", average_credits=100, requirements={})
+        resolver = MissionRequirementResolver(MissionCatalog({922: mt}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=922, patients_count=0, possible_patients_count=0,
+                             prisoners_count=0, possible_prisoners_count=0,
+                             patient_missing=("Wir benötigen: RTW", "Wir benötigen: RTW"))
+        by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("ambulances"), 2)
+        self.assertEqual(by.get("nef"), 2)
+
     def test_rtw_revealed_does_not_shrink_an_already_larger_patient_count(self):
         # The per-patient RTW reveal is a FLOOR (max), never an override --
         # a mission with 3 confirmed patients and one explicit RTW ask still
