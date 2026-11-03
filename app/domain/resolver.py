@@ -713,6 +713,20 @@ class MissionRequirementResolver:
             mtype.possible_patient,
             count_revealed,
         )
+
+        # A patient can also explicitly ask for an RTW itself (confirmed live
+        # 2026-11-03, an "Übergabeort" handover mission: a boat delivers a
+        # water-rescue patient to shore, and the patient card shows "Wir
+        # benötigen: RTW" directly, the SAME per-patient reveal mechanism
+        # NEF/RTH use below). These handover points never populate
+        # patients_count/possible_patients_count at all, so the catalogue/
+        # possible-count layer above reads 0 patients and this per-patient
+        # text is the ONLY signal a real patient exists -- without it,
+        # `_plan_one` sees no requirements at all and skips the mission
+        # outright ("no requirements found"), not even a shortfall.
+        patient_missing = tuple(pm.lower() for pm in getattr(mission, "patient_missing", ()))
+        rtw_revealed = sum(1 for pm in patient_missing if "rtw" in pm or "rettungswagen" in pm)
+        patients = max(patients, rtw_revealed)
         if patients:
             counts["ambulances"] = patients
 
@@ -723,7 +737,6 @@ class MissionRequirementResolver:
         # dedicated `rescue_helicopter` class (type 31 only), not the broader
         # `nef` class (29/31/74, incl. ground Notarzt vehicles), so a plain
         # ground NEF never gets sent in place of the helicopter actually asked for.
-        patient_missing = tuple(pm.lower() for pm in getattr(mission, "patient_missing", ()))
         nef_revealed = sum(
             1 for pm in patient_missing
             if ("nef" in pm or "notarzt" in pm) and "rth" not in pm and "rettungshubschrauber" not in pm

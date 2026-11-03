@@ -371,6 +371,40 @@ class ResolverTests(unittest.TestCase):
         by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
         self.assertEqual(by.get("nef"), 2)
 
+    def test_rtw_revealed_per_patient_covers_a_handover_point_with_no_patient_count(self):
+        # Live, 2026-11-03: an "Übergabeort" handover mission (a boat delivers
+        # a water-rescue patient to shore) never populates patients_count/
+        # possible_patients_count at all -- the ONLY signal is the per-patient
+        # "Wir benötigen: RTW" reveal, the same mechanism NEF/RTH already use.
+        # Before this fix, patients_count=0 meant _casualty_counts added no
+        # "ambulances" requirement, resolve_mission() returned nothing at all,
+        # and _plan_one skipped the mission outright ("no requirements found").
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=920, name="Person in Wasser", average_credits=100, requirements={})
+        resolver = MissionRequirementResolver(MissionCatalog({920: mt}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=920, patients_count=0, possible_patients_count=0,
+                             prisoners_count=0, possible_prisoners_count=0,
+                             patient_missing=("Wir benötigen: RTW",))
+        by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("ambulances"), 1)
+
+    def test_rtw_revealed_does_not_shrink_an_already_larger_patient_count(self):
+        # The per-patient RTW reveal is a FLOOR (max), never an override --
+        # a mission with 3 confirmed patients and one explicit RTW ask still
+        # needs 3 ambulances, not 1.
+        from app.domain.catalog import MissionCatalog, MissionType
+        from app.domain.resolver import MissionRequirementResolver
+
+        mt = MissionType(id=921, name="Med", average_credits=100, requirements={})
+        resolver = MissionRequirementResolver(MissionCatalog({921: mt}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=921, patients_count=3, possible_patients_count=3,
+                             prisoners_count=0, possible_prisoners_count=0,
+                             patient_missing=("Wir benötigen: RTW",))
+        by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("ambulances"), 3)
+
     # -- NEF generosity (Sasha, 2026-09-16) -------------------------------------
     def test_nef_pairs_every_patient_below_five_with_no_reveal_at_all(self):
         # Below 5 patients, EVERY ambulance is paired with a NEF, even with no
