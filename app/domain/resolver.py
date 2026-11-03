@@ -26,12 +26,22 @@ from math import ceil
 from pathlib import Path
 
 from .assets import AssetLibrary
-from .catalog import MissionCatalog
+from .catalog import MissionCatalog, MissionType
 from .missingtext import MissingTextResolver, default_resolver, parse_missing_text
 from .requirements import Requirement, Resolution
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _CAPACITY_TABLE_PATH = _REPO_ROOT / "data" / "reference" / "vehicle-water-pump.json"
+
+# Stand-in for a mission type the public catalogue has no entry for at all
+# (confirmed live 2026-11-03: an "Uebergabeort" handover mission -- the
+# game-generated follow-up when a boat delivers a water-rescue patient to
+# shore -- carries a mission_type_id that matches nothing in /einsaetze.json,
+# not merely one with no patients_count). All fields default to zero/empty,
+# so _casualty_counts' per-patient reveal signals (RTW/NEF/RTH/LNA) are the
+# ONLY thing that can produce a requirement for it -- exactly right, since a
+# synthetic mission like this has no catalogue entry to estimate from anyway.
+_UNKNOWN_MISSION_TYPE = MissionType(id=-1, name="(uncatalogued)", average_credits=0, requirements={})
 
 # Sonderlöschmittel (foam/powder) resupply: SLF (type 167) is the only
 # vehicle worth tracking for this (Sasha, 2026-09-22: "is the only one
@@ -349,7 +359,15 @@ class MissionRequirementResolver:
         mtid = getattr(mission, "mission_type_id", None)
         mtype = self._catalog.get(mtid) if mtid is not None else None
         if mtype is None:
-            return resolution
+            # An uncatalogued mission type (e.g. an "Uebergabeort" handover
+            # mission, confirmed live 2026-11-03 -- see _UNKNOWN_MISSION_TYPE)
+            # still deserves a shot at the per-patient reveal layer below: it
+            # has no catalogue estimate to fall back on, but a patient asking
+            # directly for an RTW/NEF/RTH is real signal regardless. Skip
+            # entirely only when there's nothing revealed either.
+            if not getattr(mission, "patient_missing", ()):
+                return resolution
+            mtype = _UNKNOWN_MISSION_TYPE
 
         vehicle_reqs, vehicle_unmatched = self.vehicle_requirements(mission, mtype)
         resolution.requirements.extend(vehicle_reqs)

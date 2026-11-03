@@ -409,6 +409,39 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(by.get("ambulances"), 2)
         self.assertEqual(by.get("nef"), 2)
 
+    def test_rtw_revealed_on_an_uncatalogued_mission_type_still_dispatches(self):
+        # Live, 2026-11-03: fixing the RTW reveal inside _casualty_counts
+        # wasn't enough -- an "Uebergabeort" handover mission's own
+        # mission_type_id matches NOTHING in the public catalogue at all
+        # (confirmed against the real mission after the first fix shipped
+        # and it still showed "no requirements found" on the dashboard).
+        # resolve_mission used to bail out completely whenever
+        # self._catalog.get(mtid) returned None, before _casualty_counts
+        # ever got a chance to see the per-patient RTW reveal. The catalogue
+        # has NO entry for this mission_type_id at all (contrast the other
+        # RTW tests above, which all register one).
+        from app.domain.catalog import MissionCatalog
+        from app.domain.resolver import MissionRequirementResolver
+
+        resolver = MissionRequirementResolver(MissionCatalog({}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=999999, patients_count=0, possible_patients_count=0,
+                             prisoners_count=0, possible_prisoners_count=0,
+                             patient_missing=("Wir benötigen: RTW",))
+        by = {r.source: r.count for r in resolver.resolve_mission(m).requirements}
+        self.assertEqual(by.get("ambulances"), 1)
+
+    def test_uncatalogued_mission_type_with_no_reveal_is_still_empty(self):
+        # The uncatalogued-mtype fallback above must stay narrow: no
+        # patient_missing reveal at all means genuinely nothing to go on,
+        # same "no requirements found" skip as before this fix.
+        from app.domain.catalog import MissionCatalog
+        from app.domain.resolver import MissionRequirementResolver
+
+        resolver = MissionRequirementResolver(MissionCatalog({}), self.resolver._library)
+        m = SimpleNamespace(mission_type_id=999999, patients_count=0, possible_patients_count=0,
+                             prisoners_count=0, possible_prisoners_count=0, patient_missing=())
+        self.assertEqual(resolver.resolve_mission(m).requirements, [])
+
     def test_rtw_revealed_does_not_shrink_an_already_larger_patient_count(self):
         # The per-patient RTW reveal is a FLOOR (max), never an override --
         # a mission with 3 confirmed patients and one explicit RTW ask still
